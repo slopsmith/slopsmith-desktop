@@ -1,0 +1,43 @@
+GeneralUser GS soundfont — Licence and Attribution
+====================================================
+
+The bundled `GeneralUser-GS.sf2` file is GeneralUser GS, created and
+maintained by S. Christian Collins.
+
+Source:   https://www.schristiancollins.com/generaluser
+Packaging source (used by our build): https://github.com/mrbumpy409/GeneralUser-GS
+
+GeneralUser GS Licence agreement (verbatim, as published by the author):
+
+    Licence Agreement for the GeneralUser GS SoundFont (by S. Christian
+    Collins):
+
+    GeneralUser GS is a free GM-compatible SoundFont that may be used
+    with any musical software, with the following caveats:
+
+    1. You may distribute GeneralUser GS, either freely or as part of a
+       commercial product, provided that the original distribution package
+       remains intact as provided and is accompanied by this Licence
+       Agreement. GeneralUser GS files may be repackaged provided that
+       proper credit is given to the original author.
+
+    2. You may include GeneralUser GS with commercial software at no
+       additional cost, provided that the software is not itself a
+       collection or library of SoundFonts, and provided that proper
+       attribution and this Licence Agreement are included.
+
+    3. You may not sell GeneralUser GS as a stand-alone product or as
+       part of a SoundFont collection.
+
+    The author, S. Christian Collins, disclaims all warranties regarding
+    GeneralUser GS. In no event shall the author be liable for any damages
+    arising from the use of this SoundFont.
+
+Notes on this bundle
+--------------------
+
+- Slopsmith ships an unmodified copy of `GeneralUser-GS.sf2` pinned to
+  a specific commit SHA of the upstream repo for reproducibility.
+- Attribution: GeneralUser GS by S. Christian Collins
+  (https://www.schristiancollins.com/).
+- This licence file accompanies the soundfont as required by clause 1.

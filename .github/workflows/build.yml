@@ -51,11 +51,11 @@ jobs:
             libasound2-dev libjack-jackd2-dev libfreetype-dev \
             libx11-dev libxrandr-dev libxcursor-dev libxinerama-dev libxext-dev \
             libcurl4-openssl-dev libwebkit2gtk-4.1-dev \
-            pkg-config cmake ffmpeg
+            pkg-config cmake ffmpeg fluidsynth
 
       - name: Install macOS dependencies
         if: matrix.platform == 'mac'
-        run: brew install cmake pkg-config ffmpeg
+        run: brew install cmake pkg-config ffmpeg fluid-synth
 
       - name: Install Windows dependencies
         if: matrix.platform == 'win'
@@ -195,15 +195,34 @@ jobs:
           cp -r /tmp/rscli-out/* $GITHUB_WORKSPACE/resources/bin/rscli/
           echo "RsCli bundled for $RID ($(du -sh $GITHUB_WORKSPACE/resources/bin/rscli/ | cut -f1))"
 
-      - name: Bundle system binaries
+      - name: Bundle system binaries (Linux/macOS)
         run: |
           mkdir -p resources/bin
           if command -v ffmpeg &>/dev/null; then
             cp $(which ffmpeg) resources/bin/ 2>/dev/null || true
           fi
-          if command -v vgmstream-cli &>/dev/null; then
-            cp $(which vgmstream-cli) resources/bin/ 2>/dev/null || true
+          if command -v fluidsynth &>/dev/null; then
+            cp $(which fluidsynth) resources/bin/ 2>/dev/null || true
           fi
+          # vgmstream-cli isn't available in Ubuntu apt or (reliably) Homebrew,
+          # so download the official release binary for both platforms. This
+          # closes byrongamatos/slopsmith-desktop#9 (Linux silent audio) and the
+          # macOS equivalent at the same time.
+          if [ "${{ matrix.platform }}" = "linux" ]; then
+            VGM_ASSET="vgmstream-linux-cli.zip"
+          else
+            VGM_ASSET="vgmstream-mac-cli.zip"
+          fi
+          curl -sL "https://github.com/vgmstream/vgmstream/releases/latest/download/${VGM_ASSET}" -o /tmp/vgmstream.zip
+          unzip -q /tmp/vgmstream.zip -d /tmp/vgmstream
+          # Layouts vary slightly between platforms; find the binary and copy it.
+          VGM_BIN=$(find /tmp/vgmstream -maxdepth 2 -name 'vgmstream-cli' -type f | head -1)
+          if [ -n "$VGM_BIN" ]; then
+            cp "$VGM_BIN" resources/bin/vgmstream-cli
+            chmod +x resources/bin/vgmstream-cli
+          fi
+          echo "Bundled binaries:"
+          ls -lh resources/bin/ | awk 'NR>1{printf "  %s %s\n", $5, $9}'
         shell: bash
         if: matrix.platform != 'win'
 
@@ -212,20 +231,41 @@ jobs:
         run: |
           mkdir -p resources/bin
 
-          # Download ffmpeg static build for Windows
+          # ffmpeg static build
           curl -sL "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" -o /tmp/ffmpeg.zip
           unzip -q /tmp/ffmpeg.zip -d /tmp/ffmpeg
           cp /tmp/ffmpeg/ffmpeg-master-latest-win64-gpl/bin/ffmpeg.exe resources/bin/ 2>/dev/null || true
-          echo "ffmpeg: $(ls -lh resources/bin/ffmpeg.exe 2>/dev/null | awk '{print $5}')"
 
-          # Download vgmstream-cli for Windows
+          # vgmstream-cli
           curl -sL "https://github.com/vgmstream/vgmstream/releases/latest/download/vgmstream-win64.zip" -o /tmp/vgmstream.zip
           unzip -q /tmp/vgmstream.zip -d /tmp/vgmstream
           cp /tmp/vgmstream/vgmstream-cli.exe resources/bin/ 2>/dev/null || true
-          # Copy required DLLs
           cp /tmp/vgmstream/*.dll resources/bin/ 2>/dev/null || true
-          echo "vgmstream: $(ls -lh resources/bin/vgmstream-cli.exe 2>/dev/null | awk '{print $5}')"
+
+          # fluidsynth — official Windows build; includes fluidsynth.exe + DLLs
+          # under bin/. Pinned to v2.5.4; bump deliberately when newer versions
+          # are verified to still work against bundled Python + soundfont.
+          curl -sL "https://github.com/FluidSynth/fluidsynth/releases/download/v2.5.4/fluidsynth-v2.5.4-win10-x64-cpp11.zip" -o /tmp/fluidsynth.zip
+          unzip -q /tmp/fluidsynth.zip -d /tmp/fluidsynth
+          cp /tmp/fluidsynth/bin/fluidsynth.exe resources/bin/ 2>/dev/null || true
+          cp /tmp/fluidsynth/bin/*.dll resources/bin/ 2>/dev/null || true
+
+          echo "Bundled binaries:"
+          ls -lh resources/bin/ | awk 'NR>1{printf "  %s %s\n", $5, $9}'
         if: matrix.platform == 'win'
+
+      - name: Bundle default soundfont (GeneralUser GS)
+        shell: bash
+        run: |
+          mkdir -p resources/soundfonts
+          # Pinned to commit SHA for reproducible builds — bump explicitly when
+          # a new version of GeneralUser GS is verified. Source: S. Christian
+          # Collins's repo, which explicitly hosts this for packaging use.
+          # Licence: the GeneralUser GS license permits free redistribution in
+          # FOSS apps; see resources/soundfonts/LICENSE.
+          SF_SHA="298b552d2e9d1307e03e5c5c99d2c046aaed9ec3"
+          curl -sL "https://raw.githubusercontent.com/mrbumpy409/GeneralUser-GS/${SF_SHA}/GeneralUser-GS.sf2" -o resources/soundfonts/GeneralUser-GS.sf2
+          echo "Soundfont: $(ls -lh resources/soundfonts/GeneralUser-GS.sf2 | awk '{print $5}')"
 
       # ── Package ─────────────────────────────────────────────────────────
       - name: Package

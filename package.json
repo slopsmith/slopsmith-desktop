@@ -47,6 +47,10 @@
       {
         "from": "resources/default-irs",
         "to": "default-irs"
+      },
+      {
+        "from": "resources/soundfonts",
+        "to": "soundfonts"
       }
     ],
     "asarUnpack": [
