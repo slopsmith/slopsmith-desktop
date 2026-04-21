@@ -2,6 +2,17 @@
 // Manages: window lifecycle, Python subprocess, audio engine bridge, plugin management
 
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
+
+// Prevent error dialogs from showing when Python process has issues
+process.on('uncaughtException', (err) => {
+    console.error('[main] Uncaught exception:', err.message);
+    // Don't exit - let the app handle cleanup gracefully
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('[main] Unhandled rejection at:', promise, 'reason:', reason);
+    // Don't exit - let the app handle cleanup gracefully
+});
 import * as path from 'path';
 import { startPython, stopPython, waitForPython, getPythonPort } from './python';
 import { initAudioBridge, shutdownAudio } from './audio-bridge';
@@ -149,7 +160,11 @@ app.on('before-quit', () => {
 });
 
 function shutdown(): void {
-    console.log('[main] Shutting down...');
+    try {
+        console.log('[main] Shutting down...');
+    } catch (e) {
+        // Ignore console errors during shutdown
+    }
     shutdownAudio();
     stopPython();
 }

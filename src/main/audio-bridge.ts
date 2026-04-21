@@ -14,7 +14,9 @@ function loadNativeAddon(): AudioModule | null {
     const addonPaths = [
         // Development build
         path.join(__dirname, '..', '..', 'build', 'Release', 'slopsmith_audio.node'),
-        // Packaged build
+        // Packaged build (unpacked from asar)
+        path.join(process.resourcesPath || '', 'app.asar.unpacked', 'build', 'Release', 'slopsmith_audio.node'),
+        // Alternative location (direct copy to resources)
         path.join(process.resourcesPath || '', 'build', 'Release', 'slopsmith_audio.node'),
     ];
 
@@ -240,9 +242,13 @@ export function shutdownAudio(): void {
     if (audio) {
         try {
             audio.shutdown();
-            console.log('[audio] Engine shut down');
+            try {
+                console.log('[audio] Engine shut down');
+            } catch (e) {
+                // Ignore console errors during shutdown
+            }
         } catch (e: any) {
-            console.error(`[audio] Shutdown error: ${e.message}`);
+            // Silent fail during shutdown
         }
     }
 }

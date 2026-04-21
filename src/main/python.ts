@@ -194,19 +194,35 @@ export async function startPython(): Promise<void> {
     });
 
     pythonProcess.stdout?.on('data', (data: Buffer) => {
-        const msg = data.toString().trim();
-        if (msg) console.log(`[python:stdout] ${msg}`);
+        try {
+            const msg = data.toString().trim();
+            if (msg) console.log(`[python:stdout] ${msg}`);
+        } catch (e) {
+            // Ignore errors (e.g., EPIPE when process dies)
+        }
+    });
+
+    pythonProcess.stdout?.on('error', (err: Error) => {
+        // Ignore stdout errors (EPIPE is expected when process dies)
     });
 
     pythonProcess.stderr?.on('data', (data: Buffer) => {
-        const msg = data.toString().trim();
-        if (msg) {
-            console.log(`[python] ${msg}`);
-            // Detect uvicorn startup message
-            if (msg.includes('Uvicorn running on') || msg.includes('Application startup complete')) {
-                serverReady = true;
+        try {
+            const msg = data.toString().trim();
+            if (msg) {
+                console.log(`[python] ${msg}`);
+                // Detect uvicorn startup message
+                if (msg.includes('Uvicorn running on') || msg.includes('Application startup complete')) {
+                    serverReady = true;
+                }
             }
+        } catch (e) {
+            // Ignore errors (e.g., EPIPE when process dies)
         }
+    });
+
+    pythonProcess.stderr?.on('error', (err: Error) => {
+        // Ignore stderr errors (EPIPE is expected when process dies)
     });
 
     pythonProcess.on('close', (code: number | null) => {
