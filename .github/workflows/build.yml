@@ -51,11 +51,11 @@ jobs:
             libasound2-dev libjack-jackd2-dev libfreetype-dev \
             libx11-dev libxrandr-dev libxcursor-dev libxinerama-dev libxext-dev \
             libcurl4-openssl-dev libwebkit2gtk-4.1-dev \
-            pkg-config cmake ffmpeg fluidsynth
+            pkg-config cmake ffmpeg fluidsynth patchelf
 
       - name: Install macOS dependencies
         if: matrix.platform == 'mac'
-        run: brew install cmake pkg-config ffmpeg fluid-synth
+        run: brew install cmake pkg-config ffmpeg fluid-synth dylibbundler
 
       - name: Install Windows dependencies
         if: matrix.platform == 'win'
@@ -197,17 +197,48 @@ jobs:
 
       - name: Bundle system binaries (Linux/macOS)
         run: |
+          set -euo pipefail
           mkdir -p resources/bin
+
           if command -v ffmpeg &>/dev/null; then
-            cp $(which ffmpeg) resources/bin/ 2>/dev/null || true
+            cp "$(which ffmpeg)" resources/bin/
           fi
+
+          # fluidsynth: copy the binary, then pull in its non-system shared
+          # libraries so the bundle runs on end-user machines without the
+          # system package installed. See desktop#12 review for detail.
           if command -v fluidsynth &>/dev/null; then
-            cp $(which fluidsynth) resources/bin/ 2>/dev/null || true
+            cp "$(which fluidsynth)" resources/bin/fluidsynth
+            if [ "${{ matrix.platform }}" = "linux" ]; then
+              # Walk ldd output; copy every .so that isn't glibc or kernel-
+              # provided. Then set RPATH to $ORIGIN on the binary and each
+              # copied .so so they resolve sibling libs at runtime.
+              ldd resources/bin/fluidsynth | awk '/=>/ {print $3}' | while read -r lib; do
+                  [ -n "$lib" ] && [ -f "$lib" ] || continue
+                  case "$(basename "$lib")" in
+                      libc.so*|libm.so*|libpthread.so*|libdl.so*|librt.so*|\
+                      ld-linux*|libresolv.so*|linux-vdso*|linux-gate*|\
+                      libnsl.so*|libutil.so*|libgcc_s.so*)
+                          continue
+                          ;;
+                  esac
+                  cp -L "$lib" resources/bin/
+              done
+              patchelf --set-rpath '$ORIGIN' resources/bin/fluidsynth
+              for so in resources/bin/*.so*; do
+                  [ -f "$so" ] && patchelf --set-rpath '$ORIGIN' "$so" || true
+              done
+            else
+              # macOS: dylibbundler walks the dyld graph, copies non-system
+              # dylibs into resources/bin, and rewrites load commands to use
+              # @executable_path/<name>.
+              dylibbundler -od -b -x resources/bin/fluidsynth -d resources/bin -p '@executable_path/'
+            fi
           fi
-          # vgmstream-cli isn't available in Ubuntu apt or (reliably) Homebrew,
-          # so download the official release binary for both platforms. This
-          # closes byrongamatos/slopsmith-desktop#9 (Linux silent audio) and the
-          # macOS equivalent at the same time.
+
+          # vgmstream-cli: not packaged in Ubuntu apt; brew has it but we
+          # pin the official release binary for reproducibility across both
+          # platforms. Closes desktop#9 (Linux/macOS silent audio).
           if [ "${{ matrix.platform }}" = "linux" ]; then
             VGM_ASSET="vgmstream-linux-cli.zip"
           else
@@ -215,12 +246,14 @@ jobs:
           fi
           curl -sL "https://github.com/vgmstream/vgmstream/releases/latest/download/${VGM_ASSET}" -o /tmp/vgmstream.zip
           unzip -q /tmp/vgmstream.zip -d /tmp/vgmstream
-          # Layouts vary slightly between platforms; find the binary and copy it.
           VGM_BIN=$(find /tmp/vgmstream -maxdepth 2 -name 'vgmstream-cli' -type f | head -1)
-          if [ -n "$VGM_BIN" ]; then
-            cp "$VGM_BIN" resources/bin/vgmstream-cli
-            chmod +x resources/bin/vgmstream-cli
+          if [ -z "$VGM_BIN" ]; then
+              echo "ERROR: vgmstream-cli not found in $VGM_ASSET; upstream layout may have changed." >&2
+              exit 1
           fi
+          cp "$VGM_BIN" resources/bin/vgmstream-cli
+          chmod +x resources/bin/vgmstream-cli
+
           echo "Bundled binaries:"
           ls -lh resources/bin/ | awk 'NR>1{printf "  %s %s\n", $5, $9}'
         shell: bash
@@ -257,15 +290,34 @@ jobs:
       - name: Bundle default soundfont (GeneralUser GS)
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p resources/soundfonts
-          # Pinned to commit SHA for reproducible builds — bump explicitly when
-          # a new version of GeneralUser GS is verified. Source: S. Christian
+          # Pinned to git commit SHA for reproducibility — the raw.githubusercontent
+          # URL with a commit SHA is effectively content-addressed, so integrity is
+          # guaranteed without a separate SHA256 check. Source: S. Christian
           # Collins's repo, which explicitly hosts this for packaging use.
           # Licence: the GeneralUser GS license permits free redistribution in
           # FOSS apps; see resources/soundfonts/LICENSE.
           SF_SHA="298b552d2e9d1307e03e5c5c99d2c046aaed9ec3"
-          curl -sL "https://raw.githubusercontent.com/mrbumpy409/GeneralUser-GS/${SF_SHA}/GeneralUser-GS.sf2" -o resources/soundfonts/GeneralUser-GS.sf2
+          curl -sL --fail "https://raw.githubusercontent.com/mrbumpy409/GeneralUser-GS/${SF_SHA}/GeneralUser-GS.sf2" -o resources/soundfonts/GeneralUser-GS.sf2
+          # Sanity-check the header — .sf2 is RIFF/SFBK.
+          head -c 4 resources/soundfonts/GeneralUser-GS.sf2 | grep -q RIFF \
+              || { echo "ERROR: downloaded soundfont is not RIFF" >&2; exit 1; }
           echo "Soundfont: $(ls -lh resources/soundfonts/GeneralUser-GS.sf2 | awk '{print $5}')"
+
+      - name: Smoke test bundled binaries
+        shell: bash
+        run: |
+          set -e
+          if [ "${{ matrix.platform }}" = "win" ]; then
+              ./resources/bin/fluidsynth.exe --version
+              ./resources/bin/ffmpeg.exe -version | head -1
+              ./resources/bin/vgmstream-cli.exe --help | head -1 || true
+          else
+              ./resources/bin/fluidsynth --version
+              ./resources/bin/ffmpeg -version | head -1
+              ./resources/bin/vgmstream-cli --help | head -1 || true
+          fi
 
       # ── Package ─────────────────────────────────────────────────────────
       - name: Package
