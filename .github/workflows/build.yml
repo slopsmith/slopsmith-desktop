@@ -231,8 +231,10 @@ jobs:
             else
               # macOS: dylibbundler walks the dyld graph, copies non-system
               # dylibs into resources/bin, and rewrites load commands to use
-              # @executable_path/<name>.
-              dylibbundler -od -b -x resources/bin/fluidsynth -d resources/bin -p '@executable_path/'
+              # @executable_path/<name>. Do NOT use -od — it wipes the
+              # destination dir (including the binary we just copied in).
+              # -cd creates the dir if missing; we already mkdir'd it above.
+              dylibbundler -cd -b -x resources/bin/fluidsynth -d resources/bin -p '@executable_path/'
             fi
           fi
 
