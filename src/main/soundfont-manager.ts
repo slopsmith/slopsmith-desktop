@@ -15,16 +15,13 @@ import * as crypto from 'crypto';
 import { restartPython } from './python';
 
 // ── Source of truth for the high-quality soundfont ──────────────────────────
-// Byron hosts a self-mirror to avoid depending on third-party hosts. When a
-// new soundfonts release ships, bump both constants together; a mismatch
-// fails the download fast with a clear error rather than serving silently-
-// wrong bytes.
-//
-// TODO(pre-merge): replace placeholder URL + checksum with the actual values
-// after Byron uploads the asset to the `soundfonts-v1` release.
+// Self-hosted mirror of FluidR3_GM.sf2 on this repo's releases. When a new
+// soundfonts release ships, bump both constants together; a mismatch fails
+// the download fast with a clear error rather than serving silently-wrong
+// bytes. Source + licence info live on the release page itself.
 const SOUNDFONT_URL =
     'https://github.com/byrongamatos/slopsmith-desktop/releases/download/soundfonts-v1/FluidR3_GM.sf2';
-const SOUNDFONT_SHA256 = 'TBD_REPLACE_WITH_ACTUAL_SHA256_BEFORE_MERGE';
+const SOUNDFONT_SHA256 = '74594e8f4250680adf590507a306655a299935343583256f3b722c48a1bc1cb0';
 const SOUNDFONT_EXPECTED_SIZE_MB = 142;
 
 // ── Config + path helpers ───────────────────────────────────────────────────
@@ -178,7 +175,7 @@ async function downloadHighQuality(
         state.request = null;
 
         const digest = hash.digest('hex');
-        if (SOUNDFONT_SHA256 !== 'TBD_REPLACE_WITH_ACTUAL_SHA256_BEFORE_MERGE' && digest !== SOUNDFONT_SHA256) {
+        if (digest !== SOUNDFONT_SHA256) {
             fs.unlinkSync(partialPath);
             return {
                 success: false,
