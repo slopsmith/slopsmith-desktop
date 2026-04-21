@@ -305,10 +305,12 @@ jobs:
           # Licence: the GeneralUser GS license permits free redistribution in
           # FOSS apps; see resources/soundfonts/LICENSE.
           SF_SHA="298b552d2e9d1307e03e5c5c99d2c046aaed9ec3"
-          # Retry a few times — CI runners occasionally drop mid-stream on
-          # 32 MB downloads from raw.githubusercontent.com.
+          # Served via jsDelivr (pinned to the same commit SHA) — the macOS
+          # runner intermittently dropped mid-stream fetching the same file
+          # from raw.githubusercontent.com, so we use jsDelivr's CDN which
+          # historically handles 32 MB downloads more reliably.
           curl -sL --fail --retry 5 --retry-delay 5 --retry-all-errors \
-              "https://raw.githubusercontent.com/mrbumpy409/GeneralUser-GS/${SF_SHA}/GeneralUser-GS.sf2" \
+              "https://cdn.jsdelivr.net/gh/mrbumpy409/GeneralUser-GS@${SF_SHA}/GeneralUser-GS.sf2" \
               -o resources/soundfonts/GeneralUser-GS.sf2
           # Sanity-check the header — .sf2 is RIFF/SFBK.
           head -c 4 resources/soundfonts/GeneralUser-GS.sf2 | grep -q RIFF \
