@@ -143,12 +143,11 @@ cp "$PROJECT_DIR/models/cabs/"*.wav "$PROJECT_DIR/resources/default-irs/" 2>/dev
 # CI does the same thing in .github/workflows/build.yml.
 SF_DIR="$PROJECT_DIR/resources/soundfonts"
 SF_FILE="$SF_DIR/GeneralUser-GS.sf2"
-SF_SHA="298b552d2e9d1307e03e5c5c99d2c046aaed9ec3"
+SF_URL="https://github.com/byrongamatos/slopsmith-desktop/releases/download/soundfonts-v1/GeneralUser-GS.sf2"
 mkdir -p "$SF_DIR"
 if [ ! -f "$SF_FILE" ]; then
     echo "  downloading GeneralUser-GS.sf2 (32 MB)..."
-    curl -sL --fail --retry 5 --retry-delay 5 --retry-all-errors \
-        "https://cdn.jsdelivr.net/gh/mrbumpy409/GeneralUser-GS@$SF_SHA/GeneralUser-GS.sf2" -o "$SF_FILE"
+    curl -sL --fail --retry 5 --retry-delay 5 --retry-all-errors "$SF_URL" -o "$SF_FILE"
 fi
 echo "  soundfont: $(du -h "$SF_FILE" | cut -f1)"
 

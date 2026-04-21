@@ -298,34 +298,19 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p resources/soundfonts
-          # Pinned to git commit SHA for reproducibility — the raw.githubusercontent
-          # URL with a commit SHA is effectively content-addressed, so integrity is
-          # guaranteed without a separate SHA256 check. Source: S. Christian
-          # Collins's repo, which explicitly hosts this for packaging use.
-          # Licence: the GeneralUser GS license permits free redistribution in
-          # FOSS apps; see resources/soundfonts/LICENSE.
-          SF_SHA="298b552d2e9d1307e03e5c5c99d2c046aaed9ec3"
-          SF_URL="https://cdn.jsdelivr.net/gh/mrbumpy409/GeneralUser-GS@${SF_SHA}/GeneralUser-GS.sf2"
+          # Self-hosted mirror on this repo's `soundfonts-v1` release.
+          # raw.githubusercontent.com / jsDelivr / other CDNs repeatedly
+          # dropped mid-stream on the macOS-14 runner; GitHub release asset
+          # endpoints are reliable cross-platform. When upstream GeneralUser
+          # GS is revised, cut `soundfonts-v2` and bump URL + SHA256 together.
+          # Licence + attribution live at resources/soundfonts/LICENSE.
+          SF_URL="https://github.com/byrongamatos/slopsmith-desktop/releases/download/soundfonts-v1/GeneralUser-GS.sf2"
+          SF_SHA256="9575028c7a1f589f5770fccc8cff2734566af40cd26ed836944e9a5152688cfe"
           SF_OUT="resources/soundfonts/GeneralUser-GS.sf2"
-          # Explicit resume-aware retry loop. curl --retry restarts from byte
-          # 0 every attempt, which fails reliably on the macOS-14 runner
-          # where the connection consistently drops mid-stream around the
-          # 30 MB mark. `-C -` resumes from the byte already on disk, so each
-          # retry preserves progress.
-          for attempt in 1 2 3 4 5 6 7 8 9 10; do
-              if curl -sL --fail -C - "$SF_URL" -o "$SF_OUT"; then
-                  break
-              fi
-              echo "Soundfont download attempt $attempt failed; retrying in 10s…" >&2
-              sleep 10
-              if [ "$attempt" = "10" ]; then
-                  echo "ERROR: soundfont download failed after 10 attempts" >&2
-                  exit 1
-              fi
-          done
-          # Sanity-check the header — .sf2 is RIFF/SFBK.
-          head -c 4 resources/soundfonts/GeneralUser-GS.sf2 | grep -q RIFF \
-              || { echo "ERROR: downloaded soundfont is not RIFF" >&2; exit 1; }
+          curl -sL --fail --retry 5 --retry-delay 5 --retry-all-errors "$SF_URL" -o "$SF_OUT"
+          # Integrity check — abort if the bytes on disk don't match the pin.
+          echo "${SF_SHA256}  ${SF_OUT}" | sha256sum -c - \
+              || { echo "ERROR: GeneralUser-GS.sf2 checksum mismatch" >&2; exit 1; }
           echo "Soundfont: $(ls -lh resources/soundfonts/GeneralUser-GS.sf2 | awk '{print $5}')"
 
       - name: Smoke test bundled binaries
