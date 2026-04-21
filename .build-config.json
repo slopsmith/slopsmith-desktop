@@ -1,0 +1,10 @@
+{
+  "versions": {
+    "node": "22",
+    "python": "3.12",
+    "dotnet": "10.0",
+    "electron": "35.0.0",
+    "cmake": "3.22",
+    "ubuntu": "22.04"
+  }
+}

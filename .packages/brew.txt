@@ -1,0 +1,9 @@
+# macOS Homebrew packages for building Slopsmith Desktop
+# These must be kept in sync with .github/workflows/build.yml
+
+# Build tools
+cmake
+pkg-config
+
+# Media tools (for audio processing)
+ffmpeg

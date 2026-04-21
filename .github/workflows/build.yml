@@ -30,32 +30,45 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Read build configuration
+        id: config
+        run: |
+          # Validate JSON is well-formed
+          if ! jq empty .build-config.json 2>/dev/null; then
+            echo "Error: .build-config.json is not valid JSON"
+            exit 1
+          fi
+          # Output config as JSON for later steps
+          echo "json=$(jq -c . .build-config.json)" >> $GITHUB_OUTPUT
+
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ fromJson(steps.config.outputs.json).versions.node }}
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: ${{ fromJson(steps.config.outputs.json).versions.python }}
 
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: ${{ fromJson(steps.config.outputs.json).versions.dotnet }}.x
 
       # ── Platform dependencies ───────────────────────────────────────────
+      # Package lists are defined in .packages/ directory for cross-platform consistency
       - name: Install Linux dependencies
         if: matrix.platform == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            libasound2-dev libjack-jackd2-dev libfreetype-dev \
-            libx11-dev libxrandr-dev libxcursor-dev libxinerama-dev libxext-dev \
-            libcurl4-openssl-dev libwebkit2gtk-4.1-dev \
-            pkg-config cmake ffmpeg
+          # Read packages from .packages/apt.txt (one per line, skip comments/blank lines)
+          PACKAGES=$(grep -v '^[[:space:]]*#' .packages/apt.txt | grep -v '^[[:space:]]*$' | tr '\n' ' ')
+          sudo apt-get install -y $PACKAGES
 
       - name: Install macOS dependencies
         if: matrix.platform == 'mac'
-        run: brew install cmake pkg-config ffmpeg
+        run: |
+          # Read packages from .packages/brew.txt (one per line, skip comments/blank lines)
+          PACKAGES=$(grep -v '^[[:space:]]*#' .packages/brew.txt | grep -v '^[[:space:]]*$' | tr '\n' ' ')
+          brew install $PACKAGES
 
       - name: Install Windows dependencies
         if: matrix.platform == 'win'

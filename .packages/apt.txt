@@ -1,0 +1,37 @@
+# Ubuntu/Debian packages for building Slopsmith Desktop
+# These must be kept in sync with .github/workflows/build.yml
+
+# Audio libraries
+libasound2-dev
+libjack-jackd2-dev
+
+# Graphics/X11 libraries (required by JUCE)
+libfreetype-dev
+libx11-dev
+libxrandr-dev
+libxcursor-dev
+libxinerama-dev
+libxext-dev
+
+# Web/WebKit (required by Electron webview)
+libcurl4-openssl-dev
+libwebkit2gtk-4.1-dev
+
+# Build tools
+pkg-config
+cmake
+build-essential
+
+# Python packaging
+python3-pip
+python3-setuptools
+python3-distutils
+
+# Media tools (for audio processing)
+ffmpeg
+
+# Version control
+git
+
+# Archive utilities (required by electron-builder)
+xz-utils

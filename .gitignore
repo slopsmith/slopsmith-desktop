@@ -38,6 +38,9 @@ resources/slopsmith/
 resources/python/
 resources/bin/
 
+# AppImage extraction
+squashfs-root/
+
 # Lock files
 package-lock.json
 

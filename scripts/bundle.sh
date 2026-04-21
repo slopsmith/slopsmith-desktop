@@ -6,8 +6,38 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-SLOPSMITH_DIR="$HOME/Repositories/slopsmith"
 BUNDLE_DIR="$PROJECT_DIR/resources/slopsmith"
+
+# Determine Slopsmith directory location
+# Priority: 1) Environment variable, 2) ../slopsmith (relative), 3) ~/Repositories/slopsmith (legacy)
+if [ -n "$SLOPSMITH_DIR" ]; then
+    # Use explicitly set environment variable
+    :  # SLOPSMITH_DIR already set
+elif [ -d "$PROJECT_DIR/../slopsmith" ]; then
+    SLOPSMITH_DIR="$PROJECT_DIR/../slopsmith"
+else
+    SLOPSMITH_DIR="$HOME/Repositories/slopsmith"
+fi
+
+# Check if Slopsmith repository exists
+if [ ! -d "$SLOPSMITH_DIR" ]; then
+    echo "ERROR: Slopsmith repository not found."
+    echo ""
+    echo "This script requires the Slopsmith server repository."
+    echo ""
+    echo "Searched locations:"
+    echo "  - $PROJECT_DIR/../slopsmith (relative to this repo)"
+    echo "  - $HOME/Repositories/slopsmith (legacy location)"
+    echo ""
+    echo "To fix, either:"
+    echo "  1. Clone the repository to a sibling directory:"
+    echo "       git clone https://github.com/byrongamatos/slopsmith.git ../slopsmith"
+    echo "  2. Clone to the legacy location:"
+    echo "       git clone https://github.com/byrongamatos/slopsmith.git ~/Repositories/slopsmith"
+    echo "  3. Set the path explicitly:"
+    echo "       SLOPSMITH_DIR=/path/to/slopsmith ./scripts/bundle.sh"
+    exit 1
+fi
 
 echo "=== Bundling Slopsmith Desktop ==="
 echo ""
@@ -74,16 +104,24 @@ done
 
 # ── 3. Python runtime ─────────────────────────────────────────────────────
 echo "[3/6] Creating portable Python environment..."
-PYTHON_BUNDLE="$PROJECT_DIR/resources/python"
-rm -rf "$PYTHON_BUNDLE"
+# Structure must match python.ts expectations: resources/python/runtime/bin/python3
+PYTHON_BUNDLE="$PROJECT_DIR/resources/python/runtime"
+rm -rf "$PROJECT_DIR/resources/python"
+mkdir -p "$PYTHON_BUNDLE"
 
-# Create a fresh venv with only the needed packages
-python3 -m venv "$PYTHON_BUNDLE"
+# Create a fresh venv with --copies to avoid symlinks to system Python
+python3 -m venv --copies "$PYTHON_BUNDLE"
 "$PYTHON_BUNDLE/bin/pip" install --quiet --no-cache-dir \
     fastapi "uvicorn[standard]" websockets pycryptodome pyguitarpro \
-    Pillow midiutil python-multipart 2>&1 | tail -3
+    Pillow midiutil python-multipart requests 2>&1 | tail -3
 
-echo "  Python venv size: $(du -sh "$PYTHON_BUNDLE" | cut -f1)"
+# Copy Python standard library (required for bundled Python to work)
+PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+if [ -d "/usr/lib/python${PYTHON_VERSION}" ]; then
+    cp -r "/usr/lib/python${PYTHON_VERSION}" "$PYTHON_BUNDLE/lib/"
+fi
+
+echo "  Python runtime size: $(du -sh "$PYTHON_BUNDLE" | cut -f1)"
 
 # ── 4. System binaries ────────────────────────────────────────────────────
 echo "[4/6] Copying system binaries..."

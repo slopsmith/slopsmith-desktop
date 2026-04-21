@@ -1,0 +1,10 @@
+# Windows Chocolatey packages for building Slopsmith Desktop
+# These must be kept in sync with .github/workflows/build.yml
+#
+# NOTE: cmake requires special install args in GitHub Actions:
+#   choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System'
+#
+# NOTE: ffmpeg doesn't need special args
+
+cmake
+ffmpeg

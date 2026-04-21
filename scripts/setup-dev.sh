@@ -62,8 +62,19 @@ echo "Installing npm dependencies..."
 npm install
 
 # Check Slopsmith repo
-SLOPSMITH_DIR="$HOME/Repositories/slopsmith"
-if [ -d "$SLOPSMITH_DIR" ]; then
+# Priority: 1) ../slopsmith (relative), 2) ~/Repositories/slopsmith (legacy)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+
+if [ -d "$PROJECT_DIR/../slopsmith" ]; then
+    SLOPSMITH_DIR="$PROJECT_DIR/../slopsmith"
+elif [ -d "$HOME/Repositories/slopsmith" ]; then
+    SLOPSMITH_DIR="$HOME/Repositories/slopsmith"
+else
+    SLOPSMITH_DIR=""
+fi
+
+if [ -n "$SLOPSMITH_DIR" ]; then
     echo ""
     echo "Slopsmith found at: $SLOPSMITH_DIR"
 
@@ -73,8 +84,12 @@ if [ -d "$SLOPSMITH_DIR" ]; then
     python3 -c "import uvicorn" 2>/dev/null && echo "  [OK] uvicorn" || echo "  [MISSING] pip install uvicorn[standard]"
 else
     echo ""
-    echo "WARNING: Slopsmith not found at $SLOPSMITH_DIR"
-    echo "Clone it: git clone https://github.com/byrongamatos/slopsmith ~/Repositories/slopsmith"
+    echo "WARNING: Slopsmith not found."
+    echo "Searched locations:"
+    echo "  - $PROJECT_DIR/../slopsmith (relative to this repo)"
+    echo "  - $HOME/Repositories/slopsmith (legacy location)"
+    echo ""
+    echo "Clone it: git clone https://github.com/byrongamatos/slopsmith.git ../slopsmith"
 fi
 
 echo ""
