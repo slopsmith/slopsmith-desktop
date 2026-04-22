@@ -1,0 +1,43 @@
+# Ubuntu/Debian packages for building Slopsmith Desktop.
+# Kept in sync with .github/workflows/build.yml — change both places together.
+
+# Audio libraries
+libasound2-dev
+libjack-jackd2-dev
+
+# Graphics/X11 libraries (required by JUCE)
+libfreetype-dev
+libx11-dev
+libxrandr-dev
+libxcursor-dev
+libxinerama-dev
+libxext-dev
+
+# Web/WebKit (required by Electron webview)
+libcurl4-openssl-dev
+libwebkit2gtk-4.1-dev
+
+# Build tools
+pkg-config
+cmake
+build-essential
+
+# File operations (used by bundle-slopsmith.sh to resolve symlinked plugins)
+rsync
+
+# Binary patching (used by bundle-binaries.sh to point bundled fluidsynth
+# at sibling shared libraries at runtime)
+patchelf
+
+# MIDI → audio renderer used by GP5 import (`gp2midi.py`). `fluidsynth`
+# here is the CLI; bundle-binaries.sh copies its full dylib chain.
+fluidsynth
+
+# Media tools (for audio processing)
+ffmpeg
+
+# Version control
+git
+
+# Archive utilities (required by electron-builder)
+xz-utils

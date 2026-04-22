@@ -1,0 +1,12 @@
+# Windows Chocolatey packages for building Slopsmith Desktop.
+# Kept in sync with .github/workflows/build.yml — change both places together.
+#
+# NOTE: cmake requires special install args in GitHub Actions:
+#   choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System'
+#
+# Fluidsynth + vgmstream on Windows are NOT installed via choco; they're
+# downloaded as pinned release archives in the CI workflow because the
+# choco packages lag upstream and we need specific versions.
+
+cmake
+ffmpeg

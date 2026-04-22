@@ -1,0 +1,19 @@
+# macOS Homebrew packages for building Slopsmith Desktop.
+# Kept in sync with .github/workflows/build.yml — change both places together.
+
+# Build tools
+cmake
+pkg-config
+
+# Media tools
+ffmpeg
+
+# MIDI → audio renderer used by GP5 import (`gp2midi.py`).
+# Homebrew calls the formula `fluid-synth` (with a hyphen); the binary
+# it installs is still named `fluidsynth`.
+fluid-synth
+
+# Used by the CI / local build to rewrite Mach-O load paths on the
+# bundled fluidsynth binary so it loads its dylibs via @executable_path
+# instead of /opt/homebrew/lib.
+dylibbundler

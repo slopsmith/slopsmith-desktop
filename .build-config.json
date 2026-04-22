@@ -1,0 +1,24 @@
+{
+  "versions": {
+    "node": "22",
+    "python": "3.12",
+    "dotnet": "10.0",
+    "electron": "35.0.0",
+    "cmake": "3.22",
+    "ubuntu": "22.04"
+  },
+  "external": {
+    "rs2014net": {
+      "repo": "byrongamatos/Rocksmith2014.NET",
+      "commit": "73a42e71643fc27c2d280cf577cb291e9b91c59a"
+    },
+    "fluidsynth_windows": {
+      "version": "v2.5.4",
+      "url": "https://github.com/FluidSynth/fluidsynth/releases/download/v2.5.4/fluidsynth-v2.5.4-win10-x64-cpp11.zip"
+    },
+    "soundfont_general_user": {
+      "url": "https://github.com/byrongamatos/slopsmith-desktop/releases/download/soundfonts-v1/GeneralUser-GS.sf2",
+      "sha256": "9575028c7a1f589f5770fccc8cff2734566af40cd26ed836944e9a5152688cfe"
+    }
+  }
+}

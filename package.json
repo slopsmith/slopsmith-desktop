@@ -9,12 +9,18 @@
   "main": "dist/main/main.js",
   "scripts": {
     "build:ts": "tsc",
-    "build:audio": "cmake-js build --runtime electron --runtime-version 35.0.0 --arch $(uname -m | sed 's/x86_64/x64/' | sed 's/aarch64/arm64/') --CDCMAKE_BUILD_TYPE=Release",
-    "build:audio:debug": "cmake-js build --runtime electron --runtime-version 35.0.0 --CDCMAKE_BUILD_TYPE=Debug",
-    "rebuild:audio": "cmake-js rebuild --runtime electron --runtime-version 35.0.0",
+    "build:audio": "cmake-js build --runtime electron --runtime-version $(node -p \"require('electron/package.json').version\") --arch $(uname -m | sed 's/x86_64/x64/' | sed 's/aarch64/arm64/') --CDCMAKE_BUILD_TYPE=Release",
+    "build:audio:debug": "cmake-js build --runtime electron --runtime-version $(node -p \"require('electron/package.json').version\") --CDCMAKE_BUILD_TYPE=Debug",
+    "rebuild:audio": "cmake-js rebuild --runtime electron --runtime-version $(node -p \"require('electron/package.json').version\")",
+    "build:rscli": "bash scripts/build-rscli.sh",
+    "build:native": "npm run build:audio && npm run build:rscli",
+    "bundle:slopsmith": "bash scripts/bundle-slopsmith.sh",
+    "bundle:python": "bash scripts/bundle-python.sh",
+    "bundle:binaries": "bash scripts/bundle-binaries.sh",
+    "bundle:soundfont": "bash scripts/bundle-soundfont.sh",
+    "bundle": "bash scripts/bundle.sh",
     "start": "npm run build:ts && electron .",
     "dev": "tsc && electron .",
-    "bundle": "bash scripts/bundle.sh",
     "dist": "npm run bundle && npm run build:ts && electron-builder",
     "dist:linux": "npm run dist -- --linux",
     "dist:mac": "npm run dist -- --mac",
@@ -90,7 +96,6 @@
     "@types/node": "^22.0.0"
   },
   "cmake-js": {
-    "runtime": "electron",
-    "runtimeVersion": "35.0.0"
+    "runtime": "electron"
   }
 }
