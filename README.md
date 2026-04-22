@@ -51,7 +51,7 @@ Standalone cross-platform desktop app that wraps [Slopsmith](https://github.com/
 - Python 3.12+
 - CMake 3.22+
 - Git
-- [Slopsmith](https://github.com/byrongamatos/slopsmith) cloned at `~/Repositories/slopsmith/`
+- [Slopsmith](https://github.com/byrongamatos/slopsmith) cloned at `../slopsmith/` (preferred) or `~/Repositories/slopsmith/`
 
 **Linux:**
 ```bash
@@ -96,6 +96,35 @@ npm run dist:linux   # .AppImage + .deb
 npm run dist:mac     # .dmg
 npm run dist:win     # .exe installer
 ```
+
+### Reproducible Linux builds
+
+To match the GitHub Actions `ubuntu-22.04` build environment exactly
+(same Node.js, Python, .NET, and system library versions), build
+inside the DevContainer:
+
+**Prerequisites**
+- [Docker](https://docs.docker.com/get-docker/)
+- The [Slopsmith](https://github.com/byrongamatos/slopsmith) server
+  repository cloned at `../slopsmith/`
+
+**VS Code**
+```bash
+# With the Dev Containers extension:
+# Dev Containers: Reopen in Container
+npm run dist:linux
+```
+
+**Docker only**
+```bash
+./scripts/build-linux-release.sh
+```
+
+Both paths write AppImage + .deb to `./release/` on the host. See
+[`docs/BUILD_ARCHITECTURE.md`](docs/BUILD_ARCHITECTURE.md) for the
+full script layout and
+[`.devcontainer/README.md`](.devcontainer/README.md) for container
+specifics.
 
 ## Audio Engine
 
