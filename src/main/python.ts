@@ -203,20 +203,30 @@ export async function startPython(): Promise<void> {
     });
 
     pythonProcess.stdout?.on('data', (data: Buffer) => {
-        const msg = data.toString().trim();
-        if (msg) console.log(`[python:stdout] ${msg}`);
+        try {
+            const msg = data.toString().trim();
+            if (msg) console.log(`[python:stdout] ${msg}`);
+        } catch { /* EPIPE or similar when the process dies mid-write */ }
     });
 
+    // Swallow stream errors — EPIPE fires when the Python child dies while
+    // we're still draining its pipes; that's expected, not a bug.
+    pythonProcess.stdout?.on('error', () => { /* ignore */ });
+
     pythonProcess.stderr?.on('data', (data: Buffer) => {
-        const msg = data.toString().trim();
-        if (msg) {
-            console.log(`[python] ${msg}`);
-            // Detect uvicorn startup message
-            if (msg.includes('Uvicorn running on') || msg.includes('Application startup complete')) {
-                serverReady = true;
+        try {
+            const msg = data.toString().trim();
+            if (msg) {
+                console.log(`[python] ${msg}`);
+                // Detect uvicorn startup message
+                if (msg.includes('Uvicorn running on') || msg.includes('Application startup complete')) {
+                    serverReady = true;
+                }
             }
-        }
+        } catch { /* EPIPE or similar when the process dies mid-write */ }
     });
+
+    pythonProcess.stderr?.on('error', () => { /* ignore */ });
 
     pythonProcess.on('close', (code: number | null) => {
         console.log(`[python] Process exited with code ${code}`);

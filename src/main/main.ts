@@ -8,6 +8,17 @@ import { initAudioBridge, shutdownAudio } from './audio-bridge';
 import { initPluginManager } from './plugin-manager';
 import { initSoundfontManager } from './soundfont-manager';
 
+// Prevent error dialogs from showing when the Python subprocess has issues.
+// Both handlers log and swallow — don't let a stray rejection in one of the
+// subsystems tear the whole app down.
+process.on('uncaughtException', (err) => {
+    console.error('[main] Uncaught exception:', err.message);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('[main] Unhandled rejection at:', promise, 'reason:', reason);
+});
+
 let mainWindow: BrowserWindow | null = null;
 
 function getResourcesPath(): string {
@@ -153,7 +164,9 @@ app.on('before-quit', () => {
 });
 
 function shutdown(): void {
-    console.log('[main] Shutting down...');
+    try {
+        console.log('[main] Shutting down...');
+    } catch { /* console may already be gone mid-teardown */ }
     shutdownAudio();
     stopPython();
 }
