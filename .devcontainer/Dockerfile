@@ -1,0 +1,79 @@
+# Dockerfile for reproducible Slopsmith Desktop builds.
+# Mirrors the GitHub Actions ubuntu-22.04 runner environment. Versions
+# are read from .build-config.json so CI and this container can't drift.
+#
+# Reproducibility caveat: the base tag `ubuntu-22.04` tracks the latest
+# security-patched Microsoft devcontainer image. True byte-for-byte
+# reproducibility would pin to an image digest; in practice a rolling
+# `ubuntu-22.04` matches what the GitHub Actions runner ships.
+FROM mcr.microsoft.com/devcontainers/base:ubuntu-22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# ── Build config ────────────────────────────────────────────────────────────
+# Python is preinstalled on the base image; use it to read version pins
+# from .build-config.json (avoids adding jq to the image).
+COPY .build-config.json /tmp/.build-config.json
+COPY scripts/parse-build-config.py /tmp/parse-build-config.py
+
+RUN NODE_VERSION=$(python3 /tmp/parse-build-config.py /tmp/.build-config.json .versions.node) && \
+    PYTHON_VERSION=$(python3 /tmp/parse-build-config.py /tmp/.build-config.json .versions.python) && \
+    DOTNET_VERSION=$(python3 /tmp/parse-build-config.py /tmp/.build-config.json .versions.dotnet) && \
+    printf 'NODE_VERSION=%s\nPYTHON_VERSION=%s\nDOTNET_VERSION=%s\n' \
+        "$NODE_VERSION" "$PYTHON_VERSION" "$DOTNET_VERSION" > /etc/build.env
+
+# ── System dependencies ─────────────────────────────────────────────────────
+# Single source of truth: .packages/apt.txt (also consumed by CI).
+COPY .packages /tmp/.packages
+RUN apt-get update && \
+    PACKAGES=$(grep -v '^[[:space:]]*#' /tmp/.packages/apt.txt | grep -v '^[[:space:]]*$' | tr '\n' ' ') && \
+    apt-get install -y --no-install-recommends $PACKAGES && \
+    rm -rf /var/lib/apt/lists/*
+
+# ── Node.js ─────────────────────────────────────────────────────────────────
+RUN . /etc/build.env && \
+    curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION}.x | bash - && \
+    apt-get install -y nodejs && \
+    rm -rf /var/lib/apt/lists/*
+
+# ── Python ──────────────────────────────────────────────────────────────────
+# Ubuntu 22.04 main repos ship Python 3.10 — the 3.12 we need comes from
+# the deadsnakes PPA. `python3-distutils` was removed from 3.12's stdlib,
+# but `setuptools` (below) provides the compatibility shim.
+RUN . /etc/build.env && \
+    apt-get update && apt-get install -y --no-install-recommends software-properties-common && \
+    add-apt-repository ppa:deadsnakes/ppa && \
+    apt-get update && apt-get install -y --no-install-recommends \
+        python${PYTHON_VERSION} \
+        python${PYTHON_VERSION}-dev \
+        python${PYTHON_VERSION}-venv \
+        python3-pip \
+        python3-setuptools && \
+    rm -rf /var/lib/apt/lists/* && \
+    ln -sf /usr/bin/python${PYTHON_VERSION} /usr/bin/python3
+
+# ── .NET ────────────────────────────────────────────────────────────────────
+RUN . /etc/build.env && \
+    curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh && \
+    chmod +x /tmp/dotnet-install.sh && \
+    /tmp/dotnet-install.sh --channel ${DOTNET_VERSION} --install-dir /usr/share/dotnet && \
+    ln -sf /usr/share/dotnet/dotnet /usr/local/bin/dotnet && \
+    rm /tmp/dotnet-install.sh
+
+ENV DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
+ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
+
+# ── Workspace ───────────────────────────────────────────────────────────────
+USER vscode
+WORKDIR /workspace
+
+# Runtime verification. Workspace isn't mounted at image-build time —
+# package.json only exists when the container is RUN against a mounted
+# project, so the Electron version check runs at container start rather
+# than build. Print what we CAN verify here.
+RUN . /etc/build.env && \
+    echo "=== Slopsmith Desktop build environment ===" && \
+    echo "Node: $(node --version)" && \
+    echo "npm:  $(npm --version)" && \
+    echo "Python: $(python3 --version)" && \
+    echo ".NET: $(dotnet --version)"

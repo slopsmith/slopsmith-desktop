@@ -37,6 +37,12 @@ config/
 resources/slopsmith/
 resources/python/
 resources/bin/
+# Downloaded soundfont (bundle-soundfont.sh pulls this on demand;
+# resources/soundfonts/LICENSE is tracked).
+resources/soundfonts/*.sf2
+
+# AppImage extraction dir
+squashfs-root/
 
 # Lock files
 package-lock.json

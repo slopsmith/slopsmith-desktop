@@ -1,0 +1,37 @@
+{
+  "name": "Slopsmith Desktop Builder",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/git:1": {}
+  },
+  "mounts": [
+    {
+      "source": "${localWorkspaceFolder}/../slopsmith",
+      "target": "/workspaces/slopsmith",
+      "type": "bind"
+    }
+  ],
+  "remoteUser": "vscode",
+  "postCreateCommand": "test -d /workspaces/slopsmith || (echo 'ERROR: Slopsmith repository not found at ../slopsmith — clone it adjacent to this repo: git clone https://github.com/byrongamatos/slopsmith.git ../slopsmith' && exit 1) && python3 scripts/parse-build-config.py .build-config.json >/dev/null && git submodule update --init --recursive && npm install",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash"
+      },
+      "extensions": [
+        "ms-vscode.cpptools",
+        "ms-vscode.cmake-tools",
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode"
+      ]
+    }
+  },
+  "hostRequirements": {
+    "cpus": 4,
+    "memory": "8gb",
+    "storage": "32gb"
+  }
+}
