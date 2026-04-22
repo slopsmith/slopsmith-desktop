@@ -163,7 +163,8 @@ rebuilds the native addon against the currently-installed Electron.
 | System deps | `.packages/apt.txt` | `.packages/apt.txt` |
 | Slopsmith source | Cloned fresh to `$RUNNER_TEMP` | Bind-mounted from `../slopsmith` |
 | Python bundle | `scripts/bundle-python.sh` | `scripts/bundle-python.sh` |
-| Binary bundle | Inline bash + `scripts/bundle-soundfont.sh` | Inline bash + `scripts/bundle-soundfont.sh` |
+| Binary bundle | Inline bash (ffmpeg / vgmstream / fluidsynth lib chain) | `scripts/bundle-binaries.sh` (invoked by `npm run bundle`) |
+| Soundfont bundle | `scripts/bundle-soundfont.sh` | `scripts/bundle-soundfont.sh` |
 | Smoke test | `fluidsynth --version` + `ffmpeg -version` + `vgmstream-cli --help` | (run manually) |
 
 ## Adding a new build step

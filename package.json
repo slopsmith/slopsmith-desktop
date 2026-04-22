@@ -21,7 +21,7 @@
     "bundle": "bash scripts/bundle.sh",
     "start": "npm run build:ts && electron .",
     "dev": "tsc && electron .",
-    "dist": "npm run bundle && npm run build:ts && electron-builder",
+    "dist": "npm run build:native && npm run bundle && npm run build:ts && electron-builder",
     "dist:linux": "npm run dist -- --linux",
     "dist:mac": "npm run dist -- --mac",
     "dist:win": "npm run dist -- --win",

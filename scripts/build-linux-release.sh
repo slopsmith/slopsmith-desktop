@@ -82,7 +82,9 @@ docker build -f "$DEVCONTAINER_DIR/Dockerfile" -t slopsmith-desktop-builder "$PR
 
 # ── Run build ────────────────────────────────────────────────────────────────
 
-CONTAINER_NAME="slopsmith-build-$(date +%s)"
+# Seconds + PID + $RANDOM so two invocations inside the same second don't
+# collide on the docker --name conflict.
+CONTAINER_NAME="slopsmith-build-$(date +%s)-$$-$RANDOM"
 echo ""
 echo -e "${BLUE}Container name:${NC} $CONTAINER_NAME"
 echo "  (not auto-removed — attach a shell if the build fails)"
@@ -98,23 +100,25 @@ docker run \
     -e ELECTRON_CACHE=/home/vscode/.cache/electron \
     -e ELECTRON_BUILDER_CACHE=/home/vscode/.cache/electron-builder \
     -e DEBUG=electron-builder \
-    -e NODE_OPTIONS=--openssl-legacy-provider \
     -t \
     slopsmith-desktop-builder \
     bash -c '
         set -e
         export PATH="/workspace/node_modules/.bin:$PATH"
 
-        echo "=== Step 1/4: npm ci ==="
-        npm ci
+        # npm install (not ci): package-lock.json is gitignored, so a bare
+        # clone has no lockfile for ci to consume. CI uses install too.
+        echo "=== Step 1/3: npm install ==="
+        npm install
 
-        echo "=== Step 2/4: git submodules ==="
+        echo "=== Step 2/3: git submodules ==="
         git submodule update --init --recursive
 
-        echo "=== Step 3/4: npm run dist:linux ==="
+        # dist:linux chains build:native → bundle → build:ts → electron-builder,
+        # so the native addon + RsCli end up in the AppImage.
+        echo "=== Step 3/3: npm run dist:linux ==="
         NODE_ENV=production npm run dist:linux
 
-        echo "=== Step 4/4: verifying output ==="
         # Glob-safe existence check: compgen returns 0 iff at least one match.
         if compgen -G "release/Slopsmith-*.AppImage" >/dev/null; then
             ls -lh release/Slopsmith-*.AppImage
@@ -154,11 +158,16 @@ else
 fi
 
 # ── Image housekeeping ───────────────────────────────────────────────────────
-# Remove dangling images (previous versions of slopsmith-desktop-builder)
-# so they don't pile up on disk.
+# Opt-in because `docker image prune --filter dangling=true` applies to the
+# whole Docker host, not just this project. Setting
+# SLOPSMITH_PRUNE_DANGLING_IMAGES=1 re-enables cleanup if you want it.
 echo ""
-echo "Cleaning up dangling images…"
-docker image prune -f --filter "dangling=true" >/dev/null 2>&1 || true
+if [ "${SLOPSMITH_PRUNE_DANGLING_IMAGES:-0}" = "1" ]; then
+    echo "Cleaning up dangling images (SLOPSMITH_PRUNE_DANGLING_IMAGES=1)…"
+    docker image prune -f --filter "dangling=true" >/dev/null 2>&1 || true
+else
+    echo "Skipping dangling-image cleanup (set SLOPSMITH_PRUNE_DANGLING_IMAGES=1 to enable)."
+fi
 
 echo ""
 echo "=== Done ==="
