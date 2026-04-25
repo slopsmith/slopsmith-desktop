@@ -36,12 +36,6 @@ if ! docker info &>/dev/null; then
     exit 1
 fi
 
-if [[ ! -d "$SLOPSMITH_DIR" ]]; then
-    echo -e "${RED}Error: Slopsmith repository not found at $SLOPSMITH_DIR${NC}" >&2
-    echo "Clone it: git clone https://github.com/byrongamatos/slopsmith.git $SLOPSMITH_DIR" >&2
-    exit 1
-fi
-
 echo -e "${GREEN}✓${NC} Docker and Slopsmith repository found"
 echo ""
 
