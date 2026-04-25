@@ -30,11 +30,7 @@ jobs:
         with:
           submodules: recursive
 
-      # Read build configuration before setup-* so setup-node/python/dotnet
-      # all consume pinned versions from `.build-config.json`. Uses node
-      # (preinstalled on all GitHub-hosted runners — we're not dependent
-      # on setup-node here). Node is cross-platform; jq isn't guaranteed
-      # on Windows runners.
+      # Read build configuration to get version numbers for setup tools
       - name: Read build configuration
         id: config
         shell: bash
@@ -59,252 +55,10 @@ jobs:
         with:
           dotnet-version: ${{ steps.config.outputs.dotnet }}.x
 
-      # ── Platform dependencies ───────────────────────────────────────────
-      # Package lists in `.packages/*.txt` are the single source of truth
-      # for system deps and are consumed both by local-dev DevContainer
-      # and by CI here.
-      - name: Install Linux dependencies
-        if: matrix.platform == 'linux'
-        run: |
-          sudo apt-get update
-          PACKAGES=$(grep -v '^[[:space:]]*#' .packages/apt.txt | grep -v '^[[:space:]]*$' | tr '\n' ' ')
-          sudo apt-get install -y $PACKAGES
-
-      - name: Install macOS dependencies
-        if: matrix.platform == 'mac'
-        run: |
-          PACKAGES=$(grep -v '^[[:space:]]*#' .packages/brew.txt | grep -v '^[[:space:]]*$' | tr '\n' ' ')
-          brew install $PACKAGES
-
-      - name: Install Windows dependencies
-        if: matrix.platform == 'win'
-        run: choco install cmake ffmpeg --installargs 'ADD_CMAKE_TO_PATH=System'
-
-      # ── Build native addon ──────────────────────────────────────────────
-      - name: Install npm dependencies
-        run: npm install
-
-      - name: Configure audio engine
-        run: npx cmake-js configure --runtime electron --runtime-version $(node -p "require('./node_modules/electron/package.json').version") --arch ${{ matrix.arch }} --CDCMAKE_BUILD_TYPE=Release
-        shell: bash
-
-      - name: Build audio engine
-        run: cmake --build build --config Release -j$(nproc 2>/dev/null || sysctl -n hw.logicalcpu 2>/dev/null || echo 2)
-        shell: bash
-
-      - name: Build TypeScript
-        run: npm run build:ts
-
-      # ── Bundle Slopsmith server + plugins ───────────────────────────────
-      - name: Clone Slopsmith and plugins
-        shell: bash
-        run: |
-          SLOPSMITH_TMP="${RUNNER_TEMP}/slopsmith"
-          git clone --depth 1 https://github.com/byrongamatos/slopsmith.git "$SLOPSMITH_TMP"
-
-          # Remove broken symlinks from plugins dir, keep __init__.py and any real dirs
-          find "$SLOPSMITH_TMP/plugins" -maxdepth 1 -type l -delete 2>/dev/null || true
-
-          cd "$SLOPSMITH_TMP/plugins"
-          for repo in 3dhighway backingtrack cf fretboard metronome midi notedetect practice profileimport sectionmap setlist tabimport tabview tones ug; do
-            git clone --depth 1 "https://github.com/byrongamatos/slopsmith-plugin-${repo}.git" "${repo}" 2>/dev/null || echo "  skipped ${repo}"
-          done
-          echo "Plugins cloned: $(ls -d */ 2>/dev/null | wc -l)"
-
-      - name: Bundle Slopsmith into resources
-        shell: bash
-        run: |
-          SLOPSMITH_TMP="${RUNNER_TEMP}/slopsmith"
-          mkdir -p resources/slopsmith/{static,lib,plugins}
-
-          # Server + lib
-          cp "$SLOPSMITH_TMP/server.py" resources/slopsmith/
-          cp -r "$SLOPSMITH_TMP/lib/"* resources/slopsmith/lib/
-          rm -rf resources/slopsmith/lib/__pycache__
-
-          # Static assets
-          for f in index.html app.js highway.js style.css; do
-            [ -f "$SLOPSMITH_TMP/static/$f" ] && cp "$SLOPSMITH_TMP/static/$f" resources/slopsmith/static/
-          done
-
-          # Plugins
-          [ -f "$SLOPSMITH_TMP/plugins/__init__.py" ] && cp "$SLOPSMITH_TMP/plugins/__init__.py" resources/slopsmith/plugins/
-          for d in "$SLOPSMITH_TMP/plugins/"*/; do
-            name=$(basename "$d")
-            [ "$name" = "__pycache__" ] && continue
-            mkdir -p "resources/slopsmith/plugins/$name"
-            find "$d" -maxdepth 1 \( -name "*.py" -o -name "*.js" -o -name "*.html" -o -name "*.json" -o -name "*.css" \) -exec cp {} "resources/slopsmith/plugins/$name/" \;
-          done
-
-          # Desktop-specific plugins (audio_engine, plugin_manager)
-          for dp in src/renderer src/renderer/plugin-manager; do
-            if [ -f "$dp/plugin.json" ]; then
-              pname=$(python3 -c "import json; print(json.load(open('$dp/plugin.json'))['id'])")
-              mkdir -p "resources/slopsmith/plugins/$pname"
-              cp "$dp"/*.html "$dp"/*.js "$dp"/plugin.json "resources/slopsmith/plugins/$pname/" 2>/dev/null || true
-            fi
-          done
-
-      - name: Bundle standalone Python
-        shell: bash
-        run: |
-          mkdir -p resources/python
-
-          if [ "${{ matrix.platform }}" = "win" ]; then
-            # Windows: download embeddable Python
-            curl -sL --fail --retry 5 --retry-delay 5 --retry-all-errors \
-              "https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip" -o /tmp/python-embed.zip
-            unzip -q /tmp/python-embed.zip -d resources/python/
-            sed -i 's/#import site/import site/' resources/python/python312._pth
-            echo "Lib/site-packages" >> resources/python/python312._pth
-            curl -sL --fail --retry 5 --retry-delay 5 --retry-all-errors \
-              https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
-            resources/python/python.exe /tmp/get-pip.py --quiet --no-cache-dir 2>&1 | tail -3
-            resources/python/python.exe -m pip install --quiet --no-cache-dir setuptools wheel 2>&1 | tail -3
-            resources/python/python.exe -m pip install --quiet --no-cache-dir \
-              fastapi "uvicorn[standard]" websockets pycryptodome pyguitarpro \
-              Pillow midiutil python-multipart requests 2>&1 | tail -5
-            # Remove the ._pth file so PYTHONPATH env var works at runtime
-            rm -f resources/python/python312._pth
-
-          elif [ "${{ matrix.platform }}" = "mac" ]; then
-            # macOS: use the setup-python installation and copy it
-            PYTHON_PREFIX=$(python3 -c "import sys; print(sys.prefix)")
-            cp -R "$PYTHON_PREFIX" resources/python/runtime
-            resources/python/runtime/bin/python3 -m pip install --quiet --no-cache-dir \
-              fastapi "uvicorn[standard]" websockets pycryptodome pyguitarpro \
-              Pillow midiutil python-multipart requests 2>&1 | tail -5
-
-          else
-            # Linux: delegate to the modular script so local dev matches CI.
-            # SLOPSMITH_DIR isn't needed here; the script only bundles Python.
-            bash scripts/bundle-python.sh
-          fi
-
-      - name: Build and bundle RsCli
-        shell: bash
-        run: bash scripts/build-rscli.sh
-
-      - name: Bundle system binaries (Linux/macOS)
-        run: |
-          set -euo pipefail
-          mkdir -p resources/bin
-
-          if command -v ffmpeg &>/dev/null; then
-            cp "$(which ffmpeg)" resources/bin/
-          fi
-
-          # fluidsynth: copy the binary, then pull in its non-system shared
-          # libraries so the bundle runs on end-user machines without the
-          # system package installed.
-          if command -v fluidsynth &>/dev/null; then
-            cp "$(which fluidsynth)" resources/bin/fluidsynth
-            if [ "${{ matrix.platform }}" = "linux" ]; then
-              ldd resources/bin/fluidsynth | awk '/=>/ {print $3}' | while read -r lib; do
-                  [ -n "$lib" ] && [ -f "$lib" ] || continue
-                  case "$(basename "$lib")" in
-                      libc.so*|libm.so*|libpthread.so*|libdl.so*|librt.so*|\
-                      ld-linux*|libresolv.so*|linux-vdso*|linux-gate*|\
-                      libnsl.so*|libutil.so*|libgcc_s.so*)
-                          continue
-                          ;;
-                  esac
-                  cp -L "$lib" resources/bin/
-              done
-              patchelf --set-rpath '$ORIGIN' resources/bin/fluidsynth
-              for so in resources/bin/*.so*; do
-                  [ -f "$so" ] && patchelf --set-rpath '$ORIGIN' "$so" || true
-              done
-            else
-              # macOS: dylibbundler walks the dyld graph, copies non-system
-              # dylibs into resources/bin, and rewrites load commands to use
-              # @executable_path/<name>. Do NOT use -od — it wipes the
-              # destination dir (including the binary we just copied).
-              dylibbundler -cd -b -x resources/bin/fluidsynth -d resources/bin -p '@executable_path/'
-            fi
-          fi
-
-          # vgmstream-cli: pin the official release binary.
-          if [ "${{ matrix.platform }}" = "linux" ]; then
-            VGM_ASSET="vgmstream-linux-cli.zip"
-          else
-            VGM_ASSET="vgmstream-mac-cli.zip"
-          fi
-          curl -sL --fail --retry 5 --retry-delay 5 --retry-all-errors \
-              "https://github.com/vgmstream/vgmstream/releases/latest/download/${VGM_ASSET}" -o /tmp/vgmstream.zip
-          unzip -q /tmp/vgmstream.zip -d /tmp/vgmstream
-          VGM_BIN=$(find /tmp/vgmstream -maxdepth 2 -name 'vgmstream-cli' -type f | head -1)
-          if [ -z "$VGM_BIN" ]; then
-              echo "ERROR: vgmstream-cli not found in $VGM_ASSET; upstream layout may have changed." >&2
-              exit 1
-          fi
-          cp "$VGM_BIN" resources/bin/vgmstream-cli
-          chmod +x resources/bin/vgmstream-cli
-
-          echo "Bundled binaries:"
-          ls -lh resources/bin/ | awk 'NR>1{printf "  %s %s\n", $5, $9}'
-        shell: bash
-        if: matrix.platform != 'win'
-
-      - name: Bundle system binaries (Windows)
-        shell: bash
-        run: |
-          mkdir -p resources/bin
-
-          CURL="curl -sL --fail --retry 5 --retry-delay 5 --retry-all-errors"
-
-          # ffmpeg static build
-          $CURL "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" -o /tmp/ffmpeg.zip
-          unzip -q /tmp/ffmpeg.zip -d /tmp/ffmpeg
-          cp /tmp/ffmpeg/ffmpeg-master-latest-win64-gpl/bin/ffmpeg.exe resources/bin/ 2>/dev/null || true
-
-          # vgmstream-cli
-          $CURL "https://github.com/vgmstream/vgmstream/releases/latest/download/vgmstream-win64.zip" -o /tmp/vgmstream.zip
-          unzip -q /tmp/vgmstream.zip -d /tmp/vgmstream
-          cp /tmp/vgmstream/vgmstream-cli.exe resources/bin/ 2>/dev/null || true
-          cp /tmp/vgmstream/*.dll resources/bin/ 2>/dev/null || true
-
-          # fluidsynth — official Windows build. URL pinned in .build-config.json;
-          # locate the binary via `find` since the zip uses a version-prefixed
-          # directory layout.
-          FS_URL=$(node -p "require('./.build-config.json').external.fluidsynth_windows.url")
-          $CURL "$FS_URL" -o /tmp/fluidsynth.zip
-          unzip -q /tmp/fluidsynth.zip -d /tmp/fluidsynth
-          FS_BIN=$(find /tmp/fluidsynth -name 'fluidsynth.exe' -type f | head -1)
-          if [ -z "$FS_BIN" ]; then
-              echo "ERROR: fluidsynth.exe not found in the fluidsynth zip" >&2
-              exit 1
-          fi
-          cp "$FS_BIN" resources/bin/
-          cp "$(dirname "$FS_BIN")"/*.dll resources/bin/ 2>/dev/null || true
-
-          echo "Bundled binaries:"
-          ls -lh resources/bin/ | awk 'NR>1{printf "  %s %s\n", $5, $9}'
-        if: matrix.platform == 'win'
-
-      - name: Bundle default soundfont
-        shell: bash
-        run: bash scripts/bundle-soundfont.sh
-
-      - name: Smoke test bundled binaries
-        shell: bash
-        run: |
-          set -e
-          if [ "${{ matrix.platform }}" = "win" ]; then
-              ./resources/bin/fluidsynth.exe --version
-              ./resources/bin/ffmpeg.exe -version | head -1
-              ./resources/bin/vgmstream-cli.exe --help | head -1 || true
-          else
-              ./resources/bin/fluidsynth --version
-              ./resources/bin/ffmpeg -version | head -1
-              ./resources/bin/vgmstream-cli --help | head -1 || true
-          fi
-
-      # ── Package ─────────────────────────────────────────────────────────
-      - name: Package
-        run: npx electron-builder --${{ matrix.platform }} --publish never
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Build using the unified platform script
+      # All bundling and dependency installation is handled by the script
+      - name: Build
+        run: ./scripts/build-release.sh
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -337,25 +91,14 @@ jobs:
           draft: true
           generate_release_notes: true
 
-  # Mirror the release tag into slopsmith core's VERSION file so the
-  # navbar badge + /api/version match what users just installed. Fires
-  # a repository_dispatch at byrongamatos/slopsmith; the receiver
-  # workflow there (sync-version.yml) does the actual commit.
-  # Requires `SLOPSMITH_SYNC_TOKEN` secret. Prefer a fine-grained PAT
-  # scoped only to `byrongamatos/slopsmith` with Contents: write (or
-  # Actions: write), rather than a classic PAT with full `repo` scope —
-  # cross-repo dispatch can't use the default GITHUB_TOKEN. See
-  # slopsmith#81.
+  # Mirror release version to slopsmith core
+  # Requires SLOPSMITH_SYNC_TOKEN secret
   notify-slopsmith:
     needs: release
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
-    # The job authenticates entirely via SLOPSMITH_SYNC_TOKEN below;
-    # it never uses the workflow's GITHUB_TOKEN. Explicit empty
-    # permissions block means a compromised action on this step has
-    # zero default scope against THIS repo — blast radius is bounded
-    # by the PAT's scope, not the workflow's default token.
     permissions: {}
+
     steps:
       - name: Dispatch VERSION sync to slopsmith
         env:
@@ -363,9 +106,6 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
         run: |
           version="${REF_NAME#v}"
-          # Defensive semver guard — the receiver validates too, but
-          # no reason to fire a dispatch we know will fail. Skips any
-          # non-vX.Y.Z tag (e.g. the `soundfonts-v1` asset release).
           if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Tag $REF_NAME is not vX.Y.Z — skipping slopsmith VERSION sync."
             exit 0
