@@ -84,6 +84,7 @@ case "$PLATFORM" in
 esac
 
 # The exit code from the platform build script
+exit_code=$?
 
 if [[ $exit_code -eq 0 ]]; then
   echo ""
