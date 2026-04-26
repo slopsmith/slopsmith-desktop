@@ -252,7 +252,11 @@ verify_artifacts() {
 
     ARTIFACTS_FOUND=0
 
-    mapfile -t patterns < <(get_expected_artifacts)
+    # Read patterns into array (bash 3.x compatible alternative to mapfile)
+  patterns=()
+  while IFS= read -r line; do
+    patterns+=("$line")
+  done < <(get_expected_artifacts)
     for pattern in "${patterns[@]}"; do
         if compgen -G "$pattern" >/dev/null; then
             ARTIFACTS_FOUND=1
