@@ -16,7 +16,10 @@ bash "$SCRIPT_DIR/bundle-slopsmith.sh"
 if [[ "$(uname -s)" == "Linux" ]]; then
   bash "$SCRIPT_DIR/bundle-python.sh"
 fi
-bash "$SCRIPT_DIR/bundle-binaries.sh"
+# Skip binary bundling on non-Linux platforms (handled inline in platform scripts)
+if [[ "$(uname -s)" == "Linux" ]]; then
+  bash "$SCRIPT_DIR/bundle-binaries.sh"
+fi
 bash "$SCRIPT_DIR/bundle-soundfont.sh"
 
 # Default IRs — small copy step that doesn't need its own script.
