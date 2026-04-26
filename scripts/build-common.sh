@@ -114,6 +114,7 @@ clone_slopsmith() {
 
 	export SLOPSMITH_DIR="$clone_dir"
 	echo "Cloned $(ls -d */ 2>/dev/null | wc -l) plugins"
+	cd - >/dev/null
 }
 
 
