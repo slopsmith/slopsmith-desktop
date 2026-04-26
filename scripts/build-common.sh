@@ -258,12 +258,10 @@ verify_artifacts() {
     patterns+=("$line")
   done < <(get_expected_artifacts)
     for pattern in "${patterns[@]}"; do
-    # Use array expansion for Bash 3.x compatibility
-    files=($pattern)
-    if [ -e "${files[0]}" ]; then
-      ARTIFACTS_FOUND=1
-      break
-    fi
+        # Use array expansion for Bash 3.x compatibility
+        files=($pattern)
+        if [ -e "${files[0]}" ]; then
+            ARTIFACTS_FOUND=1
             break
         fi
     done
