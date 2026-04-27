@@ -257,14 +257,15 @@ verify_artifacts() {
   while IFS= read -r line; do
     patterns+=("$line")
   done < <(get_expected_artifacts)
-    for pattern in "${patterns[@]}"; do
-        # Use array expansion for Bash 3.x compatibility
-        files=($pattern)
-        if [ -e "${files[0]}" ]; then
-            ARTIFACTS_FOUND=1
-            break
-        fi
-    done
+  for pattern in "${patterns[@]}"; do
+    shopt -s nullglob
+    files=($pattern)
+    shopt -u nullglob
+    if [ ${#files[@]} -gt 0 ]; then
+      ARTIFACTS_FOUND=1
+      break
+    fi
+  done
 
     if [[ $ARTIFACTS_FOUND -eq 1 ]]; then
         echo_summary "Build successful!"
