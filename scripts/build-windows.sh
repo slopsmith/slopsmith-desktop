@@ -33,6 +33,9 @@ export YELLOW='\033[1;33m'
 export BLUE='\033[0;34m'
 export NC='\033[0m'
 
+# Source common build logic
+source "$SCRIPT_DIR/build-common.sh"
+
 # Platform-specific: Install system dependencies
 install_system_deps() {
 	# Windows: install via Chocolatey if available
@@ -112,9 +115,6 @@ bundle_binaries_impl() {
 		fi
 	fi
 }
-
-# Source common build logic
-source "$SCRIPT_DIR/build-common.sh"
 
 # Run the build
 main "$@"

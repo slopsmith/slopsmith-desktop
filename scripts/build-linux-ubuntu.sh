@@ -29,6 +29,9 @@ export YELLOW='\033[1;33m'
 export BLUE='\033[0;34m'
 export NC='\033[0m'
 
+# Source common build logic
+source "$SCRIPT_DIR/build-common.sh"
+
 # Platform-specific: Return expected artifact patterns
 get_expected_artifacts() {
 	printf "%s\n" "$PROJECT_DIR/release/*.AppImage" "$PROJECT_DIR/release/*.deb"
@@ -59,9 +62,6 @@ bundle_binaries_impl() {
 	# Linux: use existing bundle-binaries.sh script
 	bash "$SCRIPT_DIR/bundle-binaries.sh"
 }
-
-# Source common build logic
-source "$SCRIPT_DIR/build-common.sh"
 
 # Run the build
 main "$@"
