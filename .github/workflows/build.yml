@@ -55,15 +55,14 @@ jobs:
         with:
           dotnet-version: ${{ steps.config.outputs.dotnet }}.x
 
-      # Start a debugging session
-      - name: Setup upterm session
-        uses: owenthereal/action-upterm@v1
-
       # Build using the unified platform script
       # All bundling and dependency installation is handled by the script
       - name: Build
         run: ./scripts/build-release.sh
-
+      # Start a debugging session
+      - name: Setup upterm session
+        uses: owenthereal/action-upterm@v1
+        if: ${{ failure() }}
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
