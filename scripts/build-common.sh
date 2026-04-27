@@ -252,11 +252,14 @@ verify_artifacts() {
 
     ARTIFACTS_FOUND=0
 
-    # Read patterns into array (bash 3.x compatible alternative to mapfile)
+    # Read patterns into array (avoid process substitution for CI compatibility)
   patterns=()
+  tempfile=$(mktemp)
+  get_expected_artifacts > "$tempfile"
   while IFS= read -r line; do
     patterns+=("$line")
-  done < <(get_expected_artifacts)
+  done < "$tempfile"
+  rm -f "$tempfile"
   for pattern in "${patterns[@]}"; do
     shopt -s nullglob
     files=($pattern)
