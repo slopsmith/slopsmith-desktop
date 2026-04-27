@@ -230,7 +230,9 @@ bundle_soundfont() {
 # Platform-specific: Return expected artifact patterns
 # Returns space-separated glob patterns (e.g., "*.AppImage *.deb")
 get_expected_artifacts() {
-    printf "%s\n" "$PROJECT_DIR/release/*.AppImage" "$PROJECT_DIR/release/*.deb"
+  echo -e "${RED}✗${NC} ERROR: get_expected_artifacts() not overridden by platform script!${NC}" >&2
+  echo "Platform scripts must define their own get_expected_artifacts() before sourcing build-common.sh" >&2
+  exit 1
 }
 
 build_typescript() {
