@@ -59,6 +59,7 @@ jobs:
       # All bundling and dependency installation is handled by the script
       - name: Build
         run: ./scripts/build-release.sh
+        shell: bash
       # Start a debugging session
       - name: Setup upterm session
         uses: owenthereal/action-upterm@v1
