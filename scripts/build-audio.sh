@@ -40,16 +40,11 @@ esac
 
 # Get Electron version - extract just the version numbers
 echo "Detecting Electron version..."
-ELECTRON_VERSION=$(npx electron --version 2>/dev/null |
-    grep -oE '[0-9]+([.][0-9]+)+' |
-    head -n1 ||
-    echo "35.7.5")
-
+ELECTRON_VERSION=$(npx electron --version 2>/dev/null | grep -oE '[0-9]+([.][0-9]+)+' | head -n1 || echo "35.7.5")
 if [ -z "$ELECTRON_VERSION" ]; then
     echo "Warning: Could not detect Electron version, using fallback"
     ELECTRON_VERSION="35.7.5"
 fi
-
 echo "  Electron version: $ELECTRON_VERSION"
 
 # Set environment variables for cmake-js
@@ -95,7 +90,7 @@ npx cmake-js build \
 echo ""
 echo "Build complete!"
 if [ -f "build/Release/slopsmith_audio.node" ]; then
-    echo "Output: build/Release/sopsmith_audio.node"
+    echo "Output: build/Release/slopsmith_audio.node"
     ls -lh "build/Release/slopsmith_audio.node"
 else
     echo "Warning: slopsmith_audio.node not found in expected location"
