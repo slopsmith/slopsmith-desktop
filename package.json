@@ -9,9 +9,9 @@
   "main": "dist/main/main.js",
   "scripts": {
     "build:ts": "tsc",
-    "build:audio": "cmake-js build --runtime electron --runtime-version $(node -p \"require('electron/package.json').version\") --arch $(uname -m | sed 's/x86_64/x64/' | sed 's/aarch64/arm64/') --CDCMAKE_BUILD_TYPE=Release",
-    "build:audio:debug": "cmake-js build --runtime electron --runtime-version $(node -p \"require('electron/package.json').version\") --CDCMAKE_BUILD_TYPE=Debug",
-    "rebuild:audio": "cmake-js rebuild --runtime electron --runtime-version $(node -p \"require('electron/package.json').version\")",
+    "build:audio": "bash scripts/build-audio.sh Release",
+    "build:audio:debug": "bash scripts/build-audio.sh Debug",
+    "rebuild:audio": "bash scripts/build-audio.sh Release",
     "build:rscli": "bash scripts/build-rscli.sh",
     "build:native": "npm run build:audio && npm run build:rscli",
     "bundle:slopsmith": "bash scripts/bundle-slopsmith.sh",
