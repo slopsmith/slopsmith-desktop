@@ -38,39 +38,53 @@ case "$ARCH" in
         ;;
 esac
 
-# Get Electron version - trim whitespace properly for Windows
+# Get Electron version - extract just the version numbers
 echo "Detecting Electron version..."
-RAW_VERSION=$(npx electron --version 2>/dev/null || echo "v35.0.0")
-echo "Raw version: '$RAW_VERSION'"
-ELECTRON_VERSION=$(echo "$RAW_VERSION" | sed 's/[^0-9.]//g' | tr -d '[:space:]')
-echo "Cleaned version: '$ELECTRON_VERSION'"
+ELECTRON_VERSION=$(npx electron --version 2>/dev/null |
+    grep -oE '[0-9]+([.][0-9]+)+' |
+    head -n1 ||
+    echo "35.7.5")
 
-# Clear any cached cmake-js configuration to ensure fresh build
-if [ -d "$HOME/.cmake-js" ]; then
-    echo "Clearing cmake-js cache..."
+if [ -z "$ELECTRON_VERSION" ]; then
+    echo "Warning: Could not detect Electron version, using fallback"
+    ELECTRON_VERSION="35.7.5"
+fi
+
+echo "  Electron version: $ELECTRON_VERSION"
+
+# Set environment variables for cmake-js
+export CMAKE_JS_RUNTIME="electron"
+export CMAKE_JS_RUNTIME_VERSION="$ELECTRON_VERSION"
+export CMAKE_JS_ARCH="$CMAKE_ARCH"
+
+# Also set npm_config variables for compatibility
+export npm_config_runtime="electron"
+export npm_config_target="$ELECTRON_VERSION"
+export npm_config_arch="$CMAKE_ARCH"
+export npm_config_target_arch="$CMAKE_ARCH"
+
+# Optional: clear cmake-js cache on Windows (where this matters most)
+if [ -n "$CI" ] && [ -d "$HOME/.cmake-js" ]; then
+    echo "Clearing cmake-js cache (CI environment)..."
     rm -rf "$HOME/.cmake-js"
 fi
 
-# Set npm configuration for Electron headers
-# Using npm config instead of exports to ensure it's properly set
-npm config set runtime electron
-npm config set target "$ELECTRON_VERSION"
-npm config set arch "$CMAKE_ARCH"
-npm config set disturl https://artifacts.electronjs.org/headers/dist
-
+echo ""
 echo "Building audio engine..."
 echo "  Platform: $(uname -s)"
 echo "  Arch: $CMAKE_ARCH"
 echo "  Electron: $ELECTRON_VERSION"
 echo "  Build type: $BUILD_TYPE"
-
-# Debug npm config
 echo ""
-echo "npm config values:"
-npm config get runtime
-npm config get target
-npm config get arch
-npm config get disturl
+
+# Debug: show what cmake-js will see
+echo "Environment for cmake-js:"
+echo "  CMAKE_JS_RUNTIME=$CMAKE_JS_RUNTIME"
+echo "  CMAKE_JS_RUNTIME_VERSION=$CMAKE_JS_RUNTIME_VERSION"
+echo "  CMAKE_JS_ARCH=$CMAKE_JS_ARCH"
+echo "  npm_config_runtime=$npm_config_runtime"
+echo "  npm_config_target=$npm_config_target"
+echo ""
 
 npx cmake-js build \
     --runtime electron \
@@ -81,7 +95,7 @@ npx cmake-js build \
 echo ""
 echo "Build complete!"
 if [ -f "build/Release/slopsmith_audio.node" ]; then
-    echo "Output: build/Release/slopsmith_audio.node"
+    echo "Output: build/Release/sopsmith_audio.node"
     ls -lh "build/Release/slopsmith_audio.node"
 else
     echo "Warning: slopsmith_audio.node not found in expected location"
