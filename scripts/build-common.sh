@@ -225,6 +225,34 @@ bundle_binaries() {
     echo ""
 }
 
+verify_bundled_binaries() {
+  # Smoke test: verify bundled binaries are executable and can run
+  local bin_dir="$PROJECT_DIR/resources/bin"
+  local ext=""
+  if [[ "$PLATFORM" == "windows" ]]; then
+    ext=".exe"
+  fi
+  
+  echo_step "Verifying bundled binaries"
+  
+  for binary in fluidsynth ffmpeg vgmstream-cli; do
+    local path="$bin_dir/${binary}${ext}"
+    if [[ ! -x "$path" && ! -f "$path" ]]; then
+      echo_error "Missing bundled binary: $path"
+      exit 1
+    fi
+    # Try to run --version or --help (some binaries only support one)
+    if ! "$path" --version >/dev/null 2>&1 && ! "$path" --help >/dev/null 2>&1; then
+      echo_error "Binary $binary failed to execute"
+      exit 1
+    fi
+    echo "  ✓ $binary"
+  done
+  
+  echo_summary "All bundled binaries verified"
+  echo ""
+}
+
 bundle_soundfont() {
     echo_step "Bundling default soundfont"
     bash "$SCRIPT_DIR/bundle-soundfont.sh"
@@ -331,6 +359,7 @@ clone_slopsmith
 bundle_slopsmith
 bundle_python
 bundle_binaries
+verify_bundled_binaries
 bundle_soundfont
 build_typescript
 package_application
