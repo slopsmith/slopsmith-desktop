@@ -4,6 +4,7 @@
 #   install_system_deps() - install OS packages
 #   bundle_python_impl() - bundle Python runtime
 #   bundle_binaries_impl() - bundle system binaries
+#   get_expected_artifacts() - return globs used to verify binaries are present
 
 set -euo pipefail
 
@@ -303,6 +304,29 @@ main() {
             exit 1
             ;;
     esac
+
+  # Verify that all required functions are defined by the sourcing platform script
+  local missing_functions=()
+  local required_funcs=(
+    install_system_deps
+    bundle_python_impl
+    bundle_binaries_impl
+    get_expected_artifacts
+  )
+
+  for func in "${required_funcs[@]}"; do
+    if ! type "$func" &>/dev/null; then
+      missing_functions+=("$func")
+    fi
+  done
+
+  if [[ ${#missing_functions[@]} -gt 0 ]]; then
+    echo_error "Required functions not defined by platform script:"
+    for func in "${missing_functions[@]}"; do
+      echo "  - $func"
+    done
+    exit 1
+  fi
 
 validate_environment
 install_system_deps
