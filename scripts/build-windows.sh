@@ -84,8 +84,12 @@ bundle_python_impl() {
     "$PROJECT_DIR/resources/python/python.exe" /tmp/get-pip.py --quiet --no-cache-dir
 
 # Install packages
+# Install build tools first (required for building from source on Windows embeddable Python)
 "$PROJECT_DIR/resources/python/python.exe" -m pip install --quiet --no-cache-dir \
-        setuptools wheel -r "$PROJECT_DIR/.packages/python.txt"
+        setuptools wheel
+# Install application packages
+"$PROJECT_DIR/resources/python/python.exe" -m pip install --quiet --no-cache-dir \
+        -r "$PROJECT_DIR/.packages/python.txt"
 }
 
 # Usage: download_with_retries <url> <output_path> <description>

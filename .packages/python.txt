@@ -9,4 +9,3 @@ Pillow
 midiutil
 python-multipart
 requests
-psarc
