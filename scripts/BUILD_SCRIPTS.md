@@ -122,6 +122,8 @@ bundle_binaries_impl() {
 | **macOS** | macOS 11+, Homebrew, Xcode CLI, Node.js 22+, Python 3.12+, .NET 6.0+ |
 | **Windows** | Windows 10/11, Git for Windows + Bash, Node.js 22+, Python 3.12+, .NET 6.0+ |
 
+**Windows Note:** These scripts must run in Git Bash (MSYS), not cmd.exe or PowerShell. `/tmp` paths are translated by MSYS (e.g., to `C:\msys64\tmp`), which will not work. So for local development outside GitHub Actions, Git Bash is required.
+
 ## GitHub Actions
 
 The CI workflow is extremely simple - just calls the same script:
