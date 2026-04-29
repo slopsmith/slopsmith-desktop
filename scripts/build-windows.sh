@@ -82,15 +82,12 @@ bundle_python_impl() {
         exit 1
     fi
     "$PROJECT_DIR/resources/python/python.exe" /tmp/get-pip.py --quiet --no-cache-dir
-    
-    # Install packages
-    "$PROJECT_DIR/resources/python/python.exe" -m pip install --quiet --no-cache-dir setuptools wheel
-    "$PROJECT_DIR/resources/python/python.exe" -m pip install --quiet --no-cache-dir \
-        fastapi "uvicorn[standard]" websockets pycryptodome pyguitarpro \
-        Pillow midiutil python-multipart requests
+
+# Install packages
+"$PROJECT_DIR/resources/python/python.exe" -m pip install --quiet --no-cache-dir \
+        setuptools wheel $PYTHON_PACKAGES
 }
 
-# Download with retries
 # Usage: download_with_retries <url> <output_path> <description>
 download_with_retries() {
     local url="$1"

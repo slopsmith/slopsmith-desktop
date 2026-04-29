@@ -52,8 +52,7 @@ bundle_python_impl() {
 
     # Install Python packages
     "$PROJECT_DIR/resources/python/runtime/bin/python3" -m pip install --quiet --no-cache-dir \
-        fastapi "uvicorn[standard]" websockets pycryptodome pyguitarpro \
-        Pillow midiutil python-multipart requests 2>&1 | tail -5
+        $PYTHON_PACKAGES 2>&1 | tail -5
 }
 
 # Platform-specific: Return expected artifact patterns

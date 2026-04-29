@@ -70,6 +70,10 @@ esac
 CONFIG="$PROJECT_DIR/.build-config.json"
 PARSE_CONFIG="$SCRIPT_DIR/parse-build-config.py"
 
+# --- Shared Python packages (bundled for all platforms) ---
+# These are installed into the bundled Python runtime for server.py
+PYTHON_PACKAGES="fastapi uvicorn[standard] websockets pycryptodome pyguitarpro Pillow midiutil python-multipart requests psarc"
+
 # Check config file
 if [[ ! -f "$CONFIG" ]]; then
     echo -e "${RED}Error: $CONFIG not found${NC}" >&2

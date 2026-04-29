@@ -67,9 +67,7 @@ LD_LIBRARY_PATH="$PYTHON_BUNDLE/lib" "$PYTHON_BUNDLE/bin/python3" -m ensurepip -
 
 # Install application packages into the bundled runtime.
 echo " Installing application packages"
-LD_LIBRARY_PATH="$PYTHON_BUNDLE/lib" "$PYTHON_BUNDLE/bin/python3" -m pip install --quiet --no-cache-dir \
-    fastapi "uvicorn[standard]" websockets pycryptodome pyguitarpro \
-    Pillow midiutil python-multipart requests 2>&1 | tail -3
-
+        LD_LIBRARY_PATH="$PYTHON_BUNDLE/lib" "$PYTHON_BUNDLE/bin/python3" -m pip install --quiet --no-cache-dir \
+        $PYTHON_PACKAGES 2>&1 | tail -3
 echo " Python runtime size: $(du -sh "$PYTHON_BUNDLE" | cut -f1)"
 echo "=== Python bundle complete ==="
