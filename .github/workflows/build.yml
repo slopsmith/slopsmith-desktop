@@ -65,7 +65,7 @@ jobs:
         uses: owenthereal/action-upterm@v1
         if: ${{ failure() }}
         with:
-          timeout-minutes: 5
+          wait-timeout-minutes: 5
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
