@@ -227,14 +227,6 @@ bundle_soundfont() {
     echo ""
 }
 
-# Platform-specific: Return expected artifact patterns
-# Returns space-separated glob patterns (e.g., "*.AppImage *.deb")
-get_expected_artifacts() {
-  echo -e "${RED}✗${NC} ERROR: get_expected_artifacts() not overridden by platform script!${NC}" >&2
-  echo "Platform scripts must define their own get_expected_artifacts() before sourcing build-common.sh" >&2
-  exit 1
-}
-
 build_typescript() {
     echo_step "Building TypeScript"
     npm run build:ts
@@ -316,10 +308,7 @@ validate_environment
 install_system_deps
 install_npm_deps
 build_native_addons
-# Clone Slopsmith (optional hook for CI builds)
-if type -t clone_slopsmith &>/dev/null; then
-	clone_slopsmith
-fi
+clone_slopsmith
 bundle_slopsmith
 bundle_python
 bundle_binaries
