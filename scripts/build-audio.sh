@@ -66,12 +66,14 @@ export npm_config_arch="$CMAKE_ARCH"
 export npm_config_target_arch="$CMAKE_ARCH"
 
 # Optional: clear cmake-js cache on Windows (where this matters most)
-# CROSS-PLATFORM NOTE: Only clear cache in CI environments to avoid permission
-# issues on local Windows machines. On Windows, cmake-js downloads headers to
-# a different location (C:\Users\...\.cmake-js) than on Unix systems.
-if [ -n "$CI" ] && [ -d "$HOME/.cmake-js" ]; then
-    echo "Clearing cmake-js cache (CI environment)..."
-    rm -rf "$HOME/.cmake-js"
+# CROSS-PLATFORM NOTE: Only clear cache in CI environments by default to avoid
+# permission issues on local Windows machines and preserve incremental builds.
+# On Windows, cmake-js downloads headers to a different location
+# (C:\Users\...\.cmake-js) than on Unix systems.
+# To force cache clearing locally, set CLEAN_CMAKE_JS=1
+if [ "${CLEAN_CMAKE_JS:-}" = "1" ] || { [ -n "$CI" ] && [ -d "$HOME/.cmake-js" ]; }; then
+  echo "Clearing cmake-js cache..."
+  rm -rf "$HOME/.cmake-js"
 fi
 
 echo ""
