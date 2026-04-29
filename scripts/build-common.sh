@@ -231,19 +231,44 @@ verify_bundled_binaries() {
   
   echo_step "Verifying bundled binaries"
   
-  for binary in fluidsynth ffmpeg vgmstream-cli; do
-    local path="$bin_dir/${binary}${ext}"
-    if [[ ! -x "$path" && ! -f "$path" ]]; then
-      echo_error "Missing bundled binary: $path"
-      exit 1
-    fi
-    # Try to run --version or --help (some binaries only support one)
-    if ! "$path" --version >/dev/null 2>&1 && ! "$path" --help >/dev/null 2>&1; then
-      echo_error "Binary $binary failed to execute"
-      exit 1
-    fi
-    echo "  ✓ $binary"
-  done
+  # Verify fluidsynth: supports --version
+  local fs_path="$bin_dir/fluidsynth${ext}"
+  if [[ ! -f "$fs_path" ]]; then
+    echo_error "Missing bundled binary: $fs_path"
+    exit 1
+  fi
+  if ! "$fs_path" --version >/dev/null 2>&1; then
+    echo_error "Binary fluidsynth failed to execute"
+    exit 1
+  fi
+  echo "  ✓ fluidsynth"
+  
+  # Verify ffmpeg: supports -version
+  local ff_path="$bin_dir/ffmpeg${ext}"
+  if [[ ! -f "$ff_path" ]]; then
+    echo_error "Missing bundled binary: $ff_path"
+    exit 1
+  fi
+  if ! "$ff_path" -version >/dev/null 2>&1; then
+    echo_error "Binary ffmpeg failed to execute"
+    exit 1
+  fi
+  echo "  ✓ ffmpeg"
+  
+  # Verify vgmstream-cli: doesn't have --version, check it produces output with version
+  local vgm_path="$bin_dir/vgmstream-cli${ext}"
+  if [[ ! -f "$vgm_path" ]]; then
+    echo_error "Missing bundled binary: $vgm_path"
+    exit 1
+  fi
+  local vgm_output
+  # vgmstream-cli with no args prints version header then exits with code 1
+  vgm_output=$("$vgm_path" 2>&1 || true)
+  if [[ -z "$vgm_output" ]] || [[ ! "$vgm_output" =~ vgmstream.*CLI.*decoder ]]; then
+    echo_error "Binary vgmstream-cli failed to execute or produced unexpected output"
+    exit 1
+  fi
+  echo "  ✓ vgmstream-cli"
   
   echo_summary "All bundled binaries verified"
   echo ""
