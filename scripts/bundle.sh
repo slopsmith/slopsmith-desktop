@@ -9,7 +9,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
-echo "=== Bundling Slopsmith Desktop (Linux) ==="
+echo "=== Bundling Slopsmith Desktop ==="
 
 bash "$SCRIPT_DIR/bundle-slopsmith.sh"
 # Skip Python bundling on non-Linux platforms (handled inline in platform scripts)
