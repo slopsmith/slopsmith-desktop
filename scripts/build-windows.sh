@@ -103,12 +103,12 @@ download_with_retries() {
     while [[ $attempt -le $max_attempts ]]; do
         echo "  Downloading $description (attempt $attempt/$max_attempts)..."
         if curl -sL --fail --max-time 120 "$url" -o "$output_path"; then
-            echo "    ✓ Successfully downloaded $description"
+            echo "    Successfully downloaded $description"
             return 0
         fi
         
         local exit_code=$?
-        echo "    ✗ Download failed with exit code $exit_code"
+        echo "    Download failed with exit code $exit_code"
         
         if [[ $attempt -lt $max_attempts ]]; then
             echo "    Retrying in ${delay}s..."
