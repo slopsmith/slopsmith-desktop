@@ -271,8 +271,14 @@ verify_bundled_binaries() {
   fi
   echo "  File exists, checking permissions:"
   ls -la "$vgm_path"
-  echo "  File type:"
-  file "$vgm_path"
+  # `file` is a diagnostic-only call — keep it best-effort so a minimal
+  # base image (e.g. the Linux Docker builder, which doesn't ship the
+  # libmagic-backed `file` binary) doesn't fail the build over a debug
+  # line. The actual smoke test is the run-and-grep below.
+  if command -v file >/dev/null 2>&1; then
+    echo "  File type:"
+    file "$vgm_path"
+  fi
   echo "  Attempting to run vgmstream-cli..."
   local vgm_output
   # vgmstream-cli with no args prints version header then exits with code 1
