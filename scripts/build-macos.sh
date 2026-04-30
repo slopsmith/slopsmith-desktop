@@ -112,9 +112,16 @@ bundle_binaries_impl() {
         find /tmp/vgmstream -type f -name '*vgmstream*' 2>/dev/null || echo "  (none found)"
     fi
 
-    # Use dylibbundler if available (for fluidsynth dependencies)
-    if command -v dylibbundler &>/dev/null && [[ -f "$PROJECT_DIR/resources/bin/fluidsynth" ]]; then
-        dylibbundler -cd -b -x "$PROJECT_DIR/resources/bin/fluidsynth" -d "$PROJECT_DIR/resources/bin" -p '@executable_path/'
+    # Use dylibbundler if available (for fluidsynth and vgmstream-cli dependencies)
+    if command -v dylibbundler &>/dev/null; then
+        if [[ -f "$PROJECT_DIR/resources/bin/fluidsynth" ]]; then
+            echo -e "${BLUE}Bundling fluidsynth dependencies...${NC}"
+            dylibbundler -cd -b -x "$PROJECT_DIR/resources/bin/fluidsynth" -d "$PROJECT_DIR/resources/bin" -p '@executable_path/'
+        fi
+        if [[ -f "$PROJECT_DIR/resources/bin/vgmstream-cli" ]]; then
+            echo -e "${BLUE}Bundling vgmstream-cli dependencies...${NC}"
+            dylibbundler -cd -b -x "$PROJECT_DIR/resources/bin/vgmstream-cli" -d "$PROJECT_DIR/resources/bin" -p '@executable_path/'
+        fi
     fi
 }
 
