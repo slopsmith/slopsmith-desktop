@@ -11,7 +11,7 @@
     "build:ts": "tsc",
     "build:audio": "bash scripts/build-audio.sh Release",
     "build:audio:debug": "bash scripts/build-audio.sh Debug",
-    "rebuild:audio": "bash scripts/build-audio.sh Release",
+    "rebuild:audio": "rm -rf build &amp;&amp; bash scripts/build-audio.sh Release",
     "build:rscli": "bash scripts/build-rscli.sh",
     "build:native": "npm run build:audio && npm run build:rscli",
     "bundle:slopsmith": "bash scripts/bundle-slopsmith.sh",
