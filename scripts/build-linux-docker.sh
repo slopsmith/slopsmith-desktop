@@ -36,6 +36,18 @@ if ! docker info &>/dev/null; then
     exit 1
 fi
 
+# Verify the sibling Slopsmith checkout actually exists. Without this
+# check, Docker silently creates an empty bind-mount target and
+# clone_slopsmith inside the container then short-circuits because
+# SLOPSMITH_DIR is set — failure would only surface later as missing
+# server.py / plugins.
+if [[ ! -d "$SLOPSMITH_DIR/.git" && ! -f "$SLOPSMITH_DIR/server.py" ]]; then
+    echo -e "${RED}Error: Slopsmith checkout missing or invalid at $SLOPSMITH_DIR${NC}" >&2
+    echo "Expected a Slopsmith working tree (containing .git/ or server.py) as a sibling of slopsmith-desktop." >&2
+    echo "Clone it: git clone https://github.com/byrongamatos/slopsmith.git ../slopsmith" >&2
+    exit 1
+fi
+
 echo -e "${GREEN}✓${NC} Docker and Slopsmith repository found"
 echo ""
 

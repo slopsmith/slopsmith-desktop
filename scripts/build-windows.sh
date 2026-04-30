@@ -5,7 +5,13 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -W 2>/dev/null || pwd)"
+# Use plain `pwd` (POSIX path). `pwd -W` returns a Windows-form path
+# with backslashes on MSYS / Git Bash, which would then break `dirname`
+# and `source "$SCRIPT_DIR/build-common.sh"` since those expect POSIX
+# paths. If a Windows-form path is needed downstream (e.g. for cmake-js
+# or a non-MSYS tool), convert at the point of use via
+# `cygpath -w "$SCRIPT_DIR"`.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 CONFIG="$PROJECT_DIR/.build-config.json"
 
@@ -57,10 +63,12 @@ bundle_python_impl() {
     PYTHON_EMBED_URL="https://www.python.org/ftp/python/${PYTHON_VERSION}/python-${PYTHON_VERSION}-embed-amd64.zip"
     
     echo "Downloading Python embeddable..."
-    if ! curl -sL --fail --retry 5 --retry-delay 5 --retry-all-errors "$PYTHON_EMBED_URL" -o /tmp/python-embed.zip; then
+    local curl_status=0
+    curl -sL --fail --retry 5 --retry-delay 5 --retry-all-errors "$PYTHON_EMBED_URL" -o /tmp/python-embed.zip || curl_status=$?
+    if [[ "$curl_status" -ne 0 ]]; then
         echo_error "Failed to download Python embeddable package"
         echo "  URL: $PYTHON_EMBED_URL"
-        echo "  curl exit code: $?"
+        echo "  curl exit code: $curl_status"
         exit 1
     fi
     

@@ -93,7 +93,13 @@ get_cfg() { python3 "$PARSE_CONFIG" "$CONFIG" "$1"; }
 
 # Clone Slopsmith and plugins (shared across all platforms)
 clone_slopsmith() {
-	local clone_dir="${1:-${RUNNER_TEMP:-/tmp}/slopsmith}"
+	# RUNNER_TEMP on Windows runners is a native Windows path
+	# (e.g. `D:\a\_temp`) that Git Bash / MSYS tools don't reliably
+	# treat as a filesystem path. POSIX `/tmp/slopsmith` is the
+	# default; if a non-POSIX environment really wants RUNNER_TEMP, it
+	# can pass an explicit clone_dir argument (resolved via cygpath -u
+	# on Windows if needed).
+	local clone_dir="${1:-/tmp/slopsmith}"
 
 	# Skip if already set for local development
 	if [[ -n "${SLOPSMITH_DIR:-}" ]] && [[ -d "$SLOPSMITH_DIR" ]]; then
@@ -344,9 +350,16 @@ verify_bundled_binaries() {
   fi
   echo "  Attempting to run vgmstream-cli..."
   local vgm_output
-  # vgmstream-cli with no args prints version header then exits with code 1
-  vgm_output=$("$vgm_path" 2>&1 || true)
-  local vgm_exit_code=$?
+  local vgm_exit_code
+  # vgmstream-cli with no args prints its version header then exits 1.
+  # Capture the exit code via the if-branch so `set -e` doesn't trip
+  # AND vgm_exit_code reflects the binary's real status (not the `|| true`
+  # short-circuit that the previous form ended up reporting).
+  if vgm_output=$("$vgm_path" 2>&1); then
+    vgm_exit_code=0
+  else
+    vgm_exit_code=$?
+  fi
   echo "  Exit code: $vgm_exit_code"
   echo "  Raw output:"
   echo "$vgm_output" | head -20

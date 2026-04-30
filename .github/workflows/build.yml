@@ -62,14 +62,24 @@ jobs:
       # see stale state. The whole step is a no-op when the secret is
       # absent — supports forks and PRs from contributors who can't
       # access repository secrets.
+      # Step is unconditional on macOS so we always enter the shell, then
+      # bail out at runtime if the cert secret isn't present (forks /
+      # contributor PRs without secret access, etc.). step-level env: is
+      # NOT available in step-level if: expressions, and `secrets.*` is
+      # also not available there — runtime check is the only robust way
+      # to gate this on secret presence.
       - name: Import Apple signing certificate
-        if: matrix.platform == 'mac' && env.APPLE_CERTIFICATE_P12_BASE64 != ''
+        if: matrix.platform == 'mac'
         env:
           APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
           set -euo pipefail
+          if [[ -z "${APPLE_CERTIFICATE_P12_BASE64:-}" ]]; then
+              echo "APPLE_CERTIFICATE_P12_BASE64 not set — skipping (unsigned build)"
+              exit 0
+          fi
           # printf '%s' rather than echo — echo would append a trailing
           # newline that some toolchains accept and some reject when
           # piped into base64 --decode, producing a subtly corrupted
@@ -99,11 +109,20 @@ jobs:
 
       # macOS only: inline the team ID into package.json so electron-builder's
       # `notarize.teamId` field has a real value (it doesn't expand env vars).
+      # Same pattern as the cert-import step above — unconditional step,
+      # runtime check on the secret. Without the inline, package.json
+      # carries the literal "@APPLE_TEAM_ID@" placeholder into electron-
+      # builder, which fails notarization with a confusing team-id error.
       - name: Inline APPLE_TEAM_ID into package.json
-        if: matrix.platform == 'mac' && env.APPLE_TEAM_ID != ''
+        if: matrix.platform == 'mac'
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
+          set -euo pipefail
+          if [[ -z "${APPLE_TEAM_ID:-}" ]]; then
+              echo "APPLE_TEAM_ID not set — skipping (unsigned build leaves placeholder)"
+              exit 0
+          fi
           sed -i '' "s/@APPLE_TEAM_ID@/$APPLE_TEAM_ID/" package.json
           grep -q "$APPLE_TEAM_ID" package.json
 

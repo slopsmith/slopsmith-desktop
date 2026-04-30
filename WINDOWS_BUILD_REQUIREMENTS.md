@@ -22,10 +22,10 @@ This document describes the dependencies and setup required to build Slopsmith D
 - **Install**: `winget install Kitware.CMake`
 - **Note**: Add to PATH: `C:\Program Files\CMake\bin`
 
-### GitHub CLI (for plugin cloning)
-- **Purpose**: Clone plugin repositories during build
-- **Install**: `winget install GitHub.cli`
-- **Auth**: Run `gh auth login` to authenticate with GitHub
+### Git (for plugin cloning)
+- **Purpose**: `clone_slopsmith` in `scripts/build-common.sh` clones the Slopsmith repo and every plugin via plain `git clone`. Git for Windows ships with Git Bash, which is required anyway to run the build scripts.
+- **Install**: `winget install Git.Git` (you almost certainly already have this).
+- **Optional (private plugins only)**: If any clones target private repos you have access to, configure git credentials (e.g. `git config --global credential.helper manager` plus a one-time push/clone to cache a PAT). The build does NOT use the GitHub CLI.
 
 ### Chocolatey (optional)
 - **Purpose**: Package manager for cmake and ffmpeg (can also be downloaded directly)
@@ -45,15 +45,14 @@ The Windows build uses Python's embeddable distribution, which has a special con
    ../slopsmith/lib
    ```
 
-### GitHub Authentication
-Some plugins may be in private repositories. Run `gh auth login` before building to ensure the build can clone all required plugins.
+### Git authentication for private plugins
+If your build pulls private plugin repos (e.g. `byrongamatos/slopsmith-plugin-cf`), make sure git can authenticate non-interactively before running the build — Git Credential Manager + a PAT or SSH key both work. The build uses `git clone --depth 1` for every plugin and does NOT call the GitHub CLI.
 
 ## Quick Start
 
 ```bash
-# Install dependencies
-winget install Microsoft.DotNet.SDK.10 Microsoft.VisualStudio.2022.BuildTools Kitware.CMake GitHub.cli
-gh auth login
+# Install dependencies (Git for Windows brings Git Bash which the scripts run under)
+winget install Microsoft.DotNet.SDK.10 Microsoft.VisualStudio.2022.BuildTools Kitware.CMake Git.Git
 
 # Add CMake to PATH (if not automatic)
 export PATH="$PATH:/c/Program Files/CMake/bin"

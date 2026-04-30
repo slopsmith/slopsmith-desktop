@@ -180,9 +180,13 @@ bundle_binaries_impl() {
         otool -L "$PROJECT_DIR/resources/bin/vgmstream-cli"
         echo -e "${GREEN}vgmstream-cli setup complete${NC}"
     else
-        echo -e "${RED}ERROR: vgmstream-cli binary not found in extracted archive${NC}"
-        echo "Searching for any vgmstream binaries:"
-        find /tmp/vgmstream -type f -name '*vgmstream*' 2>/dev/null || echo "  (none found)"
+        echo -e "${RED}ERROR: vgmstream-cli binary not found in extracted archive${NC}" >&2
+        echo "Searching for any vgmstream binaries:" >&2
+        find /tmp/vgmstream -type f -name '*vgmstream*' 2>/dev/null || echo "  (none found)" >&2
+        # Bail now rather than continue to dylibbundler / signing /
+        # verify_bundled_binaries on a partial bundle — the failure
+        # would only surface much later with a less-direct error.
+        exit 1
     fi
 
     # Run dylibbundler on every bundled binary so each one's brew deps
