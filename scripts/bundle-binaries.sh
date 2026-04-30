@@ -36,29 +36,41 @@ fi
 
 # vgmstream-cli - used for Rocksmith WEM → WAV decoding.
 # Download from GitHub releases if not in PATH (CI does this inline).
+# verify_bundled_binaries downstream treats this as required and will
+# hard-fail if it ends up missing — fail here with the actual cause
+# instead.
 if command -v vgmstream-cli >/dev/null 2>&1; then
     cp "$(which vgmstream-cli)" "$BIN_DIR/"
     echo " vgmstream-cli: $(ls -lh "$BIN_DIR/vgmstream-cli" | awk '{print $5}')"
 else
+    for tool in curl unzip; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            echo "ERROR: $tool not on PATH; required to download/extract vgmstream-cli." >&2
+            exit 1
+        fi
+    done
+
     echo "Downloading vgmstream-cli from GitHub releases..."
     VGM_ASSET="vgmstream-linux-cli.zip"
-    curl -sL --fail --retry 5 --retry-delay 5 --retry-all-errors \
-        "https://github.com/vgmstream/vgmstream/releases/latest/download/${VGM_ASSET}" -o /tmp/vgmstream.zip || {
-        echo "WARNING: Failed to download vgmstream-cli; Rocksmith WEM decoding will not work" >&2
-    }
-
-    if [ -f /tmp/vgmstream.zip ]; then
-        unzip -q /tmp/vgmstream.zip -d /tmp/vgmstream 2>/dev/null || true
-        VGM_BIN=$(find /tmp/vgmstream -maxdepth 2 -name 'vgmstream-cli' -type f | head -1)
-        if [ -n "$VGM_BIN" ]; then
-            cp "$VGM_BIN" "$BIN_DIR/vgmstream-cli"
-            chmod +x "$BIN_DIR/vgmstream-cli"
-            echo " vgmstream-cli: $(ls -lh "$BIN_DIR/vgmstream-cli" | awk '{print $5}') (downloaded)"
-        else
-            echo "WARNING: vgmstream-cli not found in downloaded archive" >&2
-        fi
-        rm -rf /tmp/vgmstream /tmp/vgmstream.zip 2>/dev/null || true
+    if ! curl -sL --fail --retry 5 --retry-delay 5 --retry-all-errors \
+            "https://github.com/vgmstream/vgmstream/releases/latest/download/${VGM_ASSET}" \
+            -o /tmp/vgmstream.zip; then
+        echo "ERROR: failed to download vgmstream-cli zip from upstream releases." >&2
+        exit 1
     fi
+    if ! unzip -q /tmp/vgmstream.zip -d /tmp/vgmstream; then
+        echo "ERROR: failed to extract /tmp/vgmstream.zip — upstream archive may be malformed." >&2
+        exit 1
+    fi
+    VGM_BIN=$(find /tmp/vgmstream -maxdepth 2 -name 'vgmstream-cli' -type f | head -1)
+    if [ -z "$VGM_BIN" ]; then
+        echo "ERROR: vgmstream-cli binary not found in downloaded archive — upstream zip layout may have changed." >&2
+        exit 1
+    fi
+    cp "$VGM_BIN" "$BIN_DIR/vgmstream-cli"
+    chmod +x "$BIN_DIR/vgmstream-cli"
+    echo " vgmstream-cli: $(ls -lh "$BIN_DIR/vgmstream-cli" | awk '{print $5}') (downloaded)"
+    rm -rf /tmp/vgmstream /tmp/vgmstream.zip
 fi
 
 # vgmstream's shared libs - its binary links against libvgmstream /

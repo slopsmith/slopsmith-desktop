@@ -109,23 +109,6 @@ jobs:
 
       # macOS only: inline the team ID into package.json so electron-builder's
       # `notarize.teamId` field has a real value (it doesn't expand env vars).
-      # Same pattern as the cert-import step above — unconditional step,
-      # runtime check on the secret. Without the inline, package.json
-      # carries the literal "@APPLE_TEAM_ID@" placeholder into electron-
-      # builder, which fails notarization with a confusing team-id error.
-      - name: Inline APPLE_TEAM_ID into package.json
-        if: matrix.platform == 'mac'
-        env:
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${APPLE_TEAM_ID:-}" ]]; then
-              echo "APPLE_TEAM_ID not set — skipping (unsigned build leaves placeholder)"
-              exit 0
-          fi
-          sed -i '' "s/@APPLE_TEAM_ID@/$APPLE_TEAM_ID/" package.json
-          grep -q "$APPLE_TEAM_ID" package.json
-
       # Build using the unified platform script
       # All bundling and dependency installation is handled by the script.
       # macOS-only env vars below are consumed by:

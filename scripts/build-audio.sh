@@ -38,15 +38,21 @@ case "$ARCH" in
         ;;
 esac
 
-# Get Electron version - extract just the version numbers
-# CROSS-PLATFORM NOTE: This command chain handles differences in output formatting
-# across platforms (Windows adds extra whitespace, different line endings).
-# Uses grep -oE to extract numeric pattern and head -n1 to get first match.
+# Get the Electron version directly from the installed Electron package.
+# Native addons MUST be built against the exact Electron ABI that ships
+# with the app — guessing a fallback (the prior `|| echo 35.7.5`) can
+# produce a .node that loads but crashes at runtime when the actual
+# Electron version differs.
 echo "Detecting Electron version..."
-ELECTRON_VERSION=$(npx electron --version 2>/dev/null | grep -oE '[0-9]+([.][0-9]+)+' | head -n1 || echo "35.7.5")
-if [ -z "$ELECTRON_VERSION" ]; then
-    echo "Warning: Could not detect Electron version, using fallback"
-    ELECTRON_VERSION="35.7.5"
+ELECTRON_PKG="node_modules/electron/package.json"
+if [[ ! -f "$ELECTRON_PKG" ]]; then
+    echo "Error: $ELECTRON_PKG not found. Run \`npm install\` before building native addons." >&2
+    exit 1
+fi
+ELECTRON_VERSION=$(node -p "require('./$ELECTRON_PKG').version" 2>/dev/null | tr -d '\r\n')
+if [[ -z "$ELECTRON_VERSION" ]]; then
+    echo "Error: failed to read Electron version from $ELECTRON_PKG." >&2
+    exit 1
 fi
 echo "  Electron version: $ELECTRON_VERSION"
 

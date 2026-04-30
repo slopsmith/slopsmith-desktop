@@ -138,14 +138,25 @@ bundle_binaries_impl() {
     # macOS: copy existing binaries and bundle dependencies
 
     # ffmpeg
-    if command -v ffmpeg &>/dev/null; then
-        cp "$(which ffmpeg)" "$PROJECT_DIR/resources/bin/"
+    # ffmpeg + fluidsynth are required by verify_bundled_binaries
+    # downstream and by the runtime app. Fail here with a clear message
+    # rather than silently producing an incomplete bundle that fails
+    # later (or at runtime on the user's machine).
+    local ffmpeg_bin
+    ffmpeg_bin="$(command -v ffmpeg || true)"
+    if [[ -z "$ffmpeg_bin" ]]; then
+        echo "Error: ffmpeg not found on PATH. Install it with \`brew install ffmpeg\` (and ensure /opt/homebrew/bin is on PATH)." >&2
+        exit 1
     fi
+    cp "$ffmpeg_bin" "$PROJECT_DIR/resources/bin/"
 
-    # fluidsynth
-    if command -v fluidsynth &>/dev/null; then
-        cp "$(which fluidsynth)" "$PROJECT_DIR/resources/bin/"
+    local fluidsynth_bin
+    fluidsynth_bin="$(command -v fluidsynth || true)"
+    if [[ -z "$fluidsynth_bin" ]]; then
+        echo "Error: fluidsynth not found on PATH. Install it with \`brew install fluid-synth\` (and ensure /opt/homebrew/bin is on PATH)." >&2
+        exit 1
     fi
+    cp "$fluidsynth_bin" "$PROJECT_DIR/resources/bin/"
 
     # vgmstream (download release)
     echo -e "${BLUE}=== Downloading vgmstream-cli ===${NC}"

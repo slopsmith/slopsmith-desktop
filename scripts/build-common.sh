@@ -1,10 +1,10 @@
 #!/bin/bash
-# Common build logic for all platforms
-# Platform scripts source this and implement three functions:
-#   install_system_deps() - install OS packages
-#   bundle_python_impl() - bundle Python runtime
-#   bundle_binaries_impl() - bundle system binaries
-#   get_expected_artifacts() - return globs used to verify binaries are present
+# Common build logic for all platforms.
+# Platform scripts source this file and implement four functions:
+#   install_system_deps()       — install OS packages (apt / brew / winget)
+#   bundle_python_impl()        — bundle Python runtime
+#   bundle_binaries_impl()      — bundle system binaries (ffmpeg etc.)
+#   get_expected_artifacts()    — globs verify_artifacts checks at the end
 
 set -euo pipefail
 
@@ -49,22 +49,6 @@ if [[ ! "$PLATFORM" =~ ^(linux|macos|windows)$ ]]; then
     echo -e "${RED}Error: Invalid platform: $PLATFORM${NC}" >&2
     exit 1
 fi
-
-# Map platform to npm dist script name
-# PLATFORM="linux" → "dist:linux"
-# PLATFORM="macos" → "dist:mac"
-# PLATFORM="windows" → "dist:win"
-case "$PLATFORM" in
-    linux)
-        NPM_DIST="dist:linux"
-        ;;
-    macos)
-        NPM_DIST="dist:mac"
-        ;;
-    windows)
-        NPM_DIST="dist:win"
-        ;;
-esac
 
 # Configuration file
 CONFIG="$PROJECT_DIR/.build-config.json"

@@ -72,13 +72,23 @@ bundle_python_impl() {
         exit 1
     fi
     
+    # Wipe the existing python dir before extracting so a re-run doesn't
+    # leave stale files (e.g. an old ._pth from a previous Python version)
+    # mixed in with the freshly-extracted embeddable distribution.
+    rm -rf "$PROJECT_DIR/resources/python"
     mkdir -p "$PROJECT_DIR/resources/python"
     unzip -q /tmp/python-embed.zip -d "$PROJECT_DIR/resources/python/"
-    
+
     # Enable site-packages by editing the ._pth file
     # IMPORTANT: On Windows embeddable Python, PYTHONPATH environment variable is IGNORED
     # when a ._pth file exists (isolated mode). We must add paths directly to the .pth file.
+    # The embeddable zip is supposed to ship a ._pth file; if it doesn't,
+    # the rest of the script's PATH-injection won't work, so fail fast.
     PTH_FILE=$(find "$PROJECT_DIR/resources/python" -name "*._pth" | head -1)
+    if [[ -z "$PTH_FILE" ]]; then
+        echo_error "No ._pth file found in extracted embeddable Python — upstream zip layout may have changed"
+        exit 1
+    fi
     if [[ -n "$PTH_FILE" ]]; then
         # Enable site-packages
         sed -i 's/#import site/import site/' "$PTH_FILE"

@@ -93,7 +93,7 @@ Most Linux distributions don't have identical package versions. Using Docker ens
 
 ### Platform-Specific Functions
 
-Each platform script implements 3 functions that `build-common.sh` calls:
+Each platform script implements four functions that `build-common.sh` calls:
 
 ```bash
 install_system_deps() {
@@ -102,14 +102,19 @@ install_system_deps() {
 
 bundle_python_impl() {
   # Linux: copy system Python
-  # macOS: copy system Python
+  # macOS: download python-build-standalone
   # Windows: download embeddable Python zip
 }
 
 bundle_binaries_impl() {
   # Linux: copy existing + patchelf
-  # macOS: copy existing + dylibbundler
+  # macOS: copy existing + dylibbundler + sign
   # Windows: download binaries (ffmpeg, vgmstream, fluidsynth)
+}
+
+get_expected_artifacts() {
+  # Globs verify_artifacts checks at the end of the build, e.g.
+  # printf "%s\n" "$PROJECT_DIR/release/*.dmg" "$PROJECT_DIR/release/*.zip"
 }
 ```
 
@@ -118,11 +123,11 @@ bundle_binaries_impl() {
 | Platform | Requirements |
 |----------|--------------|
 | **Linux (Docker)** | Docker, adjacent slopsmith repo |
-| **Linux (native)** | Ubuntu/Debian, sudo, Node.js 22+, Python 3.12+, .NET 6.0+, apt dependencies |
-| **macOS** | macOS 11+, Homebrew, Xcode CLI, Node.js 22+, Python 3.12+, .NET 6.0+ |
-| **Windows** | Windows 10/11, Git for Windows + Bash, Node.js 22+, Python 3.12+, .NET 6.0+ |
+| **Linux (native)** | Ubuntu/Debian, sudo, Node.js 22+, Python 3.12+, .NET 10+, apt dependencies |
+| **macOS** | macOS 11+, Homebrew, Xcode CLI, Node.js 22+, Python 3.12+, .NET 10+ |
+| **Windows** | Windows 10/11, Git for Windows + Bash, Node.js 22+, Python 3.12+, .NET 10+ |
 
-**Windows Note:** These scripts must run in Git Bash (MSYS), not cmd.exe or PowerShell. `/tmp` paths are translated by MSYS (e.g., to `C:\msys64\tmp`), which will not work. So for local development outside GitHub Actions, Git Bash is required.
+**Windows Note:** These scripts must run in Git Bash (MSYS), not `cmd.exe` or PowerShell. They rely on MSYS-style paths such as `/tmp`, which work fine inside Git Bash but won't resolve correctly from a native Windows shell — so for local development outside GitHub Actions, run the scripts from a Git Bash terminal.
 
 ## GitHub Actions
 
