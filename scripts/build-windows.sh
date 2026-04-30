@@ -41,7 +41,7 @@ get_expected_artifacts() {
 install_system_deps() {
     # Windows: install via Chocolatey if available
     if command -v choco.exe &>/dev/null || command -v choco &>/dev/null; then
-        choco install cmake ffmpeg --installargs 'ADD_CMAKE_TO_PATH=System' || echo "Chocolatey install may have failed, continuing..."
+        choco install cmake ffmpeg -y --installargs 'ADD_CMAKE_TO_PATH=System' || echo "Chocolatey install may have failed, continuing..."
     else
         echo_warning "Chocolatey not found - skipping system package installation"
         echo "  Make sure cmake and ffmpeg are already in PATH"
@@ -68,10 +68,18 @@ bundle_python_impl() {
     unzip -q /tmp/python-embed.zip -d "$PROJECT_DIR/resources/python/"
     
     # Enable site-packages by editing the ._pth file
+    # IMPORTANT: On Windows embeddable Python, PYTHONPATH environment variable is IGNORED
+    # when a ._pth file exists (isolated mode). We must add paths directly to the .pth file.
     PTH_FILE=$(find "$PROJECT_DIR/resources/python" -name "*._pth" | head -1)
     if [[ -n "$PTH_FILE" ]]; then
+        # Enable site-packages
         sed -i 's/#import site/import site/' "$PTH_FILE"
         echo "Lib/site-packages" >> "$PTH_FILE"
+        # Add Slopsmith paths (relative to resources/python)
+        # These must be in the .pth file since PYTHONPATH is ignored in isolated mode
+        echo "# Slopsmith modules (relative to resources/python)" >> "$PTH_FILE"
+        echo "../slopsmith" >> "$PTH_FILE"
+        echo "../slopsmith/lib" >> "$PTH_FILE"
     fi
     
     # Install pip
