@@ -70,7 +70,13 @@ jobs:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
           set -euo pipefail
-          echo "$APPLE_CERTIFICATE_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          # printf '%s' rather than echo — echo would append a trailing
+          # newline that some toolchains accept and some reject when
+          # piped into base64 --decode, producing a subtly corrupted
+          # .p12 that fails security import with the unhelpful error
+          # "SecKeychainItemImport: One or more parameters passed to a
+          # function were not valid."
+          printf '%s' "$APPLE_CERTIFICATE_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
           security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
           security default-keychain -s build.keychain
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain

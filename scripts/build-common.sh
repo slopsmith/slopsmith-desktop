@@ -114,14 +114,77 @@ clone_slopsmith() {
 	# Remove broken symlinks from plugins dir
 	find "$clone_dir/plugins" -maxdepth 1 -type l -delete 2>/dev/null || true
 
-	# Clone essential plugins
+	# Clone bundled plugins. Format per entry: <owner>/<repo>[:<dirname>]
+	# Dirname defaults to <repo> minus the "slopsmith-plugin-" prefix
+	# with hyphens replaced by underscores (slopsmith treats plugin
+	# directories as Python module names, which can't contain dashes).
+	# Provide an explicit dirname after a colon for repos that don't
+	# follow the slopsmith-plugin-* naming convention.
 	cd "$clone_dir/plugins"
-	for repo in 3dhighway backingtrack cf fretboard metronome midi notedetect practice profileimport sectionmap setlist tabimport tabview tones ug; do
-		git clone --depth 1 "https://github.com/byrongamatos/slopsmith-plugin-${repo}.git" "${repo}" 2>/dev/null || echo " skipped ${repo}"
+	local plugins=(
+		# byrongamatos plugins
+		byrongamatos/slopsmith-plugin-3dhighway
+		byrongamatos/slopsmith-plugin-cf
+		byrongamatos/slopsmith-plugin-drums
+		byrongamatos/slopsmith-plugin-editor
+		byrongamatos/slopsmith-plugin-fretboard
+		byrongamatos/slopsmith-plugin-lyrics-karaoke
+		byrongamatos/slopsmith-plugin-lyrics-sync
+		byrongamatos/slopsmith-plugin-metronome
+		byrongamatos/slopsmith-plugin-midi
+		byrongamatos/slopsmith-plugin-multiplayer
+		byrongamatos/slopsmith-plugin-nam-tone
+		byrongamatos/slopsmith-plugin-notedetect
+		byrongamatos/slopsmith-plugin-piano
+		byrongamatos/slopsmith-plugin-practice
+		byrongamatos/slopsmith-plugin-profileimport
+		byrongamatos/slopsmith-plugin-sectionmap
+		byrongamatos/slopsmith-plugin-setlist
+		byrongamatos/slopsmith-plugin-stepmode
+		byrongamatos/slopsmith-plugin-studio
+		byrongamatos/slopsmith-plugin-tabimport
+		byrongamatos/slopsmith-plugin-tabview
+		byrongamatos/slopsmith-plugin-tones
+		# Community plugins
+		alleexx/slopsmith-plugin-transpose-chords
+		jweibel22/slopsmith-plugin-rs-2d-highway
+		masc0t/slopsmith-plugin-find-more
+		masc0t/slopsmith-plugin-invert-highway
+		masc0t/slopsmith-plugin-midi-capo
+		masc0t/slopsmith-plugin-rooms
+		masc0t/slopsmith-plugin-the-daily
+		masc0t/slopsmith-plugin-themes
+		masc0t/slopsmith-update-manager:update_manager
+		narvasus/slopsmith-plugin-stem-mixer
+		renanboni/slopsmith-plugin-jumpingtab
+		topkoa/slopsmith-plugin-guitar-theory
+		topkoa/slopsmith-plugin-sloppak-converter
+		topkoa/slopsmith-plugin-splitscreen
+		topkoa/slopsmith-plugin-stems
+	)
+
+	local total=0
+	local cloned=0
+	for entry in "${plugins[@]}"; do
+		total=$((total + 1))
+		local owner_repo="${entry%%:*}"
+		local dirname
+		if [[ "$entry" == *:* ]]; then
+			dirname="${entry##*:}"
+		else
+			dirname="${owner_repo##*/}"
+			dirname="${dirname#slopsmith-plugin-}"
+			dirname="${dirname//-/_}"
+		fi
+		if git clone --depth 1 "https://github.com/${owner_repo}.git" "$dirname" 2>/dev/null; then
+			cloned=$((cloned + 1))
+		else
+			echo " skipped ${owner_repo}"
+		fi
 	done
 
 	export SLOPSMITH_DIR="$clone_dir"
-	echo "Cloned $(ls -d */ 2>/dev/null | wc -l) plugins"
+	echo "Cloned ${cloned} of ${total} plugins"
 	cd - >/dev/null
 }
 
