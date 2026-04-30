@@ -31,6 +31,16 @@ if [[ -z "${APPLE_SIGNING_IDENTITY:-}" && -z "${CSC_NAME:-}" && -z "${CSC_LINK:-
     export CSC_IDENTITY_AUTO_DISCOVERY=false
 fi
 
+# Derive CSC_NAME (electron-builder's identity name) from
+# APPLE_SIGNING_IDENTITY. codesign accepts the full identity string with
+# "Developer ID Application:" prefix; electron-builder rejects that
+# prefix and wants the bare team-name + team-id form. Strip the prefix
+# once here so the rest of the build (sign-macos-binaries.sh and
+# electron-builder) can each consume the form they expect.
+if [[ -z "${CSC_NAME:-}" && -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
+    export CSC_NAME="${APPLE_SIGNING_IDENTITY#Developer ID Application: }"
+fi
+
 # Color setup
 export RED='\033[0;31m'
 export GREEN='\033[0;32m'
@@ -206,3 +216,29 @@ bundle_binaries_impl() {
 
 # Run the build
 main "$@"
+
+# Post-build: notarize and staple the DMG. electron-builder notarizes
+# and staples the .app, then builds + signs the DMG — but the DMG
+# itself is not submitted to Apple's notary service, so it ships
+# unstapled. That's fine for online installs (Gatekeeper checks the
+# .app inside on first launch), but offline first launches and some
+# enterprise tools want a stapled DMG. notarytool with --wait blocks
+# until Apple finishes (usually 30s–3min), then stapler embeds the
+# ticket so the DMG verifies offline. No-op when signing was off.
+if [[ -n "${APPLE_SIGNING_IDENTITY:-}" && -n "${APPLE_ID:-}" \
+        && -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" \
+        && -n "${APPLE_TEAM_ID:-}" ]]; then
+    shopt -s nullglob
+    for dmg in "$PROJECT_DIR"/release/*.dmg; do
+        echo -e "${BLUE}Notarizing $(basename "$dmg") (wait for Apple)...${NC}"
+        xcrun notarytool submit "$dmg" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+        echo -e "${BLUE}Stapling notarization ticket to $(basename "$dmg")...${NC}"
+        xcrun stapler staple "$dmg"
+        xcrun stapler validate "$dmg"
+    done
+    shopt -u nullglob
+fi

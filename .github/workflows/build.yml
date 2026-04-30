@@ -75,6 +75,13 @@ jobs:
           security default-keychain -s build.keychain
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
           security set-keychain-settings -lut 21600 build.keychain
+          # Add build.keychain to the user search list — codesign and
+          # electron-builder look up identities via the search list, not
+          # the default-keychain pointer. Without this, identity-by-name
+          # lookups fall back to the unmodified login keychain and the
+          # imported cert is invisible. Keep login.keychain-db in the
+          # list so trust anchors etc. still resolve.
+          security list-keychains -d user -s build.keychain login.keychain-db
           security import "$RUNNER_TEMP/cert.p12" -k build.keychain \
               -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list \
@@ -96,16 +103,20 @@ jobs:
 
       # Build using the unified platform script
       # All bundling and dependency installation is handled by the script.
-      # macOS-only env vars below are read by sign-macos-binaries.sh
-      # (APPLE_SIGNING_IDENTITY) and electron-builder's notarytool path
-      # (APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID, CSC_NAME).
-      # On non-mac platforms they're empty / unused.
+      # macOS-only env vars below are consumed by:
+      #   APPLE_SIGNING_IDENTITY → sign-macos-binaries.sh (codesign --sign)
+      #   APPLE_ID,
+      #   APPLE_APP_SPECIFIC_PASSWORD,
+      #   APPLE_TEAM_ID          → electron-builder's notarytool path
+      # build-macos.sh derives CSC_NAME (which electron-builder uses to
+      # pick the signing identity) from APPLE_SIGNING_IDENTITY by
+      # stripping the "Developer ID Application:" prefix electron-
+      # builder rejects. On non-mac platforms these are empty / unused.
       - name: Build
         run: ./scripts/build-release.sh
         shell: bash
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          CSC_NAME: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
