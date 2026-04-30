@@ -81,5 +81,8 @@ bash scripts/build-windows.sh
   ```
 
 ### "Repository not found" during plugin cloning
-- Run `gh auth login` to authenticate with GitHub
-- Check that all plugin repositories exist on GitHub
+- Configure git itself for authentication (the build uses plain `git clone`, not the GitHub CLI):
+  - Git Credential Manager + a Personal Access Token: `git config --global credential.helper manager`
+  - Or an SSH key registered on your account
+- Verify you can manually `git clone` the failing plugin URL from Git Bash before retrying the build
+- Confirm the plugin repository exists on GitHub and your account has access to any private repos referenced in `scripts/build-common.sh`'s clone list

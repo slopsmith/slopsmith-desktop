@@ -155,8 +155,16 @@ bundle_binaries_impl() {
         exit 1
     fi
     unzip -q /tmp/ffmpeg.zip -d /tmp/ffmpeg
-    cp /tmp/ffmpeg/ffmpeg-master-latest-win64-gpl/bin/ffmpeg.exe "$PROJECT_DIR/resources/bin/" 2>/dev/null || true
-    
+    # Validate the expected layout instead of `cp ... || true` — a broken
+    # / changed zip layout would otherwise drop `ffmpeg.exe` silently and
+    # surface as a less-direct error in `verify_bundled_binaries`.
+    FFMPEG_BIN=$(find /tmp/ffmpeg -name 'ffmpeg.exe' -type f | head -1)
+    if [[ -z "$FFMPEG_BIN" ]]; then
+        echo_error "ffmpeg.exe not found after extracting /tmp/ffmpeg.zip — upstream zip layout may have changed"
+        exit 1
+    fi
+    cp "$FFMPEG_BIN" "$PROJECT_DIR/resources/bin/"
+
     # vgmstream-cli
     echo "Downloading vgmstream-cli..."
     if ! download_with_retries \
@@ -166,8 +174,20 @@ bundle_binaries_impl() {
         exit 1
     fi
     unzip -q /tmp/vgmstream.zip -d /tmp/vgmstream
-    cp /tmp/vgmstream/vgmstream-cli.exe "$PROJECT_DIR/resources/bin/" 2>/dev/null || true
-    cp /tmp/vgmstream/*.dll "$PROJECT_DIR/resources/bin/" 2>/dev/null || true
+    VGMSTREAM_EXE="/tmp/vgmstream/vgmstream-cli.exe"
+    shopt -s nullglob
+    VGMSTREAM_DLLS=("/tmp/vgmstream"/*.dll)
+    shopt -u nullglob
+    if [[ ! -f "$VGMSTREAM_EXE" ]]; then
+        echo_error "vgmstream-cli.exe not found at $VGMSTREAM_EXE after extraction"
+        exit 1
+    fi
+    if [[ ${#VGMSTREAM_DLLS[@]} -eq 0 ]]; then
+        echo_error "Expected vgmstream DLLs in /tmp/vgmstream after extraction but found none"
+        exit 1
+    fi
+    cp "$VGMSTREAM_EXE" "$PROJECT_DIR/resources/bin/"
+    cp "${VGMSTREAM_DLLS[@]}" "$PROJECT_DIR/resources/bin/"
     
     # fluidsynth
     echo "Downloading fluidsynth..."

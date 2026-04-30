@@ -397,7 +397,25 @@ build_typescript() {
 
 package_application() {
     echo_step "Packaging application"
-    npm run "$NPM_DIST"
+    # Call electron-builder directly. The package.json `dist:*` scripts
+    # chain `build:native && bundle && build:ts && electron-builder`,
+    # but build-common.sh's main() has already run all three of those
+    # explicitly. Going through `npm run dist:*` would re-run them, which
+    # on macOS is actively destructive: build:native rebuilds RsCli into
+    # resources/bin/rscli/ and overwrites the codesigned versions
+    # produced by sign-macos-binaries.sh, so notarization sees unsigned
+    # nested binaries and rejects the bundle.
+    local builder_platform
+    case "$PLATFORM" in
+        linux)   builder_platform="--linux" ;;
+        macos)   builder_platform="--mac" ;;
+        windows) builder_platform="--win" ;;
+        *)
+            echo_error "Unsupported packaging platform: $PLATFORM"
+            exit 1
+            ;;
+    esac
+    npx electron-builder "$builder_platform"
     echo_summary "Application packaged"
     echo ""
 }

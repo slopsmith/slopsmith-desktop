@@ -84,9 +84,13 @@ if [[ -d "$PY_RUNTIME" ]]; then
     done < <(find "$PY_RUNTIME/lib" -type f \( -name '*.so' -o -name '*.dylib' \) -print0 2>/dev/null || true)
 fi
 
-# 3. RsCli (.NET self-contained publish) lives under resources/rscli/
-#    and ships its own native libs + executable. Sign whatever's there.
-RSCLI_DIR="$PROJECT_DIR/resources/rscli"
+# 3. RsCli (.NET self-contained publish). build-rscli.sh writes the
+#    output to resources/bin/rscli/, so the bundle is nested rather than
+#    living at resources/rscli/. The maxdepth-1 loop above doesn't recurse
+#    into it, so iterate the rscli tree explicitly here. Skip the top-
+#    level dispatcher binary (already covered by the bin loop above) by
+#    starting at the rscli/ directory.
+RSCLI_DIR="$PROJECT_DIR/resources/bin/rscli"
 if [[ -d "$RSCLI_DIR" ]]; then
     while IFS= read -r -d '' f; do
         sign_one "$f"

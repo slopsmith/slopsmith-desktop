@@ -23,11 +23,15 @@ mkdir -p "$BIN_DIR"
 echo "=== Bundling system binaries ==="
 
 # ffmpeg - used for WAV → OGG transcoding on GP5 imports.
+# verify_bundled_binaries treats resources/bin/ffmpeg as required and
+# will hard-fail later if it's missing — fail here with the actual cause
+# rather than letting that downstream check produce a less-direct error.
 if command -v ffmpeg >/dev/null 2>&1; then
     cp "$(which ffmpeg)" "$BIN_DIR/"
     echo " ffmpeg: $(ls -lh "$BIN_DIR/ffmpeg" | awk '{print $5}')"
 else
-    echo " WARNING: ffmpeg not found on PATH" >&2
+    echo "ERROR: ffmpeg not found on PATH; resources/bin/ffmpeg is required for the bundled build (apt: ffmpeg / brew: ffmpeg)." >&2
+    exit 1
 fi
 
 # vgmstream-cli - used for Rocksmith WEM → WAV decoding.
@@ -96,7 +100,8 @@ if command -v fluidsynth >/dev/null 2>&1; then
         [ -f "$so" ] && patchelf --set-rpath '$ORIGIN' "$so" 2>/dev/null || true
     done
 else
-    echo " WARNING: fluidsynth not found on PATH - GP5 import will fail at runtime without a system install" >&2
+    echo "ERROR: fluidsynth not found on PATH - it is required to bundle GP5 import support. Install fluidsynth and rerun this script (apt: fluidsynth)." >&2
+    exit 1
 fi
 
 echo " Total resources/bin/: $(du -sh "$BIN_DIR" | cut -f1)"

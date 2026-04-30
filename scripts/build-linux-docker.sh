@@ -60,11 +60,9 @@ docker build \
     -f "$DEVCONTAINER_DIR/Dockerfile" \
     -t slopsmith-ubuntu-builder \
     "$PROJECT_DIR"
-
-if [[ $? -ne 0 ]]; then
-    echo -e "${RED}Error: Docker build failed${NC}" >&2
-    exit 1
-fi
+# `set -e` at the top of this script already aborts on a failed
+# `docker build` — no manual `$?` check needed (and the check that
+# was here would in practice be unreachable).
 
 echo -e "${GREEN}✓${NC} Container image built"
 echo ""
