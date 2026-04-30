@@ -55,17 +55,76 @@ jobs:
         with:
           dotnet-version: ${{ steps.config.outputs.dotnet }}.x
 
+      # macOS only: import the Developer ID Application certificate into a
+      # temporary keychain so codesign + electron-builder + notarytool can
+      # find it. The keychain is wiped at the end of the job (see "Clean
+      # up signing keychain" below) so a re-run of the same job doesn't
+      # see stale state. The whole step is a no-op when the secret is
+      # absent — supports forks and PRs from contributors who can't
+      # access repository secrets.
+      - name: Import Apple signing certificate
+        if: matrix.platform == 'mac' && env.APPLE_CERTIFICATE_P12_BASE64 != ''
+        env:
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          echo "$APPLE_CERTIFICATE_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -lut 21600 build.keychain
+          security import "$RUNNER_TEMP/cert.p12" -k build.keychain \
+              -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list \
+              -S apple-tool:,apple:,codesign: \
+              -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          rm -f "$RUNNER_TEMP/cert.p12"
+          # Sanity check — verify the identity is actually present.
+          security find-identity -v -p codesigning build.keychain | grep -q "Developer ID Application"
+
+      # macOS only: inline the team ID into package.json so electron-builder's
+      # `notarize.teamId` field has a real value (it doesn't expand env vars).
+      - name: Inline APPLE_TEAM_ID into package.json
+        if: matrix.platform == 'mac' && env.APPLE_TEAM_ID != ''
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          sed -i '' "s/@APPLE_TEAM_ID@/$APPLE_TEAM_ID/" package.json
+          grep -q "$APPLE_TEAM_ID" package.json
+
       # Build using the unified platform script
-      # All bundling and dependency installation is handled by the script
+      # All bundling and dependency installation is handled by the script.
+      # macOS-only env vars below are read by sign-macos-binaries.sh
+      # (APPLE_SIGNING_IDENTITY) and electron-builder's notarytool path
+      # (APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID, CSC_NAME).
+      # On non-mac platforms they're empty / unused.
       - name: Build
         run: ./scripts/build-release.sh
         shell: bash
-      # Start a debugging session
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          CSC_NAME: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      # Start a debugging session — runs BEFORE keychain cleanup so a
+      # signing-related failure can be inspected with the keychain still
+      # populated.
       - name: Setup upterm session
         uses: owenthereal/action-upterm@v1
         if: ${{ failure() }}
         with:
           wait-timeout-minutes: 5
+
+      # macOS only: drop the temporary keychain so a re-run doesn't see
+      # leftover state. always() so this still runs when the build fails.
+      - name: Clean up signing keychain
+        if: always() && matrix.platform == 'mac'
+        run: |
+          security delete-keychain build.keychain 2>/dev/null || true
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:

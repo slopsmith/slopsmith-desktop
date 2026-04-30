@@ -123,6 +123,13 @@ bundle_binaries_impl() {
             dylibbundler -cd -b -x "$PROJECT_DIR/resources/bin/vgmstream-cli" -d "$PROJECT_DIR/resources/bin" -p '@executable_path/'
         fi
     fi
+
+    # Sign all bundled native binaries with the Developer ID Application
+    # cert before verify_bundled_binaries runs them. Signing also clears
+    # the macOS quarantine attribute that downloaded binaries carry, so
+    # the verify step doesn't have to special-case quarantine. No-op
+    # when APPLE_SIGNING_IDENTITY is unset (local dev without a cert).
+    "$SCRIPT_DIR/sign-macos-binaries.sh"
 }
 
 # Run the build

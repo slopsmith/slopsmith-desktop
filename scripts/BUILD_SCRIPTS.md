@@ -146,3 +146,36 @@ Result:
 - Build failures can be reproduced and debugged locally
 - Workflow is "dumb" - all logic lives in versioned scripts
 
+## macOS Code Signing &amp; Notarization
+
+The macOS build signs every bundled native binary (fluidsynth, ffmpeg, vgmstream-cli, embedded Python interpreter + dylibs + extension `.so`s) with a Developer ID Application certificate, then electron-builder signs the `.app` and submits it to Apple's notary service. With signing in place, users get no Gatekeeper "app is damaged" warning on first launch.
+
+### Required GitHub secrets
+
+| Secret | Purpose |
+|---|---|
+| `APPLE_CERTIFICATE_P12_BASE64` | Developer ID Application cert exported as `.p12`, then `base64 -i cert.p12` |
+| `APPLE_CERTIFICATE_PASSWORD` | The `.p12` export password |
+| `APPLE_SIGNING_IDENTITY` | Full identity, e.g. `Developer ID Application: Your Name (TEAMID)` |
+| `APPLE_ID` | Apple ID email |
+| `APPLE_APP_SPECIFIC_PASSWORD` | App-specific password from appleid.apple.com (not the regular Apple ID password) |
+| `APPLE_TEAM_ID` | 10-char team ID from developer.apple.com → Membership |
+| `KEYCHAIN_PASSWORD` | Any random string — used for the temporary CI keychain |
+
+When `APPLE_CERTIFICATE_P12_BASE64` is unset (forks, contributor PRs without secret access), the certificate-import step is skipped and `sign-macos-binaries.sh` exits early. The build still completes — it just produces an unsigned `.app` that will trigger Gatekeeper on macOS.
+
+### Local macOS builds
+
+Local builds without `APPLE_SIGNING_IDENTITY` set produce an unsigned `.app` (same as before signing was added). To produce a signed local build for testing, ensure your Developer ID Application certificate is in your login keychain and run:
+
+```bash
+APPLE_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
+    ./scripts/build-release.sh
+```
+
+This signs the bundled binaries but does **not** notarize — notarization requires `APPLE_ID` + `APPLE_APP_SPECIFIC_PASSWORD` + `APPLE_TEAM_ID` env vars and is run by electron-builder when those are present.
+
+### Local cmake-js cache
+
+`build-windows.sh` only force-clears `$HOME/.cmake-js` when `$CI` is set (or `CLEAN_CMAKE_JS=1` is exported). Local Windows builds reuse the cache by default; set `CLEAN_CMAKE_JS=1` if you need a fully fresh build to mirror CI behaviour.
+
