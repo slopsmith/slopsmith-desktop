@@ -257,33 +257,15 @@ verify_bundled_binaries() {
   
   # Verify vgmstream-cli: doesn't have --version, check it produces output with version
   local vgm_path="$bin_dir/vgmstream-cli${ext}"
-  echo "  Checking vgmstream-cli at: $vgm_path"
   if [[ ! -f "$vgm_path" ]]; then
     echo_error "Missing bundled binary: $vgm_path"
     exit 1
   fi
-  echo "  File exists, checking permissions:"
-  ls -la "$vgm_path"
-  echo "  File type:"
-  file "$vgm_path"
-  echo "  Attempting to run vgmstream-cli..."
   local vgm_output
   # vgmstream-cli with no args prints version header then exits with code 1
   vgm_output=$("$vgm_path" 2>&1 || true)
-  local vgm_exit_code=$?
-  echo "  Exit code: $vgm_exit_code"
-  echo "  Raw output:"
-  echo "$vgm_output" | head -20
-  echo "  Checking if output matches expected pattern..."
-  if [[ -z "$vgm_output" ]]; then
-    echo_error "Binary vgmstream-cli produced no output"
-    exit 1
-  fi
-  if [[ ! "$vgm_output" =~ vgmstream.*CLI.*decoder ]]; then
-    echo_error "Binary vgmstream-cli produced unexpected output"
-    echo "  Expected pattern: vgmstream.*CLI.*decoder"
-    echo "  Actual output (first 500 chars):"
-    echo "${vgm_output:0:500}"
+  if [[ -z "$vgm_output" ]] || [[ ! "$vgm_output" =~ vgmstream.*CLI.*decoder ]]; then
+    echo_error "Binary vgmstream-cli failed to execute or produced unexpected output"
     exit 1
   fi
   echo "  ✓ vgmstream-cli"

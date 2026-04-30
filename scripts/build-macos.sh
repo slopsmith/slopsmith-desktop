@@ -75,41 +75,16 @@ bundle_binaries_impl() {
     fi
 
     # vgmstream (download release)
-    echo -e "${BLUE}=== Downloading vgmstream-cli ===${NC}"
     curl -sL --fail --retry 5 --retry-delay 5 --retry-all-errors \
         "https://github.com/vgmstream/vgmstream/releases/latest/download/vgmstream-mac-cli.zip" \
         -o /tmp/vgmstream.zip
-    echo "Downloaded vgmstream-mac-cli.zip"
     unzip -q /tmp/vgmstream.zip -d /tmp/vgmstream
-    echo "Extracted to /tmp/vgmstream"
-    echo "Contents of /tmp/vgmstream:"
-    ls -la /tmp/vgmstream/
     VGM_BIN=$(find /tmp/vgmstream -name 'vgmstream-cli' -type f | head -1)
-    echo "Found vgmstream-cli at: $VGM_BIN"
     if [[ -n "$VGM_BIN" ]]; then
-        echo "Copying vgmstream-cli to resources/bin/"
         cp "$VGM_BIN" "$PROJECT_DIR/resources/bin/vgmstream-cli"
         chmod +x "$PROJECT_DIR/resources/bin/vgmstream-cli"
-        echo "Copied binary details:"
-        ls -la "$PROJECT_DIR/resources/bin/vgmstream-cli"
-        file "$PROJECT_DIR/resources/bin/vgmstream-cli"
         # Remove macOS quarantine attribute (downloaded binaries are quarantined by default)
         xattr -d com.apple.quarantine "$PROJECT_DIR/resources/bin/vgmstream-cli" 2>/dev/null || true
-        echo "Quarantine attributes after removal:"
-        xattr -l "$PROJECT_DIR/resources/bin/vgmstream-cli" 2>/dev/null || echo "  (none)"
-        # Test running the binary
-        echo -e "${BLUE}=== Testing vgmstream-cli execution ===${NC}"
-        echo "Running: $PROJECT_DIR/resources/bin/vgmstream-cli --help"
-        "$PROJECT_DIR/resources/bin/vgmstream-cli" --help || echo -e "${RED}Failed to run vgmstream-cli${NC}"
-        # Check dynamic dependencies
-        echo -e "${BLUE}=== Checking dynamic dependencies ===${NC}"
-        echo "Running: otool -L $PROJECT_DIR/resources/bin/vgmstream-cli"
-        otool -L "$PROJECT_DIR/resources/bin/vgmstream-cli"
-        echo -e "${GREEN}vgmstream-cli setup complete${NC}"
-    else
-        echo -e "${RED}ERROR: vgmstream-cli binary not found in extracted archive${NC}"
-        echo "Searching for any vgmstream binaries:"
-        find /tmp/vgmstream -type f -name '*vgmstream*' 2>/dev/null || echo "  (none found)"
     fi
 
     # Use dylibbundler if available (for fluidsynth and vgmstream-cli dependencies)
