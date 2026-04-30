@@ -114,13 +114,19 @@ bundle_binaries_impl() {
 
     # Use dylibbundler if available (for fluidsynth and vgmstream-cli dependencies)
     if command -v dylibbundler &>/dev/null; then
+        local binaries_to_bundle=()
         if [[ -f "$PROJECT_DIR/resources/bin/fluidsynth" ]]; then
-            echo -e "${BLUE}Bundling fluidsynth dependencies...${NC}"
-            dylibbundler -cd -b -x "$PROJECT_DIR/resources/bin/fluidsynth" -d "$PROJECT_DIR/resources/bin" -p '@executable_path/'
+            binaries_to_bundle+=("$PROJECT_DIR/resources/bin/fluidsynth")
         fi
         if [[ -f "$PROJECT_DIR/resources/bin/vgmstream-cli" ]]; then
-            echo -e "${BLUE}Bundling vgmstream-cli dependencies...${NC}"
-            dylibbundler -cd -b -x "$PROJECT_DIR/resources/bin/vgmstream-cli" -d "$PROJECT_DIR/resources/bin" -p '@executable_path/'
+            binaries_to_bundle+=("$PROJECT_DIR/resources/bin/vgmstream-cli")
+        fi
+        if [[ ${#binaries_to_bundle[@]} -gt 0 ]]; then
+            echo -e "${BLUE}Bundling dependencies for ${#binaries_to_bundle[@]} binary/binaries...${NC}"
+            # Bundle all binaries together to avoid duplicate library conflicts
+            dylibbundler -cd -b -x "${binaries_to_bundle[0]}" \
+                $(for ((i=1; i<${#binaries_to_bundle[@]}; i++)); do echo "-x ${binaries_to_bundle[$i]}"; done) \
+                -d "$PROJECT_DIR/resources/bin" -p '@executable_path/' --overwrite
         fi
     fi
 }
