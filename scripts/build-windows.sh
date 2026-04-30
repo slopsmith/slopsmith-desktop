@@ -201,7 +201,13 @@ bundle_binaries_impl() {
     
     # fluidsynth
     echo "Downloading fluidsynth..."
-    FS_URL=$(python3 -c "import json; print(json.load(open('$CONFIG')).get('external', {}).get('fluidsynth_windows', {}).get('url', ''))" 2>/dev/null)
+    # Reuse parse-build-config.py — Git Bash auto-converts the MSYS-style
+    # $CONFIG path to native Windows form when it's passed as an arg, but
+    # NOT when it's interpolated into an inline `python -c "...open('$CONFIG')..."`
+    # string. The previous inline form silently failed with set -e on
+    # Windows because Python opened a "/d/a/.../config.json" path that
+    # doesn't exist as a literal Windows path.
+    FS_URL=$(python3 "$SCRIPT_DIR/parse-build-config.py" "$CONFIG" .external.fluidsynth_windows.url 2>/dev/null || true)
     if [[ -n "$FS_URL" ]]; then
         if ! download_with_retries \
             "$FS_URL" \
