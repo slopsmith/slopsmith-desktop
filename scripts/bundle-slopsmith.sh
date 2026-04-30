@@ -57,16 +57,27 @@ for f in index.html app.js highway.js style.css; do
     [ -f "$SLOPSMITH_DIR/static/$f" ] && cp "$SLOPSMITH_DIR/static/$f" "$BUNDLE_DIR/static/"
 done
 
+# Cross-platform "cp -r minus .git" — Git Bash on Windows doesn't ship
+# rsync, so we can't rely on `rsync --exclude=.git`. Plain `cp -r`
+# followed by stripping any nested `.git/` directories works on
+# Linux/macOS/Git-Bash alike. The .git stripping matters because
+# plugin directories cloned by clone_slopsmith() are git working trees;
+# bundling their .git/objects/ would inflate the .app and (on macOS)
+# trip electron-builder with EACCES on read-only pack files.
+copy_plugin() {
+    local src="$1"
+    local dst="$2"
+    mkdir -p "$dst"
+    # Use cp -R rather than -r for portable symlink-following semantics.
+    cp -R "$src/." "$dst/"
+    find "$dst" -name '.git' -type d -prune -exec rm -rf {} +
+}
+
 # Built-in plugins (real directories, not symlinks to avoid duplicates).
-# rsync with --exclude='.git' so a plugin tracked as its own git repo
-# (e.g. slopsmith/plugins/editor/.git/) doesn't drag its .git/objects/
-# tree — read-only and root-owned in some cases — into the bundle.
-# electron-builder later hits EACCES copying those into release/.
 for plugin_dir in "$SLOPSMITH_DIR/plugins/editor" "$SLOPSMITH_DIR/plugins/note_detect"; do
     if [ -d "$plugin_dir" ] && [ ! -L "$plugin_dir" ]; then
         name=$(basename "$plugin_dir")
-        mkdir -p "$BUNDLE_DIR/plugins/$name"
-        rsync -a --exclude='.git' "$plugin_dir/" "$BUNDLE_DIR/plugins/$name/"
+        copy_plugin "$plugin_dir" "$BUNDLE_DIR/plugins/$name"
     fi
 done
 
@@ -81,12 +92,10 @@ for plugin_link in "$SLOPSMITH_DIR/plugins/"*; do
     if [ -L "$plugin_link" ]; then
         real_dir=$(realpath_portable "$plugin_link")
         if [ -d "$real_dir" ]; then
-            mkdir -p "$target"
-            rsync -a --exclude='.git' "$real_dir/" "$target/"
+            copy_plugin "$real_dir" "$target"
         fi
     elif [ -d "$plugin_link" ]; then
-        mkdir -p "$target"
-        rsync -a --exclude='.git' "$plugin_link/" "$target/"
+        copy_plugin "$plugin_link" "$target"
     elif [ -f "$plugin_link" ]; then
         cp "$plugin_link" "$target"
     fi

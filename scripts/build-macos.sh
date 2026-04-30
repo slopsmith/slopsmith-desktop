@@ -241,7 +241,24 @@ if [[ -n "${APPLE_SIGNING_IDENTITY:-}" && -n "${APPLE_ID:-}" \
             --team-id "$APPLE_TEAM_ID" \
             --wait
         echo -e "${BLUE}Stapling notarization ticket to $(basename "$dmg")...${NC}"
-        xcrun stapler staple "$dmg"
+        # `notarytool submit --wait` returns when Apple's notary service
+        # accepts the submission, but the ticket can take an extra
+        # 30-60 s to propagate to CloudKit (where `stapler` reads from).
+        # Stapling immediately fails with `Error 65: Record not found`
+        # on CI roughly half the time. Retry with backoff.
+        staple_ok=0
+        for attempt in 1 2 3 4 5; do
+            if xcrun stapler staple "$dmg"; then
+                staple_ok=1
+                break
+            fi
+            echo "  staple attempt $attempt failed; waiting before retry..."
+            sleep $((attempt * 15))
+        done
+        if [[ "$staple_ok" -ne 1 ]]; then
+            echo -e "${RED}Failed to staple $(basename "$dmg") after 5 attempts${NC}" >&2
+            exit 1
+        fi
         xcrun stapler validate "$dmg"
     done
     shopt -u nullglob
