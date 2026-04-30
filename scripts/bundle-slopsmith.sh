@@ -57,10 +57,16 @@ for f in index.html app.js highway.js style.css; do
     [ -f "$SLOPSMITH_DIR/static/$f" ] && cp "$SLOPSMITH_DIR/static/$f" "$BUNDLE_DIR/static/"
 done
 
-# Built-in plugins (real directories, not symlinks to avoid duplicates)
+# Built-in plugins (real directories, not symlinks to avoid duplicates).
+# rsync with --exclude='.git' so a plugin tracked as its own git repo
+# (e.g. slopsmith/plugins/editor/.git/) doesn't drag its .git/objects/
+# tree — read-only and root-owned in some cases — into the bundle.
+# electron-builder later hits EACCES copying those into release/.
 for plugin_dir in "$SLOPSMITH_DIR/plugins/editor" "$SLOPSMITH_DIR/plugins/note_detect"; do
     if [ -d "$plugin_dir" ] && [ ! -L "$plugin_dir" ]; then
-        cp -r "$plugin_dir" "$BUNDLE_DIR/plugins/"
+        name=$(basename "$plugin_dir")
+        mkdir -p "$BUNDLE_DIR/plugins/$name"
+        rsync -a --exclude='.git' "$plugin_dir/" "$BUNDLE_DIR/plugins/$name/"
     fi
 done
 
@@ -79,7 +85,8 @@ for plugin_link in "$SLOPSMITH_DIR/plugins/"*; do
             rsync -a --exclude='.git' "$real_dir/" "$target/"
         fi
     elif [ -d "$plugin_link" ]; then
-        cp -r "$plugin_link" "$target"
+        mkdir -p "$target"
+        rsync -a --exclude='.git' "$plugin_link/" "$target/"
     elif [ -f "$plugin_link" ]; then
         cp "$plugin_link" "$target"
     fi

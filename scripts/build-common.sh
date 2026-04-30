@@ -101,6 +101,13 @@ clone_slopsmith() {
 		return 0
 	fi
 
+	# Make the clone re-runnable: a leftover dir from a previous failed
+	# build would otherwise abort `git clone`. CI runners start fresh so
+	# this is purely a quality-of-life fix for local re-runs.
+	if [[ -d "$clone_dir" ]]; then
+		rm -rf "$clone_dir"
+	fi
+
 	echo "Cloning Slopsmith repository..."
 	git clone --depth 1 https://github.com/byrongamatos/slopsmith.git "$clone_dir"
 

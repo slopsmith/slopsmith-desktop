@@ -19,8 +19,9 @@ COPY scripts/parse-build-config.py /tmp/parse-build-config.py
 RUN NODE_VERSION=$(python3 /tmp/parse-build-config.py /tmp/.build-config.json .versions.node) && \
     PYTHON_VERSION=$(python3 /tmp/parse-build-config.py /tmp/.build-config.json .versions.python) && \
     DOTNET_VERSION=$(python3 /tmp/parse-build-config.py /tmp/.build-config.json .versions.dotnet) && \
-    printf 'NODE_VERSION=%s\nPYTHON_VERSION=%s\nDOTNET_VERSION=%s\n' \
-        "$NODE_VERSION" "$PYTHON_VERSION" "$DOTNET_VERSION" > /etc/build.env
+    PYTHON_MAJOR_MINOR="${PYTHON_VERSION%.*}" && \
+    printf 'NODE_VERSION=%s\nPYTHON_VERSION=%s\nPYTHON_MAJOR_MINOR=%s\nDOTNET_VERSION=%s\n' \
+        "$NODE_VERSION" "$PYTHON_VERSION" "$PYTHON_MAJOR_MINOR" "$DOTNET_VERSION" > /etc/build.env
 
 # ── System dependencies ─────────────────────────────────────────────────────
 # Single source of truth: .packages/apt.txt (also consumed by CI).
@@ -40,17 +41,21 @@ RUN . /etc/build.env && \
 # Ubuntu 22.04 main repos ship Python 3.10 — the 3.12 we need comes from
 # the deadsnakes PPA. `python3-distutils` was removed from 3.12's stdlib,
 # but `setuptools` (below) provides the compatibility shim.
+#
+# deadsnakes only ships major.minor packages (`python3.12`), not the
+# full patch version (`3.12.9`) that `.build-config.json` pins for the
+# Windows embeddable zip URL. PYTHON_MAJOR_MINOR strips the patch.
 RUN . /etc/build.env && \
     apt-get update && apt-get install -y --no-install-recommends software-properties-common && \
     add-apt-repository ppa:deadsnakes/ppa && \
     apt-get update && apt-get install -y --no-install-recommends \
-        python${PYTHON_VERSION} \
-        python${PYTHON_VERSION}-dev \
-        python${PYTHON_VERSION}-venv \
+        python${PYTHON_MAJOR_MINOR} \
+        python${PYTHON_MAJOR_MINOR}-dev \
+        python${PYTHON_MAJOR_MINOR}-venv \
         python3-pip \
         python3-setuptools && \
     rm -rf /var/lib/apt/lists/* && \
-    ln -sf /usr/bin/python${PYTHON_VERSION} /usr/bin/python3
+    ln -sf /usr/bin/python${PYTHON_MAJOR_MINOR} /usr/bin/python3
 
 # ── .NET ────────────────────────────────────────────────────────────────────
 RUN . /etc/build.env && \
