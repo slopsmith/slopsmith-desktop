@@ -241,8 +241,12 @@ export async function startPython(): Promise<void> {
 }
 
 export async function waitForPython(): Promise<number> {
-    // Poll the server until it responds
-    const maxAttempts = 120; // 60 seconds
+    // Poll the server until it responds. Generous total budget — with
+    // ~36 bundled plugins (some pulling in whisper / NAM / torch) the
+    // FastAPI lifespan startup takes well over a minute on first run,
+    // and the previous 60-s ceiling was rejecting healthy launches.
+    const maxAttempts = 600; // 5 minutes
+    const intervalMs = 500;
     for (let i = 0; i < maxAttempts; i++) {
         try {
             const ok = await new Promise<boolean>((resolve) => {
@@ -258,10 +262,15 @@ export async function waitForPython(): Promise<number> {
             }
         } catch { /* retry */ }
 
-        await new Promise((r) => setTimeout(r, 500));
+        // Periodic progress so a long startup doesn't look like a freeze.
+        // Logged every 10 s so the dev console / launcher log shows life.
+        if (i > 0 && (i * intervalMs) % 10000 === 0) {
+            console.log(`[python] waiting for server on port ${serverPort} (${(i * intervalMs) / 1000}s elapsed)`);
+        }
+        await new Promise((r) => setTimeout(r, intervalMs));
     }
 
-    throw new Error(`Python server failed to start on port ${serverPort}`);
+    throw new Error(`Python server failed to start on port ${serverPort} within ${(maxAttempts * intervalMs) / 1000}s`);
 }
 
 export function stopPython(): void {
