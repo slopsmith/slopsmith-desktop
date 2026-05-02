@@ -27,14 +27,21 @@
 </div>
 <script src="./lottie.min.js"></script>
 <script>
-    // Use lottie-web to render the spinner animation (see spinner.json)
-    lottie.loadAnimation({
-        container: document.getElementById('lottie-spinner'),
-        renderer: 'svg',
-        loop: true,
-        autoplay: true,
-        path: './spinner.json'
-    });
+    // Use lottie-web to render the spinner animation (see spinner.json).
+    // Guarded with try-catch: if lottie.min.js fails to load the status text
+    // below still updates correctly.
+    try {
+        lottie.loadAnimation({
+            container: document.getElementById('lottie-spinner'),
+            renderer: 'svg',
+            loop: true,
+            autoplay: true,
+            path: './spinner.json'
+        });
+    } catch (e) {
+        // Animation unavailable — continue without spinner.
+        console.error('Failed to load lottie animation:', e);
+    }
 
     var statusEl = document.getElementById('status');
     var countEl = document.getElementById('count');

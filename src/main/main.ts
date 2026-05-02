@@ -83,15 +83,15 @@ function createSplashWindow(): void {
 
     splashWindow.loadFile(path.join(__dirname, 'splash.html'));
 
-    // Prevent the user from dismissing the splash (Alt+F4 / Cmd+W) before
-    // startup reaches a terminal state.  If the splash were closed early and
-    // it were the only open window, window-all-closed would fire and quit the
-    // app before startup completes.  Allow the close only once a terminal
-    // phase has been published or the user explicitly quits the app.
+    // Treat a user-initiated close (Alt+F4 / Cmd+W) as an explicit quit so
+    // they are never stuck waiting for the full 5-minute startup deadline.
+    // preventDefault() keeps the splash visible while app.quit() propagates
+    // through before-quit → will-quit and clears the polling loop.
     splashWindow.on('close', (event) => {
         const currentPhase = startupStatusSnapshot.phase;
         if (!appQuitting && currentPhase !== 'complete' && currentPhase !== 'error') {
             event.preventDefault();
+            app.quit();
         }
     });
 
