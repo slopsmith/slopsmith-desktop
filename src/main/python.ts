@@ -36,8 +36,8 @@ function isStartupStatus(value: unknown): value is StartupStatus {
         typeof v['phase'] === 'string' &&
         typeof v['message'] === 'string' &&
         typeof v['current_plugin'] === 'string' &&
-        Number.isFinite(v['loaded']) &&
-        Number.isFinite(v['total']) &&
+        typeof v['loaded'] === 'number' && Number.isFinite(v['loaded']) &&
+        typeof v['total'] === 'number' && Number.isFinite(v['total']) &&
         (v['error'] === undefined || v['error'] === null || typeof v['error'] === 'string')
     );
 }
