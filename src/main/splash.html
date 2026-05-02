@@ -32,7 +32,7 @@
     function render(status) {
         if (!status) return;
         statusEl.textContent = status.message || 'Starting Slopsmith...';
-        if (status.total && status.total > 0) {
+        if (status.total > 0) {
             countEl.textContent = (status.loaded || 0) + ' / ' + status.total;
         } else {
             countEl.textContent = '';
