@@ -916,6 +916,14 @@
                     const nextNames = Object.keys(ps);
                     setDefaultPresetName(nextNames.length > 0 ? nextNames[0] : '');
                 }
+                // Scrub any Tone Automation targets that reference the deleted preset so
+                // automation doesn't silently resolve to a non-existent preset.
+                const taCfg = readTaStore();
+                let taDirty = false;
+                for (const [cat, presetRef] of Object.entries(taCfg.targets)) {
+                    if (presetRef === name) { delete taCfg.targets[cat]; taDirty = true; }
+                }
+                if (taDirty) writeTaStore(taCfg);
                 renderPresetList();
                 renderToneAutomationTargets();
             });
@@ -1125,8 +1133,10 @@
         const mapped = findMappingForTone(mappings, toneName);
         if (mapped) return mapped;
         if (mappings['$default']) return mappings['$default'];
-        const fallback = ensureDefaultPresetName();
-        return fallback || null;
+        // Use getDefaultPresetName (non-mutating) — ensureDefaultPresetName writes to
+        // localStorage and would silently create an implicit default just because tone
+        // mappings were evaluated during playback, then apply it on the next startup.
+        return getDefaultPresetName() || null;
     }
 
     window._aeFindMappingForTone = findMappingForTone;
