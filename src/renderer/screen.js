@@ -290,7 +290,7 @@
 
         if (chain.length === 0) {
             container.innerHTML = '<div class="text-sm text-slate-500 italic">No processors loaded — add a VST, NAM model, or cabinet IR</div>';
-            return;
+            return chain;
         }
 
         const typeNames = { 0: 'VST', 1: 'NAM', 2: 'IR' };
