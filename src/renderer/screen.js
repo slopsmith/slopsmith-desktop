@@ -1244,6 +1244,9 @@
     }
 
     function startToneMonitor() {
+        // If IIFE2's startToneAutoSwitch is already running its own 50ms polling loop,
+        // don't start a parallel interval — both would call switchToTone at 50ms cadence.
+        if (window._toneAutoSwitchActive) return;
         if (toneMonitorInterval) clearInterval(toneMonitorInterval);
         toneMonitorInterval = setInterval(() => {
             if (!toneSwitcher || !autoSwitchEnabled) return;
@@ -1680,10 +1683,13 @@
         // Wire up select changes
         panel.querySelectorAll('select[data-tone]').forEach(sel => {
             sel.addEventListener('change', async (e) => {
-                const m = getToneMappings(songKey);
-                if (e.target.value) m[e.target.dataset.tone] = e.target.value;
-                else delete m[e.target.dataset.tone];
-                saveToneMappings(songKey, m);
+                // Read the per-song bucket directly — getToneMappings() returns a merged
+                // {global, ...song} object, and writing it back would bake global entries
+                // into the song bucket, silently shadowing future global-mapping edits.
+                const songBucket = { ...(readToneMappingsStore().songs[songKey] || {}) };
+                if (e.target.value) songBucket[e.target.dataset.tone] = e.target.value;
+                else delete songBucket[e.target.dataset.tone];
+                saveToneMappings(songKey, songBucket);
                 // Force bypass preloader to rebuild mapping during current playback
                 window._toneMappingsDirty = true;
                 try {
@@ -2307,6 +2313,7 @@
     function startToneAutoSwitch() {
         if (_toneMonitor) clearInterval(_toneMonitor);
         _lastTone = null;
+        window._toneAutoSwitchActive = true;
 
         _toneMonitor = setInterval(() => {
             const hw = window.highway || window._slopsmithHighway;
@@ -2346,6 +2353,7 @@
     window.playSong = async function(filename, arrangement) {
         if (window._aeMarkSongTransition) window._aeMarkSongTransition(7000);
         if (_toneMonitor) { clearInterval(_toneMonitor); _toneMonitor = null; }
+        window._toneAutoSwitchActive = false;
         _lastTone = null;
         window._aeTaSessionOverrides = {};
         if (window._closeChainPanel) window._closeChainPanel();
