@@ -824,6 +824,10 @@
             if (result && result.success === false) {
                 console.error(tag + ': loadPreset failed:', result.error || 'unknown error');
                 await _restorePresetBlob(snapshotBlob, tag);
+                if (!snapshotBlob) {
+                    // No rollback available; chain is now empty — sync localStorage to match.
+                    try { localStorage.setItem('slopsmith-signal-chain', '[]'); } catch (_) {}
+                }
                 return false;
             }
             applyPresetGainLevels(preset);
@@ -836,6 +840,10 @@
         } catch (e) {
             console.error(tag + ':', e);
             await _restorePresetBlob(snapshotBlob, tag);
+            if (!snapshotBlob) {
+                // No rollback available; chain is now empty — sync localStorage to match.
+                try { localStorage.setItem('slopsmith-signal-chain', '[]'); } catch (_) {}
+            }
             return false;
         }
     }
@@ -1005,6 +1013,9 @@
 
             if (toneNames.size === 0) {
                 console.warn('[tone-switcher] preloadForSong: no valid tone names; chain cleared only');
+                // Sync localStorage to reflect the now-empty chain so a restart won't
+                // restore stale plugin state that no longer matches the engine.
+                try { localStorage.setItem('slopsmith-signal-chain', '[]'); } catch (_) {}
                 // Do NOT call refreshChain() — it calls api.getChainState() which can crash some
                 // JUCE bridges immediately after clearChain. Render empty state directly instead.
                 const container = chainContainer || $('ae-chain');
