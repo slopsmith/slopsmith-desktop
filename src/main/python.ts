@@ -22,7 +22,7 @@ export interface StartupStatus {
     running: boolean;
     phase: string;
     message: string;
-    /** Name of the plugin currently being loaded (camelCase, mapped from backend `current_plugin`). */
+    /** Name of the plugin currently being loaded (raw string value from the backend `current_plugin` field). */
     currentPlugin: string;
     loaded: number;
     total: number;
