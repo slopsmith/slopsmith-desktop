@@ -585,7 +585,7 @@
                     name: s.name || '',
                 }));
                 const gains = captureCurrentGainLevels();
-                const presets = JSON.parse(localStorage.getItem('slopsmith-chain-presets') || '{}');
+                const presets = getPresets();
                 presets[name] = { nativePreset, items, ...gains, created: Date.now() };
                 localStorage.setItem('slopsmith-chain-presets', JSON.stringify(presets));
                 if (!localStorage.getItem('slopsmith-default-preset-name')) {
@@ -1299,14 +1299,24 @@
         // Tone Automation overrides manual tone mappings: it owns the chain
         // while enabled and reacts to song/tone events through its own switcher.
         if (!options.force && window._aeToneAutomation?.isEnabled?.()) {
-            const rawToneChanges = hw.getToneChanges ? hw.getToneChanges() : [];
-            const rawToneBase = hw.getToneBase ? hw.getToneBase() : '';
+            let rawToneChanges = [], rawToneBase = '';
+            try {
+                rawToneChanges = hw.getToneChanges ? hw.getToneChanges() : [];
+                rawToneBase = hw.getToneBase ? hw.getToneBase() : '';
+            } catch (e) {
+                console.warn('[tone-switcher] Failed to read highway tone data (TA path):', e);
+            }
             await installTaSwitcherForSong(songKey, rawToneChanges, rawToneBase);
             return;
         }
 
-        const rawToneChanges = hw.getToneChanges ? hw.getToneChanges() : [];
-        const rawToneBase = hw.getToneBase ? hw.getToneBase() : '';
+        let rawToneChanges = [], rawToneBase = '';
+        try {
+            rawToneChanges = hw.getToneChanges ? hw.getToneChanges() : [];
+            rawToneBase = hw.getToneBase ? hw.getToneBase() : '';
+        } catch (e) {
+            console.warn('[tone-switcher] Failed to read highway tone data:', e);
+        }
         const arrangementName = getCurrentArrangementName();
         const normalized = await normalizeTimelineToneData(songKey, rawToneChanges, rawToneBase, arrangementName);
         const toneChanges = normalized.toneChanges;
@@ -2358,6 +2368,7 @@
         if (_toneMonitor) { clearInterval(_toneMonitor); _toneMonitor = null; }
         window._toneAutoSwitchActive = false;
         window._aeDidClearChainForNewSong = false;
+        window._aeClearingChainForNewSong = false;
         _lastTone = null;
         window._aeTaSessionOverrides = {};
         if (window._closeChainPanel) window._closeChainPanel();
@@ -2379,10 +2390,13 @@
         // the audio host during playSong and crash). The timed preload below rebuilds song presets.
         setTimeout(() => {
             if (window._aeClearChainForNewSong) {
+                window._aeClearingChainForNewSong = true;
                 void window._aeClearChainForNewSong().then(() => {
                     window._aeDidClearChainForNewSong = true;
                 }).catch((e) => {
                     console.warn('[audio-engine] clearChainForNewSong failed:', e);
+                }).finally(() => {
+                    window._aeClearingChainForNewSong = false;
                 });
             }
         }, 400);
@@ -2427,11 +2441,13 @@
             } catch (e) { /* ignore */ }
             // MIDI PC mode talks to an existing VST slot — do not wipe the chain here (outer MIDI block
             // does not reload processors). Bypass / Tone Automation need a clean slate vs menu default.
-            // Also skip when the 400ms clearChainForNewSong call already completed successfully — tracked
-            // via _aeDidClearChainForNewSong (set on resolution, cleared at each playSong start).
-            // Double-clearing risks a JUCE crash; preloadForSong calls clearChain again anyway.
+            // Also skip when the 400ms clearChainForNewSong is in-flight or already completed —
+            // _aeClearingChainForNewSong is set the moment the async clear begins; _aeDidClearChainForNewSong
+            // is set on resolution. Checking both prevents a second clearChain racing with a slow first one,
+            // which could crash some JUCE bridges. preloadForSong calls clearChain itself anyway.
             const skipPreflightClear = (midiPreflight?.mode === 'midi' && Number(midiPreflight.vstSlotId) >= 0)
-                || !!window._aeDidClearChainForNewSong;
+                || !!window._aeDidClearChainForNewSong
+                || !!window._aeClearingChainForNewSong;
             if (!skipPreflightClear) {
                 try {
                     await api.clearChain();
