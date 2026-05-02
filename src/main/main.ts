@@ -31,52 +31,6 @@ let startupStatusSnapshot: Record<string, unknown> = {
     error: null,
 };
 
-const SPLASH_SPINNER_DATA = {
-    v: '5.7.4',
-    fr: 60,
-    ip: 0,
-    op: 120,
-    w: 120,
-    h: 120,
-    nm: 'slopsmith-spinner',
-    ddd: 0,
-    assets: [],
-    layers: [{
-        ddd: 0,
-        ind: 1,
-        ty: 4,
-        nm: 'ring',
-        sr: 1,
-        ks: {
-            o: { a: 0, k: 100 },
-            r: { a: 1, k: [{ t: 0, s: [0] }, { t: 120, s: [360] }] },
-            p: { a: 0, k: [60, 60, 0] },
-            a: { a: 0, k: [0, 0, 0] },
-            s: { a: 0, k: [100, 100, 100] },
-        },
-        ao: 0,
-        shapes: [{
-            ty: 'gr',
-            it: [
-                { ind: 0, ty: 'el', s: { a: 0, k: [72, 72] }, p: { a: 0, k: [0, 0] }, nm: 'Ellipse Path 1', mn: 'ADBE Vector Shape - Ellipse', hd: false },
-                { ty: 'st', c: { a: 0, k: [0.376, 0.627, 1, 1] }, o: { a: 0, k: 100 }, w: { a: 0, k: 10 }, lc: 2, lj: 2, bm: 0, nm: 'Stroke 1', mn: 'ADBE Vector Graphic - Stroke', hd: false },
-                { ty: 'tm', s: { a: 0, k: 0 }, e: { a: 1, k: [{ t: 0, s: [18] }, { t: 60, s: [88] }, { t: 120, s: [18] }] }, o: { a: 1, k: [{ t: 0, s: [0] }, { t: 120, s: [360] }] }, m: 1, ix: 3, nm: 'Trim Paths 1', mn: 'ADBE Vector Filter - Trim', hd: false },
-                { ty: 'tr', p: { a: 0, k: [0, 0] }, a: { a: 0, k: [0, 0] }, s: { a: 0, k: [100, 100] }, r: { a: 0, k: 0 }, o: { a: 0, k: 100 }, sk: { a: 0, k: 0 }, sa: { a: 0, k: 0 }, nm: 'Transform' },
-            ],
-            nm: 'Ellipse 1',
-            np: 3,
-            cix: 2,
-            bm: 0,
-            ix: 1,
-            mn: 'ADBE Vector Group',
-            hd: false,
-        }],
-        ip: 0,
-        op: 120,
-        st: 0,
-        bm: 0,
-    }],
-};
 
 function getResourcesPath(): string {
     return app.isPackaged
@@ -107,10 +61,10 @@ function createSplashWindow(): void {
         title: 'Slopsmith',
         backgroundColor: '#050508',
         webPreferences: {
-            nodeIntegration: true,
-            contextIsolation: false,
+            preload: path.join(__dirname, 'splash-preload.js'),
+            nodeIntegration: false,
+            contextIsolation: true,
             sandbox: false,
-            webSecurity: false,
         },
     });
 
@@ -126,7 +80,9 @@ function createSplashWindow(): void {
     .card { width: 440px; border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; background: rgba(8,12,22,0.75); backdrop-filter: blur(6px); padding: 22px 24px; box-shadow: 0 18px 50px rgba(0,0,0,0.4); }
     .brand { font-size: 20px; font-weight: 700; letter-spacing: 0.2px; color: #f3f7ff; }
     .sub { margin-top: 3px; font-size: 12px; color: #86a0c4; }
-    .anim { margin: 22px auto 10px; width: 86px; height: 86px; }
+    .anim { margin: 22px auto 10px; width: 86px; height: 86px; display: flex; align-items: center; justify-content: center; }
+    .spinner { width: 56px; height: 56px; border: 6px solid rgba(96,160,255,0.18); border-top-color: #60a0ff; border-radius: 50%; animation: spin 0.9s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
     .status { margin-top: 8px; min-height: 20px; font-size: 13px; color: #a9bbd5; text-align: center; }
     .count { font-size: 11px; color: #7186a9; margin-top: 6px; text-align: center; }
 </style>
@@ -136,21 +92,14 @@ function createSplashWindow(): void {
   <div class="card">
     <div class="brand">Slopsmith</div>
     <div class="sub">Initializing desktop runtime</div>
-    <div id="anim" class="anim"></div>
+    <div class="anim"><div class="spinner"></div></div>
     <div id="status" class="status">Starting Slopsmith...</div>
     <div id="count" class="count"></div>
   </div>
 </div>
 <script>
-    const { ipcRenderer } = require('electron');
-    const lottie = require('lottie-web');
     const statusEl = document.getElementById('status');
     const countEl = document.getElementById('count');
-    const animEl = document.getElementById('anim');
-    const data = ${JSON.stringify(SPLASH_SPINNER_DATA)};
-    try {
-        lottie.loadAnimation({ container: animEl, renderer: 'svg', loop: true, autoplay: true, animationData: data });
-    } catch (e) {}
     function render(status) {
         if (!status) return;
         statusEl.textContent = status.message || 'Starting Slopsmith...';
@@ -160,8 +109,7 @@ function createSplashWindow(): void {
             countEl.textContent = '';
         }
     }
-    ipcRenderer.on('startup:status', (_event, status) => render(status));
-    render(${JSON.stringify(startupStatusSnapshot)});
+    window.splashBridge.onStatus(render);
 </script>
 </body>
 </html>`;
@@ -330,17 +278,23 @@ async function startup(): Promise<void> {
     });
 
     const startupDeadline = Date.now() + 300000; // 5 minutes
+    let reachedTerminalState = false;
     while (Date.now() < startupDeadline) {
         const status = await getStartupStatus();
         if (status && typeof status === 'object') {
             publishStartupStatus(status as Record<string, unknown>);
             const phase = String((status as Record<string, unknown>).phase || '');
             const running = Boolean((status as Record<string, unknown>).running);
-            if (!running && (phase === 'complete' || phase === 'error')) break;
+            if (!running && (phase === 'complete' || phase === 'error')) {
+                reachedTerminalState = true;
+                break;
+            }
         }
         await new Promise((resolve) => setTimeout(resolve, 700));
     }
-    publishStartupStatus({ message: 'Ready', phase: 'complete', running: false });
+    if (!reachedTerminalState) {
+        publishStartupStatus({ message: 'Startup timed out', phase: 'error', running: false });
+    }
     if (splashWindow && !splashWindow.isDestroyed()) splashWindow.close();
 
 }
