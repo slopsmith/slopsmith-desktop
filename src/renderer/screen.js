@@ -763,7 +763,9 @@
     // ── Preset Management ──────────────────────────────────────────────────────
     function getPresets() {
         try {
-            return JSON.parse(localStorage.getItem('slopsmith-chain-presets') || '{}') || {};
+            const parsed = JSON.parse(localStorage.getItem('slopsmith-chain-presets') || '{}');
+            if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+            return parsed;
         } catch (e) {
             return {};
         }
@@ -2215,8 +2217,13 @@
         const songKey = getCurrentSongKey();
         // Try to restore any manual tone mapping the user had configured first;
         // if there isn't one, fall back to the global default preset.
+        // Check before the call — applyToneMappingsNow returns undefined regardless
+        // of whether it applied a mapping, so we can't infer success after the fact.
+        const hasMappings = Object.keys(getToneMappings(songKey)).length > 0;
         try { await applyToneMappingsNow(songKey, { force: true }); } catch (e) { /* ignore */ }
-        await loadDefaultPreset('tone-automation-off');
+        if (!hasMappings) {
+            await loadDefaultPreset('tone-automation-off');
+        }
     }
 
     function setupToneAutomationSettingsEvents() {
