@@ -1863,10 +1863,15 @@
                 vstSelect.innerHTML = '<option value="">(no audio bridge)</option>';
                 return;
             }
+            // Yield to the event loop so the browser can paint before we call into the
+            // native bridge. getChainState() may block the JS thread synchronously, and
+            // wrapping it in Promise.resolve() doesn't help — the call still evaluates
+            // before any await. Yielding first ensures the UI is visible before the block.
+            await new Promise(r => setTimeout(r, 0));
             let vstSlots = [];
             try {
                 const chain = await Promise.race([
-                    Promise.resolve(apiLocal.getChainState()),
+                    apiLocal.getChainState(),
                     new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000))
                 ]);
                 if (Array.isArray(chain)) vstSlots = chain.filter(s => s.type === 0);
@@ -2432,10 +2437,19 @@
         // Start tone monitoring and preload presets after WebSocket delivers tone data
         setTimeout(async () => {
             try {
-            startToneAutoSwitch();
+            // Only start the 50ms polling interval when at least one switching mode is on;
+            // starting it unconditionally wastes cycles on localStorage + highway reads every
+            // 50ms for songs where both auto-switch and Tone Automation are disabled.
+            const autoOn = localStorage.getItem('slopsmith-tone-auto-switch') === 'true';
+            const taOn = window._aeToneAutomation?.isEnabled?.() === true;
+            if (autoOn || taOn) {
+                startToneAutoSwitch();
+            } else {
+                if (_toneMonitor) { clearInterval(_toneMonitor); _toneMonitor = null; }
+                window._toneAutoSwitchActive = false;
+            }
 
             // Preload presets for tone switching
-            const autoOn = localStorage.getItem('slopsmith-tone-auto-switch') === 'true';
             const api = window.slopsmithDesktop?.audio;
             const hw = window.highway || window._slopsmithHighway;
             if (!api || !hw) return;
