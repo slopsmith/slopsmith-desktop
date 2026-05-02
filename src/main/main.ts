@@ -209,6 +209,14 @@ function createWindow(port: number): void {
 
 async function startup(): Promise<void> {
     console.log('[main] Starting Slopsmith Desktop...');
+
+    // Register startup status IPC handlers before creating the splash window
+    // so the splash preload's immediate startup:requestStatus is handled.
+    ipcMain.handle('startup:getStatus', () => startupStatusSnapshot);
+    ipcMain.on('startup:requestStatus', (event) => {
+        event.sender.send('startup:status', startupStatusSnapshot);
+    });
+
     createSplashWindow();
     publishStartupStatus({ message: 'Starting backend service...', phase: 'booting', running: true });
 
@@ -224,13 +232,20 @@ async function startup(): Promise<void> {
     // Initialize soundfont manager IPC handlers (Audio Quality preference)
     initSoundfontManager(() => mainWindow);
 
-    ipcMain.handle('startup:getStatus', () => startupStatusSnapshot);
-    ipcMain.on('startup:requestStatus', (event) => {
-        event.sender.send('startup:status', startupStatusSnapshot);
-    });
+    let port: number;
+    try {
+        // Wait for Python server to be ready
+        port = await waitForPython();
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error('[main] Backend failed to start:', message);
+        publishStartupStatus({ message: `Backend failed to start: ${message}`, phase: 'error', running: false });
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        if (splashWindow && !splashWindow.isDestroyed()) splashWindow.close();
+        app.quit();
+        return;
+    }
 
-    // Wait for Python server to be ready
-    const port = await waitForPython();
     console.log(`[main] Python server ready on port ${port}`);
     publishStartupStatus({ message: 'Backend ready. Opening app window...', phase: 'core-ready', running: true });
 

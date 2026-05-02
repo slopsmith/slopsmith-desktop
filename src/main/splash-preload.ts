@@ -2,16 +2,7 @@
 // Exposes only the startup-status IPC bridge — no node APIs in the renderer.
 
 const { contextBridge, ipcRenderer } = require('electron');
-
-type StartupStatus = {
-    running: boolean;
-    phase: string;
-    message: string;
-    current_plugin: string;
-    loaded: number;
-    total: number;
-    error?: string | null;
-};
+import type { StartupStatus } from './python';
 
 contextBridge.exposeInMainWorld('splashBridge', {
     onStatus: (callback: (status: StartupStatus) => void): (() => void) => {
