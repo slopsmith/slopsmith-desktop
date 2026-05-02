@@ -18,6 +18,24 @@ export function getPythonPort(): number {
     return serverPort;
 }
 
+function getJson(pathname: string, timeoutMs = 2000): Promise<any | null> {
+    return new Promise((resolve) => {
+        const req = http.get(`http://127.0.0.1:${serverPort}${pathname}`, (res) => {
+            let raw = '';
+            res.on('data', (chunk) => { raw += chunk.toString(); });
+            res.on('end', () => {
+                try {
+                    resolve(JSON.parse(raw));
+                } catch {
+                    resolve(null);
+                }
+            });
+        });
+        req.on('error', () => resolve(null));
+        req.setTimeout(timeoutMs, () => { req.destroy(); resolve(null); });
+    });
+}
+
 // Find an available port starting from 8000
 async function findPort(startPort: number): Promise<number> {
     return new Promise((resolve) => {
@@ -319,6 +337,10 @@ export async function waitForPython(): Promise<number> {
     }
 
     throw new Error(`Python server failed to start on port ${serverPort} within ${(maxAttempts * intervalMs) / 1000}s`);
+}
+
+export async function getStartupStatus(): Promise<any | null> {
+    return getJson('/api/startup-status');
 }
 
 export function stopPython(): void {

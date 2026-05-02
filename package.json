@@ -98,14 +98,15 @@
     }
   },
   "dependencies": {
+    "lottie-web": "^5.12.2",
     "node-addon-api": "^8.3.1"
   },
   "devDependencies": {
+    "@types/node": "^22.0.0",
     "cmake-js": "^7.3.0",
     "electron": "^35.0.0",
     "electron-builder": "^25.1.8",
-    "typescript": "^5.7.0",
-    "@types/node": "^22.0.0"
+    "typescript": "^5.7.0"
   },
   "cmake-js": {
     "runtime": "electron"

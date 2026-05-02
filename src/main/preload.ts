@@ -120,4 +120,31 @@ contextBridge.exposeInMainWorld('slopsmithDesktop', {
     // App info
     getInfo: () => ipcRenderer.invoke('app:getInfo'),
     getConfigDir: () => ipcRenderer.invoke('app:getConfigDir'),
+
+    // Startup status
+    startup: {
+        getStatus: () => ipcRenderer.invoke('startup:getStatus'),
+        onStatus: (callback: (status: {
+            running: boolean;
+            phase: string;
+            message: string;
+            current_plugin: string;
+            loaded: number;
+            total: number;
+            error?: string | null;
+        }) => void) => {
+            const listener = (_event: unknown, status: {
+                running: boolean;
+                phase: string;
+                message: string;
+                current_plugin: string;
+                loaded: number;
+                total: number;
+                error?: string | null;
+            }) => callback(status);
+            ipcRenderer.on('startup:status', listener);
+            ipcRenderer.send('startup:requestStatus');
+            return () => ipcRenderer.removeListener('startup:status', listener);
+        },
+    },
 });
