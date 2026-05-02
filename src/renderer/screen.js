@@ -808,9 +808,10 @@
         if (!preset?.nativePreset) return false;
         const tag = '[audio-engine] replaceChainWithPresetBlob' + (logCtx ? ` (${logCtx})` : '');
 
-        // Snapshot before clearing so we can roll back on loadPreset failure.
-        let snapshot = null;
-        try { snapshot = await api.getChainState(); } catch (_) { /* best-effort */ }
+        // Snapshot via savePreset() before clearing so rollback restores full plugin
+        // state (parameters, not just paths) if loadPreset fails.
+        let snapshotBlob = null;
+        try { snapshotBlob = await api.savePreset(); } catch (_) { /* best-effort */ }
 
         try {
             await api.clearChain();
@@ -818,7 +819,7 @@
             // Some JUCE bridges return {success: false, error: '...'} instead of throwing.
             if (result && result.success === false) {
                 console.error(tag + ': loadPreset failed:', result.error || 'unknown error');
-                await _restoreChainSnapshot(snapshot, tag);
+                await _restorePresetBlob(snapshotBlob, tag);
                 return false;
             }
             applyPresetGainLevels(preset);
@@ -830,20 +831,16 @@
             return true;
         } catch (e) {
             console.error(tag + ':', e);
-            await _restoreChainSnapshot(snapshot, tag);
+            await _restorePresetBlob(snapshotBlob, tag);
             return false;
         }
     }
 
-    async function _restoreChainSnapshot(snapshot, tag) {
-        if (!Array.isArray(snapshot) || snapshot.length === 0) return;
+    async function _restorePresetBlob(snapshotBlob, tag) {
+        if (!snapshotBlob) return;
         try {
             await api.clearChain();
-            for (const s of snapshot) {
-                if (s.type === 0 && s.path) await api.loadVST(s.path);
-                else if (s.type === 1 && s.path) await api.loadNAMModel(s.path);
-                else if (s.type === 2 && s.path) await api.loadIR(s.path);
-            }
+            await api.loadPreset(snapshotBlob);
             await refreshChain();
         } catch (e) {
             console.warn((tag || '[audio-engine]') + ' snapshot rollback failed:', e);
@@ -1812,6 +1809,9 @@
                     writeTaStore(cur);
                     window._toneMappingsDirty = true;
                     await activateToneAutomationForCurrentSong();
+                    // Ensure the IIFE2 tone-change poller is running so TA reacts to
+                    // subsequent tone changes immediately when enabled mid-song.
+                    window._aeStartToneAutoSwitch?.();
                 } else {
                     // Preset Switch (bypass)
                     bypassDiv?.classList.remove('hidden');
@@ -2363,6 +2363,8 @@
         const outputLin = Number.isFinite(Number(preset?.outputGain)) ? Number(preset.outputGain) : 1;
         if (_api?.setGain) { _api.setGain('input', inputLin); _api.setGain('output', outputLin); }
     }
+
+    window._aeStartToneAutoSwitch = function() { startToneAutoSwitch(); };
 
     function startToneAutoSwitch() {
         if (_toneMonitor) clearInterval(_toneMonitor);
