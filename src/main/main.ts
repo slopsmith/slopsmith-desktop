@@ -21,6 +21,9 @@ process.on('unhandledRejection', (reason, promise) => {
 
 let mainWindow: BrowserWindow | null = null;
 let splashWindow: BrowserWindow | null = null;
+// Milliseconds to keep the splash visible after reaching a terminal state so
+// the renderer has time to paint the final status message before the window closes.
+const SPLASH_CLOSE_DELAY_MS = 300;
 let startupStatusSnapshot: StartupStatus = {
     running: true,
     phase: 'booting',
@@ -240,7 +243,7 @@ async function startup(): Promise<void> {
         const message = err instanceof Error ? err.message : String(err);
         console.error('[main] Backend failed to start:', message);
         publishStartupStatus({ message: `Backend failed to start: ${message}`, phase: 'error', running: false });
-        await new Promise((resolve) => setTimeout(resolve, 300));
+        await new Promise((resolve) => setTimeout(resolve, SPLASH_CLOSE_DELAY_MS));
         if (splashWindow && !splashWindow.isDestroyed()) splashWindow.close();
         app.quit();
         return;
@@ -309,7 +312,7 @@ async function startup(): Promise<void> {
         publishStartupStatus({ message: 'Startup timed out', phase: 'error', running: false });
     }
     // Give the renderer a tick to paint the final status before closing
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await new Promise((resolve) => setTimeout(resolve, SPLASH_CLOSE_DELAY_MS));
     if (splashWindow && !splashWindow.isDestroyed()) splashWindow.close();
 
 }
