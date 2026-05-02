@@ -71,53 +71,7 @@ function createSplashWindow(): void {
         },
     });
 
-    const html = `
-<!doctype html>
-<html>
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<style>
-    body { margin: 0; background: radial-gradient(1200px 500px at 20% 10%, #131a2d, #050508); color: #cfd7e5; font-family: Inter, system-ui, sans-serif; }
-    .wrap { height: 100vh; display: flex; align-items: center; justify-content: center; }
-    .card { width: 440px; border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; background: rgba(8,12,22,0.75); backdrop-filter: blur(6px); padding: 22px 24px; box-shadow: 0 18px 50px rgba(0,0,0,0.4); }
-    .brand { font-size: 20px; font-weight: 700; letter-spacing: 0.2px; color: #f3f7ff; }
-    .sub { margin-top: 3px; font-size: 12px; color: #86a0c4; }
-    .anim { margin: 22px auto 10px; width: 86px; height: 86px; display: flex; align-items: center; justify-content: center; }
-    .spinner { width: 56px; height: 56px; border: 6px solid rgba(96,160,255,0.18); border-top-color: #60a0ff; border-radius: 50%; animation: spin 0.9s linear infinite; }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    .status { margin-top: 8px; min-height: 20px; font-size: 13px; color: #a9bbd5; text-align: center; }
-    .count { font-size: 11px; color: #7186a9; margin-top: 6px; text-align: center; }
-</style>
-</head>
-<body>
-<div class="wrap">
-  <div class="card">
-    <div class="brand">Slopsmith</div>
-    <div class="sub">Initializing desktop runtime</div>
-    <div class="anim"><div class="spinner"></div></div>
-    <div id="status" class="status">Starting Slopsmith...</div>
-    <div id="count" class="count"></div>
-  </div>
-</div>
-<script>
-    const statusEl = document.getElementById('status');
-    const countEl = document.getElementById('count');
-    function render(status) {
-        if (!status) return;
-        statusEl.textContent = status.message || 'Starting Slopsmith...';
-        if (status.total && status.total > 0) {
-            countEl.textContent = (status.loaded || 0) + ' / ' + status.total;
-        } else {
-            countEl.textContent = '';
-        }
-    }
-    window.splashBridge.onStatus(render);
-</script>
-</body>
-</html>`;
-
-    splashWindow.loadURL(`data:text/html;charset=UTF-8,${encodeURIComponent(html)}`);
+    splashWindow.loadFile(path.join(__dirname, 'splash.html'));
     splashWindow.on('closed', () => {
         splashWindow = null;
     });

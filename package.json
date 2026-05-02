@@ -8,7 +8,7 @@
   },
   "main": "dist/main/main.js",
   "scripts": {
-    "build:ts": "tsc",
+    "build:ts": "tsc && node -e \"require('fs').copyFileSync('src/main/splash.html', 'dist/main/splash.html')\"",
     "build:audio": "bash scripts/build-audio.sh Release",
     "build:audio:debug": "bash scripts/build-audio.sh Debug",
     "rebuild:audio": "rm -rf build &amp;&amp; bash scripts/build-audio.sh Release",
