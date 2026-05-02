@@ -804,14 +804,18 @@
     /** Replace the entire native chain with a saved preset blob. Always clears first so
      *  the previous menu/player chain is fully torn down and sounds cannot stack.
      *  On loadPreset failure the previous chain is restored (best-effort). */
-    async function replaceChainWithPresetBlob(preset, logCtx = '') {
+    async function replaceChainWithPresetBlob(preset, logCtx = '', { snapshot = true } = {}) {
         if (!preset?.nativePreset) return false;
         const tag = '[audio-engine] replaceChainWithPresetBlob' + (logCtx ? ` (${logCtx})` : '');
 
         // Snapshot via savePreset() before clearing so rollback restores full plugin
         // state (parameters, not just paths) if loadPreset fails.
+        // Pass snapshot:false for automated/frequent callers (tone automation, preload)
+        // to avoid the IPC overhead of serializing the full chain on every tone switch.
         let snapshotBlob = null;
-        try { snapshotBlob = await api.savePreset(); } catch (_) { /* best-effort */ }
+        if (snapshot) {
+            try { snapshotBlob = await api.savePreset(); } catch (_) { /* best-effort */ }
+        }
 
         try {
             await api.clearChain();
@@ -1361,7 +1365,7 @@
             const presets = getPresets();
             const preset = presetName ? presets[presetName] : null;
             if (preset?.nativePreset) {
-                await replaceChainWithPresetBlob(preset, `tone-map:${songKey}`);
+                await replaceChainWithPresetBlob(preset, `tone-map:${songKey}`, { snapshot: false });
             } else {
                 await loadDefaultPreset('tone-none');
             }
@@ -2095,7 +2099,7 @@
         const presets = getPresets();
         const preset = presets[presetName];
         if (!preset?.nativePreset) return false;
-        const ok = await replaceChainWithPresetBlob(preset, `tone-automation:${presetName}`);
+        const ok = await replaceChainWithPresetBlob(preset, `tone-automation:${presetName}`, { snapshot: false });
         if (!ok) console.error('[tone-automation] Failed to load preset:', presetName);
         return ok;
     }
@@ -2377,7 +2381,12 @@
 
             const autoOn = localStorage.getItem('slopsmith-tone-auto-switch') === 'true';
             const taOn = window._aeToneAutomation?.isEnabled?.() === true;
-            if (!autoOn && !taOn) return;
+            if (!autoOn && !taOn) {
+                clearInterval(_toneMonitor);
+                _toneMonitor = null;
+                window._toneAutoSwitchActive = false;
+                return;
+            }
 
             const t = hw.getTime();
             const changes = hw.getToneChanges ? hw.getToneChanges() : [];
@@ -2500,9 +2509,13 @@
             const skipPreflightClear = (midiPreflight?.mode === 'midi' && Number(midiPreflight.vstSlotId) >= 0)
                 || !!window._aeDidClearChainForNewSong
                 || !!window._aeClearingChainForNewSong;
+            // Track whether the chain has been cleared by any path so the bypass preload
+            // below can skip its own clearChain and avoid a redundant second IPC call.
+            let chainClearedForLoad = skipPreflightClear;
             if (!skipPreflightClear) {
                 try {
                     await api.clearChain();
+                    chainClearedForLoad = true;
                     try {
                         localStorage.setItem('slopsmith-signal-chain', '[]');
                     } catch (e) { /* ignore */ }
@@ -2624,7 +2637,7 @@
                     const presetName = lookup(selectedTone) || (firstNonDefaultKey ? mappings[firstNonDefaultKey] : null);
                     const preset = presetName ? presets[presetName] : null;
                     if (preset?.nativePreset) {
-                        if (await window._aeReplaceChainWithPresetBlob?.(preset, 'preload-no-timeline')) {
+                        if (await window._aeReplaceChainWithPresetBlob?.(preset, 'preload-no-timeline', { snapshot: false })) {
                             console.log('[tone-switcher] Loaded mapped preset (no tone_changes):', selectedTone, '->', presetName);
                         }
                     } else if (window._aeLoadDefaultPreset) {
@@ -2664,7 +2677,10 @@
                     return;
                 }
 
-                await api.clearChain();
+                if (!chainClearedForLoad) {
+                    await api.clearChain();
+                    chainClearedForLoad = true;
+                }
                 window._toneSwitcher = null;
                 const toneSlotMap = {};
                 const tonePresetMap = {};
