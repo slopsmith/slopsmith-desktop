@@ -2276,11 +2276,11 @@
             if (_reapplyDebounceTimer) clearTimeout(_reapplyDebounceTimer);
             if (_reapplyFollowupTimer) clearTimeout(_reapplyFollowupTimer);
             _reapplyDebounceTimer = setTimeout(() => {
-                void applyToneMappingsNow(songKey);
+                void applyToneMappingsNow(songKey).catch(e => console.warn('[tone-switcher] Reapply (debounce) failed:', e));
                 void refreshTonePanelIfOpen();
             }, 600);
             _reapplyFollowupTimer = setTimeout(() => {
-                void applyToneMappingsNow(songKey);
+                void applyToneMappingsNow(songKey).catch(e => console.warn('[tone-switcher] Reapply (followup) failed:', e));
                 void refreshTonePanelIfOpen();
             }, 1500);
         };
@@ -2696,6 +2696,8 @@
     const origStopSong = window.stopSong;
     if (typeof origStopSong === 'function') {
         window.stopSong = async function(...args) {
+            if (_toneMonitor) { clearInterval(_toneMonitor); _toneMonitor = null; }
+            window._toneAutoSwitchActive = false;
             const result = await origStopSong.apply(this, args);
             if (window._closeChainPanel) window._closeChainPanel();
             if (window._aeLoadDefaultPreset) void window._aeLoadDefaultPreset('song-stop');
