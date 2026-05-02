@@ -8,7 +8,7 @@
   },
   "main": "dist/main/main.js",
   "scripts": {
-    "build:ts": "tsc && node -e \"const fs=require('fs');fs.copyFileSync('src/main/splash.html','dist/main/splash.html');fs.copyFileSync('node_modules/lottie-web/build/player/lottie.min.js','dist/main/lottie.min.js')\"",
+    "build:ts": "tsc && node -e \"const fs=require('fs');fs.copyFileSync('src/main/splash.html','dist/main/splash.html');fs.copyFileSync('src/main/spinner.json','dist/main/spinner.json');fs.copyFileSync('node_modules/lottie-web/build/player/lottie.min.js','dist/main/lottie.min.js')\"",
     "build:audio": "bash scripts/build-audio.sh Release",
     "build:audio:debug": "bash scripts/build-audio.sh Debug",
     "rebuild:audio": "rm -rf build &amp;&amp; bash scripts/build-audio.sh Release",
