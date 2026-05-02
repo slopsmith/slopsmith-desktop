@@ -780,20 +780,6 @@
         else localStorage.setItem('slopsmith-default-preset-name', name);
     }
 
-    function ensureDefaultPresetName() {
-        const presets = getPresets();
-        const names = Object.keys(presets);
-        if (names.length === 0) {
-            setDefaultPresetName('');
-            return '';
-        }
-        const current = getDefaultPresetName();
-        if (current && presets[current]) return current;
-        const first = names[0];
-        setDefaultPresetName(first);
-        return first;
-    }
-
     /** Older saved presets may omit `items`; iterating undefined throws and can crash the embedded UI. */
     function getPresetItems(preset) {
         const items = preset?.items;
@@ -1652,7 +1638,10 @@
             if (!el) return;
             const hw = window.highway || window._slopsmithHighway;
             const switcher = window._toneSwitcher;
-            const taOn = !!window._aeToneAutomation?.isEnabled?.();
+            // Read the TA store once per tick and derive taOn from it so the 200ms
+            // interval doesn't call readTaStore() (JSON.parse) more than once.
+            const taCfg = readTaStore();
+            const taOn = !!taCfg.enabled;
 
             let tNum = 0, changes = [], base = '';
             try {
@@ -1677,7 +1666,7 @@
                 }
             }
             if (!presetName && taOn && activeTone) {
-                const eff = getTaSessionEffectivePreset(activeTone, readTaStore());
+                const eff = getTaSessionEffectivePreset(activeTone, taCfg);
                 if (eff.effectiveName) presetName = eff.effectiveName;
             }
 
@@ -1768,9 +1757,10 @@
                     if (cur.enabled) {
                         cur.enabled = false;
                         writeTaStore(cur);
-                        window._toneSwitcher = null;
-                        try { await applyToneMappingsNow(songKey, { force: true }); } catch (e) { /* ignore */ }
-                        await loadDefaultPreset('tone-automation-off');
+                        // Reuse deactivateToneAutomation() so the loadDefaultPreset fallback
+                        // is conditional on whether manual mappings exist — avoids overwriting
+                        // a chain that applyToneMappingsNow just configured for MIDI mode.
+                        await deactivateToneAutomation();
                     }
                     window._toneMappingsDirty = true;
                 } else if (v === 'automation') {
