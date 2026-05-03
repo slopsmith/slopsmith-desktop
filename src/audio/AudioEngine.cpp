@@ -453,7 +453,9 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
             juce::AudioSourceChannelInfo info(&backingBuffer, 0, numSamples);
             backingTransport->getNextAudioBlock(info);
 
-            // Keep cached position and playing state up to date for lock-free polling
+            // Keep cached position and playing state up to date for lock-free polling.
+            // backingTransport is non-null (checked above) and backingLock is held for
+            // this entire block via ScopedTryLock, so these reads are safe.
             cachedBackingPosition.store(backingTransport->getCurrentPosition());
 
             // Sync the flag if transport stopped at EOF
