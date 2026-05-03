@@ -144,7 +144,7 @@ clone_slopsmith() {
 		masc0t/slopsmith-plugin-rooms
 		masc0t/slopsmith-plugin-the-daily
 		masc0t/slopsmith-plugin-themes
-		masc0t/slopsmith-update-manager:update_manager
+		byrongamatos/slopsmith-plugin-update-manager:update_manager
 		narvasus/slopsmith-plugin-stem-mixer
 		renanboni/slopsmith-plugin-jumpingtab
 		topkoa/slopsmith-plugin-guitar-theory

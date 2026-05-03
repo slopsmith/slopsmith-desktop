@@ -300,7 +300,12 @@ export async function startPython(): Promise<void> {
     pythonProcess.stdout?.on('data', (data: Buffer) => {
         try {
             const msg = data.toString().trim();
-            if (msg) console.log(`[python:stdout] ${msg}`);
+            if (msg) {
+                console.log(`[python:stdout] ${msg}`);
+                if (msg.includes('Uvicorn running on') || msg.includes('Application startup complete')) {
+                    serverReady = true;
+                }
+            }
         } catch { /* EPIPE or similar when the process dies mid-write */ }
     });
 
