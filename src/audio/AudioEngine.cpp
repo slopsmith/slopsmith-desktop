@@ -326,13 +326,19 @@ bool AudioEngine::loadBackingTrack(const juce::File& file)
     backingTransport = std::make_unique<juce::AudioTransportSource>();
     backingTransport->setSource(backingSource.get(), 0, nullptr, reader->sampleRate);
     backingTransport->prepareToPlay(currentBlockSize, currentSampleRate);
+    cachedBackingDuration.store(backingTransport->getLengthInSeconds());
+    cachedBackingPosition.store(0.0);
     return true;
 }
 
 void AudioEngine::setBackingPosition(double seconds)
 {
     const juce::ScopedLock sl(backingLock);
-    if (backingTransport) backingTransport->setPosition(seconds);
+    if (backingTransport)
+    {
+        backingTransport->setPosition(seconds);
+        cachedBackingPosition.store(seconds);
+    }
 }
 
 void AudioEngine::startBacking()
@@ -353,30 +359,6 @@ void AudioEngine::stopBacking()
         backingTransport->stop();
         backingPlaying.store(false);
     }
-}
-
-bool AudioEngine::isBackingPlaying() const
-{
-    const juce::ScopedLock sl(backingLock);
-    if (backingTransport)
-        return backingTransport->isPlaying();
-    return false;
-}
-
-double AudioEngine::getBackingPosition() const
-{
-    const juce::ScopedLock sl(backingLock);
-    if (backingTransport)
-        return backingTransport->getCurrentPosition();
-    return 0.0;
-}
-
-double AudioEngine::getBackingDuration() const
-{
-    const juce::ScopedLock sl(backingLock);
-    if (backingTransport)
-        return backingTransport->getLengthInSeconds();
-    return 0.0;
 }
 
 void AudioEngine::resetPeaks()
@@ -470,6 +452,9 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
             backingBuffer.clear();
             juce::AudioSourceChannelInfo info(&backingBuffer, 0, numSamples);
             backingTransport->getNextAudioBlock(info);
+
+            // Keep cached position and playing state up to date for lock-free polling
+            cachedBackingPosition.store(backingTransport->getCurrentPosition());
 
             // Sync the flag if transport stopped at EOF
             if (!backingTransport->isPlaying())

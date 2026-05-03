@@ -62,9 +62,10 @@ public:
     void setBackingPosition(double seconds);
     void startBacking();
     void stopBacking();
-    bool isBackingPlaying() const;
-    double getBackingPosition() const;
-    double getBackingDuration() const;
+    // Lock-free reads — safe to call from any thread without blocking the audio callback
+    bool isBackingPlaying() const { return backingPlaying.load(); }
+    double getBackingPosition() const { return cachedBackingPosition.load(); }
+    double getBackingDuration() const { return cachedBackingDuration.load(); }
 
     // Metering (read from any thread — atomic)
     float getInputLevel() const { return currentInputLevel.load(); }
@@ -106,6 +107,8 @@ private:
     std::unique_ptr<juce::AudioTransportSource> backingTransport;
     juce::AudioBuffer<float> backingBuffer;
     std::atomic<bool> backingPlaying{false};
+    std::atomic<double> cachedBackingPosition{0.0};
+    std::atomic<double> cachedBackingDuration{0.0};
     juce::CriticalSection backingLock;
 
     bool audioRunning = false;
