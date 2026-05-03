@@ -86,6 +86,7 @@ private:
                                           const juce::AudioIODeviceCallbackContext& context) override;
     void audioDeviceAboutToStart(juce::AudioIODevice* device) override;
     void audioDeviceStopped() override;
+    void stopBackingNoLock(); // stop transport without acquiring backingLock (caller holds it)
 
     juce::AudioDeviceManager deviceManager;
     SignalChain signalChain;

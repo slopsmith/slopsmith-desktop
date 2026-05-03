@@ -315,7 +315,7 @@ void AudioEngine::stopAudio()
 bool AudioEngine::loadBackingTrack(const juce::File& file)
 {
     const juce::ScopedLock sl(backingLock);
-    stopBacking();
+    stopBackingNoLock();
     backingTransport.reset();
     backingSource.reset();
 
@@ -359,14 +359,19 @@ void AudioEngine::startBacking()
     }
 }
 
-void AudioEngine::stopBacking()
+void AudioEngine::stopBackingNoLock()
 {
-    const juce::ScopedLock sl(backingLock);
     if (backingTransport)
     {
         backingTransport->stop();
         backingPlaying.store(false);
     }
+}
+
+void AudioEngine::stopBacking()
+{
+    const juce::ScopedLock sl(backingLock);
+    stopBackingNoLock();
 }
 
 void AudioEngine::resetPeaks()
