@@ -297,10 +297,22 @@ export async function startPython(): Promise<void> {
         stdio: ['pipe', 'pipe', 'pipe'],
     });
 
+    // Flip `serverReady` when uvicorn emits a startup signal on either
+    // stdout or stderr. structlog routes these messages to stdout in dev
+    // mode; plain uvicorn uses stderr — so we watch both.
+    function checkReadiness(msg: string): void {
+        if (!serverReady && (msg.includes('Uvicorn running on') || msg.includes('Application startup complete'))) {
+            serverReady = true;
+        }
+    }
+
     pythonProcess.stdout?.on('data', (data: Buffer) => {
         try {
             const msg = data.toString().trim();
-            if (msg) console.log(`[python:stdout] ${msg}`);
+            if (msg) {
+                console.log(`[python:stdout] ${msg}`);
+                checkReadiness(msg);
+            }
         } catch { /* EPIPE or similar when the process dies mid-write */ }
     });
 
@@ -313,10 +325,7 @@ export async function startPython(): Promise<void> {
             const msg = data.toString().trim();
             if (msg) {
                 console.log(`[python] ${msg}`);
-                // Detect uvicorn startup message
-                if (msg.includes('Uvicorn running on') || msg.includes('Application startup complete')) {
-                    serverReady = true;
-                }
+                checkReadiness(msg);
             }
         } catch { /* EPIPE or similar when the process dies mid-write */ }
     });
@@ -339,12 +348,14 @@ export async function waitForPython(): Promise<number> {
     // Wait for the python child process we just spawned to be actually
     // ready to serve. Two signals are required, in order:
     //
-    //   1. The OUR-process stderr handler flips `serverReady` to true
-    //      when it sees uvicorn print "Application startup complete"
-    //      or "Uvicorn running on". This is the authoritative readiness
-    //      signal — it comes from the child process we just spawned, so
-    //      it can't be fooled by a zombie python from a prior crashed
-    //      launch still listening on a different port.
+    //   1. The stdout-or-stderr handler (via checkReadiness) flips
+    //      `serverReady` to true when it sees uvicorn print
+    //      "Application startup complete" or "Uvicorn running on".
+    //      structlog routes these to stdout in dev mode; plain uvicorn
+    //      uses stderr — so we watch both. This is the authoritative
+    //      readiness signal — it comes from the child process we just
+    //      spawned, so it can't be fooled by a zombie python from a
+    //      prior crashed launch still listening on a different port.
     //
     //   2. Once that flag flips, a single HTTP probe to /api/plugins
     //      confirms the listener is reachable on the port we picked.
