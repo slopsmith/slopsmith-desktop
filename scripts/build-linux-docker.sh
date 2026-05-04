@@ -6,7 +6,6 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-SLOPSMITH_DIR="$PROJECT_DIR/../slopsmith"
 DEVCONTAINER_DIR="$PROJECT_DIR/.devcontainer"
 
 # Colors
@@ -36,19 +35,7 @@ if ! docker info &>/dev/null; then
     exit 1
 fi
 
-# Verify the sibling Slopsmith checkout actually exists. Without this
-# check, Docker silently creates an empty bind-mount target and
-# clone_slopsmith inside the container then short-circuits because
-# SLOPSMITH_DIR is set — failure would only surface later as missing
-# server.py / plugins.
-if [[ ! -d "$SLOPSMITH_DIR/.git" && ! -f "$SLOPSMITH_DIR/server.py" ]]; then
-    echo -e "${RED}Error: Slopsmith checkout missing or invalid at $SLOPSMITH_DIR${NC}" >&2
-    echo "Expected a Slopsmith working tree (containing .git/ or server.py) as a sibling of slopsmith-desktop." >&2
-    echo "Clone it: git clone https://github.com/byrongamatos/slopsmith.git ../slopsmith" >&2
-    exit 1
-fi
-
-echo -e "${GREEN}✓${NC} Docker and Slopsmith repository found"
+echo -e "${GREEN}✓${NC} Docker available"
 echo ""
 
 # Build container image
@@ -67,6 +54,14 @@ docker build \
 echo -e "${GREEN}✓${NC} Container image built"
 echo ""
 
+# Clear stale CMake build cache. CMakeCache.txt bakes in the build path;
+# when the project is mounted at a different path inside the container the
+# paths don't match and cmake aborts. A clean build/ guarantees consistency.
+if [[ -d "$PROJECT_DIR/build" ]]; then
+    echo -e "${BLUE}Clearing stale CMake cache...${NC}"
+    rm -rf "$PROJECT_DIR/build"
+fi
+
 # Generate unique container name
 CONTAINER_NAME="slopsmith-build-$(date +%s)-$$-$RANDOM"
 
@@ -82,11 +77,10 @@ set +e
 docker run \
     --name "$CONTAINER_NAME" \
     -v "$PROJECT_DIR:/workspace" \
-    -v "$SLOPSMITH_DIR:/workspaces/slopsmith" \
     -w /workspace \
-    -e SLOPSMITH_DIR=/workspaces/slopsmith \
     -e ELECTRON_CACHE=/home/vscode/.cache/electron \
     -e ELECTRON_BUILDER_CACHE=/home/vscode/.cache/electron-builder \
+    -e GIT_TERMINAL_PROMPT=0 \
     -t \
     slopsmith-ubuntu-builder \
     bash -c './scripts/build-linux-ubuntu.sh'

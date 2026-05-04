@@ -37,26 +37,6 @@ RUN . /etc/build.env && \
     apt-get install -y nodejs && \
     rm -rf /var/lib/apt/lists/*
 
-# ── Python ──────────────────────────────────────────────────────────────────
-# Ubuntu 22.04 main repos ship Python 3.10 — the 3.12 we need comes from
-# the deadsnakes PPA. `python3-distutils` was removed from 3.12's stdlib,
-# but `setuptools` (below) provides the compatibility shim.
-#
-# deadsnakes only ships major.minor packages (`python3.12`), not the
-# full patch version (`3.12.9`) that `.build-config.json` pins for the
-# Windows embeddable zip URL. PYTHON_MAJOR_MINOR strips the patch.
-RUN . /etc/build.env && \
-    apt-get update && apt-get install -y --no-install-recommends software-properties-common && \
-    add-apt-repository ppa:deadsnakes/ppa && \
-    apt-get update && apt-get install -y --no-install-recommends \
-        python${PYTHON_MAJOR_MINOR} \
-        python${PYTHON_MAJOR_MINOR}-dev \
-        python${PYTHON_MAJOR_MINOR}-venv \
-        python3-pip \
-        python3-setuptools && \
-    rm -rf /var/lib/apt/lists/* && \
-    ln -sf /usr/bin/python${PYTHON_MAJOR_MINOR} /usr/bin/python3
-
 # ── .NET ────────────────────────────────────────────────────────────────────
 RUN . /etc/build.env && \
     curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh && \
