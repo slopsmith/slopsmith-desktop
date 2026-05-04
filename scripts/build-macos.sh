@@ -124,6 +124,28 @@ bundle_python_impl() {
     # PBS tarballs ship a working pip pre-installed in the bundle's
     # site-packages, and `bin/python3` is a real binary (not a symlink),
     # so the install is fully relocatable as-is.
+    #
+    # Install slopsmith's runtime requirements first (single source of
+    # truth — drift used to silently break desktop builds whenever
+    # slopsmith added a dep), then desktop-only extras. SLOPSMITH_DIR
+    # is exported by clone_slopsmith() in build-common.sh; fall back
+    # to local-dev paths to match bundle-slopsmith.sh's discovery so
+    # this script works outside CI too.
+    if [[ -z "${SLOPSMITH_DIR:-}" ]]; then
+        if [[ -d "$PROJECT_DIR/../slopsmith" ]]; then
+            SLOPSMITH_DIR="$PROJECT_DIR/../slopsmith"
+        elif [[ -d "$HOME/Repositories/slopsmith" ]]; then
+            SLOPSMITH_DIR="$HOME/Repositories/slopsmith"
+        fi
+    fi
+    if [[ -z "${SLOPSMITH_DIR:-}" ]] || [[ ! -f "$SLOPSMITH_DIR/requirements.txt" ]]; then
+        echo "ERROR: slopsmith requirements.txt not found (SLOPSMITH_DIR=${SLOPSMITH_DIR:-<unset>})." >&2
+        echo "       Expected SLOPSMITH_DIR to be exported by clone_slopsmith() in build-common.sh," >&2
+        echo "       or slopsmith cloned next to this repo." >&2
+        exit 1
+    fi
+    "$runtime/bin/python3" -m pip install --quiet --no-cache-dir \
+        -r "$SLOPSMITH_DIR/requirements.txt" 2>&1 | tail -5
     "$runtime/bin/python3" -m pip install --quiet --no-cache-dir \
         -r "$PROJECT_DIR/.packages/python.txt" 2>&1 | tail -5
 }

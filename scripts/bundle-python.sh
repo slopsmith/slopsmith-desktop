@@ -65,9 +65,41 @@ cp "$PYTHON_LIBDIR"/libpython${PYTHON_VERSION}*.so* "$PYTHON_BUNDLE/lib/" 2>/dev
 echo " Bootstrapping pip via ensurepip in the bundled runtime"
 LD_LIBRARY_PATH="$PYTHON_BUNDLE/lib" "$PYTHON_BUNDLE/bin/python3" -m ensurepip --upgrade --default-pip
 
-# Install application packages into the bundled runtime.
-echo " Installing application packages"
-        LD_LIBRARY_PATH="$PYTHON_BUNDLE/lib" "$PYTHON_BUNDLE/bin/python3" -m pip install --quiet --no-cache-dir \
-        -r "$PROJECT_DIR/.packages/python.txt" 2>&1 | tail -3
+# Resolve the slopsmith repo so we can pip install from its
+# requirements.txt — that's the single source of truth for runtime
+# deps. Search order matches bundle-slopsmith.sh:
+#   1. $SLOPSMITH_DIR env var (set by clone_slopsmith() in CI)
+#   2. ../slopsmith (sibling to this repo)
+#   3. ~/Repositories/slopsmith (legacy dev layout)
+if [ -z "${SLOPSMITH_DIR:-}" ]; then
+    if [ -d "$PROJECT_DIR/../slopsmith" ]; then
+        SLOPSMITH_DIR="$PROJECT_DIR/../slopsmith"
+    elif [ -d "$HOME/Repositories/slopsmith" ]; then
+        SLOPSMITH_DIR="$HOME/Repositories/slopsmith"
+    fi
+fi
+if [ -z "${SLOPSMITH_DIR:-}" ] || [ ! -f "$SLOPSMITH_DIR/requirements.txt" ]; then
+    echo "ERROR: slopsmith requirements.txt not found." >&2
+    echo "Searched:" >&2
+    echo "  \$SLOPSMITH_DIR=${SLOPSMITH_DIR:-<unset>}" >&2
+    echo "  $PROJECT_DIR/../slopsmith" >&2
+    echo "  $HOME/Repositories/slopsmith" >&2
+    echo "Clone slopsmith next to this repo: git clone https://github.com/byrongamatos/slopsmith.git $PROJECT_DIR/../slopsmith" >&2
+    exit 1
+fi
+
+# Install slopsmith's runtime requirements first — single source of
+# truth. The hand-maintained .packages/python.txt approach silently
+# broke desktop builds whenever slopsmith added a dep (e.g.
+# structlog), so the desktop list is now reserved for desktop-only
+# extras applied on top.
+echo " Installing slopsmith runtime requirements ($SLOPSMITH_DIR/requirements.txt)"
+LD_LIBRARY_PATH="$PYTHON_BUNDLE/lib" "$PYTHON_BUNDLE/bin/python3" -m pip install --quiet --no-cache-dir \
+    -r "$SLOPSMITH_DIR/requirements.txt" 2>&1 | tail -3
+
+# Install desktop-only Python extras into the bundled runtime.
+echo " Installing desktop-only Python extras"
+LD_LIBRARY_PATH="$PYTHON_BUNDLE/lib" "$PYTHON_BUNDLE/bin/python3" -m pip install --quiet --no-cache-dir \
+    -r "$PROJECT_DIR/.packages/python.txt" 2>&1 | tail -3
 echo " Python runtime size: $(du -sh "$PYTHON_BUNDLE" | cut -f1)"
 echo "=== Python bundle complete ==="

@@ -113,7 +113,26 @@ bundle_python_impl() {
 # Install build tools first (required for building from source on Windows embeddable Python)
 "$PROJECT_DIR/resources/python/python.exe" -m pip install --quiet --no-cache-dir \
         setuptools wheel
-# Install application packages
+# Install slopsmith runtime requirements (single source of truth —
+# drift used to silently break desktop builds whenever slopsmith added
+# a dep), then desktop-only extras. SLOPSMITH_DIR is exported by
+# clone_slopsmith() in build-common.sh; fall back to local-dev paths
+# to match bundle-slopsmith.sh's discovery so this works outside CI.
+if [[ -z "${SLOPSMITH_DIR:-}" ]]; then
+    if [[ -d "$PROJECT_DIR/../slopsmith" ]]; then
+        SLOPSMITH_DIR="$PROJECT_DIR/../slopsmith"
+    elif [[ -d "$HOME/Repositories/slopsmith" ]]; then
+        SLOPSMITH_DIR="$HOME/Repositories/slopsmith"
+    fi
+fi
+if [[ -z "${SLOPSMITH_DIR:-}" ]] || [[ ! -f "$SLOPSMITH_DIR/requirements.txt" ]]; then
+    echo "ERROR: slopsmith requirements.txt not found (SLOPSMITH_DIR=${SLOPSMITH_DIR:-<unset>})." >&2
+    echo "       Expected SLOPSMITH_DIR to be exported by clone_slopsmith() in build-common.sh," >&2
+    echo "       or slopsmith cloned next to this repo." >&2
+    exit 1
+fi
+"$PROJECT_DIR/resources/python/python.exe" -m pip install --quiet --no-cache-dir \
+        -r "$SLOPSMITH_DIR/requirements.txt"
 "$PROJECT_DIR/resources/python/python.exe" -m pip install --quiet --no-cache-dir \
         -r "$PROJECT_DIR/.packages/python.txt"
 }
