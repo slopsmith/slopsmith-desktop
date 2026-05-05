@@ -1,7 +1,7 @@
 {
     "id": "audio_engine",
     "name": "Audio Engine",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "description": "Native audio I/O, VST hosting, amp modeling, and pitch detection",
     "nav": {
         "label": "Audio",

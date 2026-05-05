@@ -53,6 +53,10 @@
     const pitchFreq = $('ae-pitch-freq');
     const pitchCentsBar = $('ae-pitch-cents');
     const savePresetBtn = $('ae-save-preset');
+    const noiseGateEnable = $('ae-noise-gate-enable');
+    const noiseGateThresholdWrap = $('ae-noise-gate-threshold-wrap');
+    const noiseGateThresholdSlider = $('ae-noise-gate-threshold');
+    const noiseGateThresholdLabel = $('ae-noise-gate-threshold-label');
 
     /** Sliders show dB; `api.setGain` and saved presets use linear amplitude gain (legacy presets unchanged). */
     const GAIN_SLIDER_DB_MIN = -60;
@@ -104,6 +108,78 @@
         } catch { return null; }
     }
 
+    // ── Noise gate (parity with NAM: screen.js + worklet/nam-processor.js) ─────
+    // Main thread (nam_tone screen.js): threshold in dBFS → worklet converts with Math.pow(10, db/20).
+    // Worklet process(): RMS over block; open when rms >= thresholdLinear; hold gateHoldMax samples (4800);
+    // smooth gate gain with attack 0.005 / release 0.05 per frame; output silence when gain < 0.0001.
+    // Desktop: api.setNoiseGate(payload) should apply the same math in the native chain, or no-op when disabled.
+    const AE_NOISE_GATE_HOLD_SAMPLES = 4800;
+    const AE_NOISE_GATE_ATTACK = 0.005;
+    const AE_NOISE_GATE_RELEASE = 0.05;
+
+    function aeNoiseGateDbToLinear(db) {
+        return Math.pow(10, db / 20);
+    }
+
+    function aeSyncNoiseGateThresholdLabel() {
+        if (!noiseGateThresholdLabel || !noiseGateThresholdSlider) return;
+        const db = parseFloat(noiseGateThresholdSlider.value);
+        noiseGateThresholdLabel.textContent = (Number.isFinite(db) ? db.toFixed(0) : '-60') + ' dB';
+    }
+
+    function aeSyncNoiseGatePanelVisibility() {
+        if (!noiseGateThresholdWrap || !noiseGateEnable) return;
+        noiseGateThresholdWrap.style.display = noiseGateEnable.checked ? '' : 'none';
+    }
+
+    function aePersistNoiseGateThreshold() {
+        if (!noiseGateThresholdSlider) return;
+        try {
+            const db = parseFloat(noiseGateThresholdSlider.value);
+            localStorage.setItem('slopsmith-audio-noise-gate', JSON.stringify({
+                thresholdDb: Number.isFinite(db) ? db : -60,
+            }));
+        } catch { /* ignore */ }
+    }
+
+    function aeInitNoiseGateUi() {
+        if (noiseGateEnable) noiseGateEnable.checked = false;
+        try {
+            const raw = localStorage.getItem('slopsmith-audio-noise-gate');
+            if (raw && noiseGateThresholdSlider) {
+                const o = JSON.parse(raw);
+                const t = Number(o?.thresholdDb);
+                if (Number.isFinite(t)) {
+                    const clamped = Math.min(0, Math.max(-96, t));
+                    noiseGateThresholdSlider.value = String(clamped);
+                }
+            }
+        } catch { /* ignore */ }
+        aeSyncNoiseGateThresholdLabel();
+        aeSyncNoiseGatePanelVisibility();
+    }
+
+    function aeApplyNoiseGateToEngine() {
+        const bridge = window.slopsmithDesktop?.audio;
+        if (!bridge || typeof bridge.setNoiseGate !== 'function') {
+            if (bridge && !window._aeNoiseGateBridgeWarned) {
+                window._aeNoiseGateBridgeWarned = true;
+                console.warn('[audio-engine] audio.setNoiseGate is not available — wire the native engine to enable processing.');
+            }
+            return;
+        }
+        const rawDb = parseFloat(noiseGateThresholdSlider?.value ?? '-60');
+        const thresholdDb = Math.min(0, Math.max(-96, Number.isFinite(rawDb) ? rawDb : -60));
+        bridge.setNoiseGate({
+            enabled: !!noiseGateEnable?.checked,
+            thresholdDb,
+            thresholdLinear: aeNoiseGateDbToLinear(thresholdDb),
+            holdSamples: AE_NOISE_GATE_HOLD_SAMPLES,
+            attack: AE_NOISE_GATE_ATTACK,
+            release: AE_NOISE_GATE_RELEASE,
+        });
+    }
+
     // ── Init ──────────────────────────────────────────────────────────────────
     async function init() {
         const available = await api.isAvailable();
@@ -119,6 +195,7 @@
         await loadDeviceTypes();
         await refreshChain();
         api.loadPluginList();
+        aeInitNoiseGateUi();
         setupEvents();
         startMetering();
 
@@ -152,6 +229,7 @@
                 toggleBtn.textContent = 'Stop';
                 statusDot.className = 'w-3 h-3 rounded-full bg-emerald-500';
                 statusText.textContent = 'Audio running';
+                aeApplyNoiseGateToEngine();
             }
         }
 
@@ -189,6 +267,8 @@
             }
             if (savedChain.length > 0) await refreshChain();
         }
+
+        aeApplyNoiseGateToEngine();
     }
 
     function saveChainStateFromChain(chain) {
@@ -439,6 +519,7 @@
                 toggleBtn.textContent = 'Stop';
                 statusDot.className = 'w-3 h-3 rounded-full bg-emerald-500';
                 statusText.textContent = 'Audio running';
+                aeApplyNoiseGateToEngine();
             }
         });
 
@@ -470,6 +551,7 @@
                 toggleBtn.textContent = 'Stop';
                 statusDot.className = 'w-3 h-3 rounded-full bg-emerald-500';
                 statusText.textContent = 'Audio running';
+                aeApplyNoiseGateToEngine();
                 saveDeviceSettings();
             } else {
                 statusText.textContent = 'Failed to configure device';
@@ -499,6 +581,18 @@
             api.setGain('output', dbToLinearGain(db));
             outputGainLabel.textContent = formatGainDbLabel(db);
         });
+
+        if (noiseGateEnable && noiseGateThresholdWrap && noiseGateThresholdSlider) {
+            noiseGateEnable.addEventListener('change', () => {
+                aeSyncNoiseGatePanelVisibility();
+                aeApplyNoiseGateToEngine();
+            });
+            noiseGateThresholdSlider.addEventListener('input', () => {
+                aeSyncNoiseGateThresholdLabel();
+                aePersistNoiseGateThreshold();
+                aeApplyNoiseGateToEngine();
+            });
+        }
 
         // Add VST
         addVstBtn.addEventListener('click', () => {
