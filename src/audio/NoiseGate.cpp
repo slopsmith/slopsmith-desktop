@@ -4,52 +4,44 @@
 
 float NoiseGate::timeMsToAlpha(double sr, float timeMs)
 {
-    using namespace NoiseGateTuning;
+    using namespace NoiseGateSpecs;
     if (sr <= 0.0 || timeMs <= 0.0f)
         return 1.0f;
 
     const float tauSec = timeMs * 0.001f;
-    // First-order step toward target: y += α·(x−y); τ ≈ −Δt/ln(1−α) with Δt = 1/Fs
     return 1.0f - std::exp(-1.0f / (tauSec * (float)sr));
 }
 
 void NoiseGate::prepare(double sr, int /*samplesPerBlock*/)
 {
-    const double srUse = sr > 0.0 ? sr : 48000.0;
-
-    using namespace NoiseGateTuning;
-    coeffAttack = timeMsToAlpha(srUse, kAttackMs);
-    coeffReleaseFast = timeMsToAlpha(srUse, kReleaseFastMs);
-    coeffReleaseSlow = timeMsToAlpha(srUse, kReleaseSlowMs);
-    coeffGainReductionSmooth = timeMsToAlpha(srUse, kGainReductionSmoothMs);
-
+    sampleRate = sr > 0.0 ? sr : 48000.0;
+    coeffAttack = timeMsToAlpha(sampleRate, NoiseGateSpecs::kAttackMs);
     reset();
 }
 
 void NoiseGate::reset()
 {
-    envCurrentDb = NoiseGateTuning::kGainReductionDbClamp;
-    gainReductionDb = 0.0f;
+    currentGain = 1.0f;
 }
 
-void NoiseGate::setParameters(bool enabled,
-                              float thresholdLinear,
-                              int holdSamples,
-                              float attack,
-                              float release)
+void NoiseGate::setParameters(bool enabled, float thresholdDb, float releaseMs, float depthDb)
 {
+    using namespace NoiseGateSpecs;
+
     paramEnabled.store(enabled, std::memory_order_relaxed);
 
-    const float tl = std::max(NoiseGateTuning::kMinThresholdLinear, thresholdLinear);
-    paramThresholdLinear.store(tl, std::memory_order_relaxed);
+    const float tDb = juce::jlimit(kThresholdDbMin, kThresholdDbMax, thresholdDb);
+    paramThresholdDb.store(tDb, std::memory_order_relaxed);
+    const float tLin = std::pow(10.0f, tDb / 20.0f);
+    paramThresholdLinear.store(juce::jmax(kAmpFloor, tLin), std::memory_order_relaxed);
 
-    const int hs = std::max(0, holdSamples);
-    paramHoldSamples.store(hs, std::memory_order_relaxed);
+    const float rMs = juce::jlimit(kReleaseMsMin, kReleaseMsMax, releaseMs);
+    paramReleaseMs.store(rMs, std::memory_order_relaxed);
 
-    const float att = juce::jlimit(0.0f, 1.0f, attack);
-    const float rel = juce::jlimit(0.0f, 1.0f, release);
-    paramAttack.store(att, std::memory_order_relaxed);
-    paramRelease.store(rel, std::memory_order_relaxed);
+    const float dDb = juce::jlimit(kDepthDbMin, kDepthDbMax, depthDb);
+    paramDepthDb.store(dDb, std::memory_order_relaxed);
+    const float dLin = std::pow(10.0f, dDb / 20.0f);
+    paramDepthLinear.store(juce::jlimit(kAmpFloor, 1.0f, dLin), std::memory_order_relaxed);
 }
 
 void NoiseGate::processBlock(juce::AudioBuffer<float>& buffer)
@@ -62,47 +54,25 @@ void NoiseGate::processBlock(juce::AudioBuffer<float>& buffer)
     if (numChannels <= 0 || numSamples <= 0)
         return;
 
-    const float threshLin = paramThresholdLinear.load(std::memory_order_relaxed);
-    const float thresholdDb = 20.0f * std::log10(juce::jmax(threshLin, NoiseGateTuning::kMinThresholdLinear));
+    const float thresh = paramThresholdLinear.load(std::memory_order_relaxed);
+    const float depthLin = paramDepthLinear.load(std::memory_order_relaxed);
+    const float releaseMs = paramReleaseMs.load(std::memory_order_relaxed);
 
-    using namespace NoiseGateTuning;
+    const float coeffRelease = timeMsToAlpha(sampleRate, releaseMs);
 
     for (int i = 0; i < numSamples; ++i)
     {
-        // Linked sidechain: peak magnitude across channels (Decimator-style stereo linking).
         float det = 0.0f;
         for (int ch = 0; ch < numChannels; ++ch)
             det = juce::jmax(det, std::abs(buffer.getSample(ch, i)));
 
-        const float inputDb = 20.0f * std::log10(det + kDbFloorLinear);
-
-        // ── Adaptive envelope follower (dB domain) ───────────────────────────
-        if (inputDb > envCurrentDb)
-        {
-            envCurrentDb += coeffAttack * (inputDb - envCurrentDb);
-        }
+        if (det > thresh)
+            currentGain += coeffAttack * (1.0f - currentGain);
         else
-        {
-            const float deltaDb = envCurrentDb - inputDb; // > 0 in release
-            const float releaseCoeff = (deltaDb > kAbruptDropDb) ? coeffReleaseFast : coeffReleaseSlow;
-            envCurrentDb += releaseCoeff * (inputDb - envCurrentDb);
-        }
+            currentGain += coeffRelease * (depthLin - currentGain);
 
-        // ── Downward expansion → target gain reduction (dB) ─────────────────
-        float targetGainDb = 0.0f;
-        if (envCurrentDb < thresholdDb)
-            targetGainDb = (envCurrentDb - thresholdDb) * kExpansionRatio;
-
-        targetGainDb = juce::jmax(targetGainDb, kGainReductionDbClamp);
-
-        gainReductionDb += coeffGainReductionSmooth * (targetGainDb - gainReductionDb);
-
-        // ── Linear application ─────────────────────────────────────────────
-        float linGain = std::pow(10.0f, gainReductionDb / 20.0f);
-        if (linGain < 1.0e-6f)
-            linGain = 0.0f;
-
+        const float g = currentGain;
         for (int ch = 0; ch < numChannels; ++ch)
-            buffer.setSample(ch, i, buffer.getSample(ch, i) * linGain);
+            buffer.setSample(ch, i, buffer.getSample(ch, i) * g);
     }
 }

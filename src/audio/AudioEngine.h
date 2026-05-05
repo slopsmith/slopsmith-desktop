@@ -58,11 +58,7 @@ public:
     bool isMonitorMuted() const { return monitorMuted.load(); }
 
     // Noise gate (post-input-gain, pre FX chain; pitch detector sees ungated signal)
-    void setNoiseGate(bool enabled,
-                      float thresholdLinear,
-                      int holdSamples,
-                      float attack,
-                      float release);
+    void setNoiseGate(bool enabled, float thresholdDb, float releaseMs, float depthDb);
 
     // Backing track
     void setBackingVolume(float vol) { backingVolume.store(vol); }

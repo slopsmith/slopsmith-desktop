@@ -284,23 +284,19 @@ static Napi::Value SetNoiseGate(const Napi::CallbackInfo& info)
 
     bool enabled = o.Has("enabled") ? o.Get("enabled").As<Napi::Boolean>().Value() : false;
 
-    float thresholdLinear = 1.0e-6f;
-    if (o.Has("thresholdLinear") && o.Get("thresholdLinear").IsNumber())
-        thresholdLinear = (float)o.Get("thresholdLinear").As<Napi::Number>().DoubleValue();
+    float thresholdDb = -60.0f;
+    if (o.Has("thresholdDb") && o.Get("thresholdDb").IsNumber())
+        thresholdDb = (float)o.Get("thresholdDb").As<Napi::Number>().DoubleValue();
 
-    int holdSamples = 4800;
-    if (o.Has("holdSamples") && o.Get("holdSamples").IsNumber())
-        holdSamples = o.Get("holdSamples").As<Napi::Number>().Int32Value();
+    float releaseMs = 100.0f;
+    if (o.Has("releaseMs") && o.Get("releaseMs").IsNumber())
+        releaseMs = (float)o.Get("releaseMs").As<Napi::Number>().DoubleValue();
 
-    float attack = 0.005f;
-    if (o.Has("attack") && o.Get("attack").IsNumber())
-        attack = (float)o.Get("attack").As<Napi::Number>().DoubleValue();
+    float depthDb = -60.0f;
+    if (o.Has("depthDb") && o.Get("depthDb").IsNumber())
+        depthDb = (float)o.Get("depthDb").As<Napi::Number>().DoubleValue();
 
-    float release = 0.05f;
-    if (o.Has("release") && o.Get("release").IsNumber())
-        release = (float)o.Get("release").As<Napi::Number>().DoubleValue();
-
-    engine->setNoiseGate(enabled, thresholdLinear, holdSamples, attack, release);
+    engine->setNoiseGate(enabled, thresholdDb, releaseMs, depthDb);
     return env.Undefined();
 }
 

@@ -124,11 +124,9 @@ export function initAudioBridge(mainWindow: BrowserWindow | null): void {
             _event,
             payload: {
                 enabled: boolean;
-                thresholdDb?: number;
-                thresholdLinear: number;
-                holdSamples: number;
-                attack: number;
-                release: number;
+                thresholdDb: number;
+                releaseMs: number;
+                depthDb: number;
             },
         ) => {
             audio?.setNoiseGate(payload);

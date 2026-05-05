@@ -383,13 +383,9 @@ void AudioEngine::resetPeaks()
     outputPeak.store(0.0f);
 }
 
-void AudioEngine::setNoiseGate(bool enabled,
-                               float thresholdLinear,
-                               int holdSamples,
-                               float attack,
-                               float release)
+void AudioEngine::setNoiseGate(bool enabled, float thresholdDb, float releaseMs, float depthDb)
 {
-    noiseGate.setParameters(enabled, thresholdLinear, holdSamples, attack, release);
+    noiseGate.setParameters(enabled, thresholdDb, releaseMs, depthDb);
 }
 
 // ── Audio Callback ────────────────────────────────────────────────────────────
