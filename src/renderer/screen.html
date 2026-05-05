@@ -102,6 +102,23 @@
         </div>
     </div>
 
+    <!-- Noise Gate (NAM / nam-processor.js — threshold & timing constants match desktop setNoiseGate payload) -->
+    <div class="mb-6">
+        <h3 class="text-lg font-semibold mb-3 text-slate-200">Noise Gate</h3>
+        <label class="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" id="ae-noise-gate-enable"
+                   class="w-4 h-4 rounded bg-slate-700 border-slate-600 accent-emerald-500">
+            <span class="text-sm text-slate-300">Enable noise gate</span>
+        </label>
+        <div id="ae-noise-gate-threshold-wrap" class="mt-3" style="display: none;">
+            <label class="block text-xs text-slate-400 mb-1" for="ae-noise-gate-threshold">
+                Gate Threshold (dBFS): <span id="ae-noise-gate-threshold-label">-60 dB</span>
+            </label>
+            <input type="range" id="ae-noise-gate-threshold" min="-96" max="0" step="1" value="-60"
+                   class="w-full accent-emerald-500">
+        </div>
+    </div>
+
     <!-- Signal Chain -->
     <div class="mb-6">
         <h3 class="text-lg font-semibold mb-3 text-slate-200">Signal Chain</h3>
