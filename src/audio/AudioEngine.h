@@ -1,4 +1,5 @@
 #pragma once
+#include "NoiseGate.h"
 #include "SignalChain.h"
 #include "PitchDetector.h"
 #include <juce_audio_devices/juce_audio_devices.h>
@@ -56,6 +57,13 @@ public:
     void setMonitorMute(bool mute) { monitorMuted.store(mute); }
     bool isMonitorMuted() const { return monitorMuted.load(); }
 
+    // Noise gate (post-input-gain, pre FX chain; pitch detector sees ungated signal)
+    void setNoiseGate(bool enabled,
+                      float thresholdLinear,
+                      int holdSamples,
+                      float attack,
+                      float release);
+
     // Backing track
     void setBackingVolume(float vol) { backingVolume.store(vol); }
     bool loadBackingTrack(const juce::File& file);
@@ -91,6 +99,7 @@ private:
     juce::AudioDeviceManager deviceManager;
     SignalChain signalChain;
     PitchDetector pitchDetector;
+    NoiseGate noiseGate;
     juce::AudioFormatManager formatManager;
 
     std::atomic<float> inputGain{1.0f};

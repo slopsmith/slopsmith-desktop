@@ -3,6 +3,7 @@
 
 set(AUDIO_SOURCES
     NodeAddon.cpp
+    NoiseGate.cpp
     AudioEngine.cpp
     SignalChain.cpp
     VSTHost.cpp

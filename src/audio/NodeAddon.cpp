@@ -274,6 +274,36 @@ static Napi::Value SetMonitorMute(const Napi::CallbackInfo& info)
     return info.Env().Undefined();
 }
 
+static Napi::Value SetNoiseGate(const Napi::CallbackInfo& info)
+{
+    auto env = info.Env();
+    if (!engine || info.Length() < 1 || !info[0].IsObject())
+        return env.Undefined();
+
+    auto o = info[0].As<Napi::Object>();
+
+    bool enabled = o.Has("enabled") ? o.Get("enabled").As<Napi::Boolean>().Value() : false;
+
+    float thresholdLinear = 1.0e-6f;
+    if (o.Has("thresholdLinear") && o.Get("thresholdLinear").IsNumber())
+        thresholdLinear = (float)o.Get("thresholdLinear").As<Napi::Number>().DoubleValue();
+
+    int holdSamples = 4800;
+    if (o.Has("holdSamples") && o.Get("holdSamples").IsNumber())
+        holdSamples = o.Get("holdSamples").As<Napi::Number>().Int32Value();
+
+    float attack = 0.005f;
+    if (o.Has("attack") && o.Get("attack").IsNumber())
+        attack = (float)o.Get("attack").As<Napi::Number>().DoubleValue();
+
+    float release = 0.05f;
+    if (o.Has("release") && o.Get("release").IsNumber())
+        release = (float)o.Get("release").As<Napi::Number>().DoubleValue();
+
+    engine->setNoiseGate(enabled, thresholdLinear, holdSamples, attack, release);
+    return env.Undefined();
+}
+
 static Napi::Value IsMonitorMuted(const Napi::CallbackInfo& info)
 {
     return Napi::Boolean::New(info.Env(), engine ? engine->isMonitorMuted() : true);
@@ -1056,6 +1086,7 @@ static Napi::Object InitModule(Napi::Env env, Napi::Object exports)
     exports.Set("setInputChannel", Napi::Function::New(env, SetInputChannel));
     exports.Set("setMonitorMute", Napi::Function::New(env, SetMonitorMute));
     exports.Set("isMonitorMuted", Napi::Function::New(env, IsMonitorMuted));
+    exports.Set("setNoiseGate", Napi::Function::New(env, SetNoiseGate));
 
     // Metering
     exports.Set("getLevels", Napi::Function::New(env, GetLevels));
