@@ -53,10 +53,12 @@ cp "$SLOPSMITH_DIR/VERSION" "$BUNDLE_DIR/"
 cp -r "$SLOPSMITH_DIR/lib" "$BUNDLE_DIR/"
 rm -rf "$BUNDLE_DIR/lib/__pycache__"
 
-# Static assets
-for f in index.html app.js highway.js style.css; do
-    [ -f "$SLOPSMITH_DIR/static/$f" ] && cp "$SLOPSMITH_DIR/static/$f" "$BUNDLE_DIR/static/"
-done
+# Static assets — copy the whole directory. User-data dirs (art/, sloppak_cache/)
+# and generated audio_*.mp3 files are gitignored and won't exist in a clean checkout.
+cp -r "$SLOPSMITH_DIR/static/." "$BUNDLE_DIR/static/"
+# Strip any leftover user-data that may exist in a dev checkout.
+rm -rf "$BUNDLE_DIR/static/art" "$BUNDLE_DIR/static/sloppak_cache"
+find "$BUNDLE_DIR/static" -maxdepth 1 -name 'audio_*.mp3' -delete
 
 # Cross-platform "cp -r minus .git" — Git Bash on Windows doesn't ship
 # rsync, so we can't rely on `rsync --exclude=.git`. Plain `cp -r`
