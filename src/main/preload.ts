@@ -37,6 +37,14 @@ contextBridge.exposeInMainWorld('slopsmithDesktop', {
         setInputChannel: (channel: number) => ipcRenderer.invoke('audio:setInputChannel', channel),
         setMonitorMute: (mute: boolean) => ipcRenderer.invoke('audio:setMonitorMute', mute),
         isMonitorMuted: () => ipcRenderer.invoke('audio:isMonitorMuted'),
+        setNoiseGate: (payload: {
+            enabled: boolean;
+            thresholdDb?: number;
+            thresholdLinear: number;
+            holdSamples: number;
+            attack: number;
+            release: number;
+        }) => ipcRenderer.invoke('audio:setNoiseGate', payload),
 
         // Metering (polled at 60fps from renderer)
         getLevels: () => ipcRenderer.invoke('audio:getLevels'),
