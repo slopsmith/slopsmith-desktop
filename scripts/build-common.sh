@@ -308,6 +308,23 @@ verify_bundled_binaries() {
     exit 1
   fi
   echo "  ✓ ffmpeg"
+
+  # Verify ffprobe (Windows only — Linux/macOS bundle scripts don't ship
+  # ffprobe today; demucs needs it for stream-metadata probing on Windows
+  # where torchcodec's native shims fail to load against vgmstream's
+  # patched FFmpeg DLLs).
+  if [[ "$PLATFORM" == "windows" ]]; then
+    local ffp_path="$bin_dir/ffprobe${ext}"
+    if [[ ! -f "$ffp_path" ]]; then
+      echo_error "Missing bundled binary: $ffp_path"
+      exit 1
+    fi
+    if ! "$ffp_path" -version >/dev/null 2>&1; then
+      echo_error "Binary ffprobe failed to execute"
+      exit 1
+    fi
+    echo "  ✓ ffprobe"
+  fi
   
   # Verify vgmstream-cli: doesn't have --version, check it produces output with version
   local vgm_path="$bin_dir/vgmstream-cli${ext}"

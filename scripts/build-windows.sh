@@ -194,6 +194,16 @@ bundle_binaries_impl() {
     fi
     cp "$FFMPEG_BIN" "$PROJECT_DIR/resources/bin/"
 
+    # ffprobe ships in the same BtbN zip as ffmpeg. demucs's audio loader
+    # spawns ffprobe before ffmpeg to read stream metadata; without it the
+    # loader dies with FileNotFoundError before ffmpeg is ever invoked.
+    FFPROBE_BIN=$(find /tmp/ffmpeg -name 'ffprobe.exe' -type f | head -1)
+    if [[ -z "$FFPROBE_BIN" ]]; then
+        echo_error "ffprobe.exe not found after extracting /tmp/ffmpeg.zip — upstream zip layout may have changed"
+        exit 1
+    fi
+    cp "$FFPROBE_BIN" "$PROJECT_DIR/resources/bin/"
+
     # vgmstream-cli
     echo "Downloading vgmstream-cli..."
     if ! download_with_retries \
