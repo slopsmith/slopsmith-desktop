@@ -113,6 +113,9 @@
     }
 
     // ── Noise gate (AmpliTube-style: threshold, release ms, depth dB → native setNoiseGate) ──
+    const AE_NOISE_GATE_THRESHOLD_MIN = -96;
+    const AE_NOISE_GATE_THRESHOLD_MAX = 0;
+    const AE_NOISE_GATE_THRESHOLD_DEFAULT = -60;
     const AE_NOISE_GATE_RELEASE_MIN = 5;
     const AE_NOISE_GATE_RELEASE_MAX = 2000;
     const AE_NOISE_GATE_RELEASE_DEFAULT = 100;
@@ -122,8 +125,8 @@
 
     function aeClampNoiseGateThresholdDb(db) {
         const x = Number(db);
-        const v = Number.isFinite(x) ? x : -60;
-        return Math.min(0, Math.max(-96, v));
+        const v = Number.isFinite(x) ? x : AE_NOISE_GATE_THRESHOLD_DEFAULT;
+        return Math.min(AE_NOISE_GATE_THRESHOLD_MAX, Math.max(AE_NOISE_GATE_THRESHOLD_MIN, v));
     }
 
     function aeClampNoiseGateReleaseMs(ms) {
@@ -142,7 +145,7 @@
     function aeSyncNoiseGateThresholdLabel() {
         if (!noiseGateThresholdLabel || !noiseGateThresholdSlider) return;
         const db = parseFloat(noiseGateThresholdSlider.value);
-        noiseGateThresholdLabel.textContent = (Number.isFinite(db) ? db.toFixed(0) : '-60') + ' dB';
+        noiseGateThresholdLabel.textContent = (Number.isFinite(db) ? db.toFixed(0) : String(AE_NOISE_GATE_THRESHOLD_DEFAULT)) + ' dB';
     }
 
     function aeSyncNoiseGateReleaseLabel() {
@@ -167,7 +170,7 @@
         return {
             enabled: !!noiseGateEnable?.checked,
             thresholdDb: aeClampNoiseGateThresholdDb(
-                parseFloat(noiseGateThresholdSlider?.value ?? '-60')
+                parseFloat(noiseGateThresholdSlider?.value ?? String(AE_NOISE_GATE_THRESHOLD_DEFAULT))
             ),
             releaseMs: aeClampNoiseGateReleaseMs(
                 parseFloat(noiseGateReleaseSlider?.value ?? String(AE_NOISE_GATE_RELEASE_DEFAULT))
@@ -183,7 +186,12 @@
         const ng = preset && typeof preset.noiseGate === 'object' && preset.noiseGate !== null
             ? preset.noiseGate
             : null;
-        const defaults = { enabled: false, thresholdDb: -60, releaseMs: 100, depthDb: -60 };
+        const defaults = {
+            enabled: false,
+            thresholdDb: AE_NOISE_GATE_THRESHOLD_DEFAULT,
+            releaseMs: AE_NOISE_GATE_RELEASE_DEFAULT,
+            depthDb: AE_NOISE_GATE_DEPTH_DEFAULT,
+        };
         const enabled = ng && typeof ng.enabled === 'boolean' ? ng.enabled : defaults.enabled;
         let thresholdDb = defaults.thresholdDb;
         let releaseMs = defaults.releaseMs;
@@ -210,7 +218,7 @@
     function aeInitNoiseGateUi() {
         if (noiseGateEnable) noiseGateEnable.checked = false;
         // Slider defaults match screen.html; no global localStorage — restored per preset via applyPresetNoiseGate.
-        if (noiseGateThresholdSlider) noiseGateThresholdSlider.value = '-60';
+        if (noiseGateThresholdSlider) noiseGateThresholdSlider.value = String(AE_NOISE_GATE_THRESHOLD_DEFAULT);
         if (noiseGateReleaseSlider) noiseGateReleaseSlider.value = String(AE_NOISE_GATE_RELEASE_DEFAULT);
         if (noiseGateDepthSlider) noiseGateDepthSlider.value = String(AE_NOISE_GATE_DEPTH_DEFAULT);
         aeSyncNoiseGateThresholdLabel();
@@ -229,7 +237,7 @@
             return;
         }
         const thresholdDb = aeClampNoiseGateThresholdDb(
-            parseFloat(noiseGateThresholdSlider?.value ?? '-60')
+            parseFloat(noiseGateThresholdSlider?.value ?? String(AE_NOISE_GATE_THRESHOLD_DEFAULT))
         );
         const releaseMs = aeClampNoiseGateReleaseMs(
             parseFloat(noiseGateReleaseSlider?.value ?? String(AE_NOISE_GATE_RELEASE_DEFAULT))
@@ -647,8 +655,9 @@
             outputGainLabel.textContent = formatGainDbLabel(db);
         });
 
-        if (noiseGateEnable && noiseGateThresholdWrap) {
+        if (noiseGateEnable) {
             noiseGateEnable.addEventListener('change', () => {
+                // aeSyncNoiseGatePanelVisibility() internally no-ops when noiseGateThresholdWrap is missing.
                 aeSyncNoiseGatePanelVisibility();
                 aeApplyNoiseGateToEngine();
             });

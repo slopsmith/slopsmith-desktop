@@ -282,7 +282,15 @@ static Napi::Value SetNoiseGate(const Napi::CallbackInfo& info)
 
     auto o = info[0].As<Napi::Object>();
 
-    bool enabled = o.Has("enabled") ? o.Get("enabled").As<Napi::Boolean>().Value() : false;
+    bool enabled = false;
+    if (o.Has("enabled"))
+    {
+        auto v = o.Get("enabled");
+        if (v.IsBoolean())
+            enabled = v.As<Napi::Boolean>().Value();
+        else if (v.IsNumber())
+            enabled = v.As<Napi::Number>().DoubleValue() != 0.0;
+    }
 
     float thresholdDb = -60.0f;
     if (o.Has("thresholdDb") && o.Get("thresholdDb").IsNumber())
