@@ -235,8 +235,14 @@ export async function startPython(): Promise<void> {
     // into the subprocess. app.getPath consults the platform-correct
     // source (HOME on POSIX, USERPROFILE on Windows). Spotted by Copilot
     // review on PR #45.
+    //
+    // cacheBase derives from XDG_CACHE_HOME first so a user who pins
+    // their cache to a non-default disk (e.g. XDG_CACHE_HOME=/mnt/big)
+    // gets all three caches (XDG/TORCH/HF) under the same root rather
+    // than splitting torch/HF off to ~/.cache. Spotted by Copilot review
+    // on PR #45 round 2.
     const homeDir = app.getPath('home');
-    const cacheBase = path.join(homeDir, '.cache');
+    const cacheBase = process.env.XDG_CACHE_HOME || path.join(homeDir, '.cache');
 
     // Build environment for Python process
     const pythonEnv: Record<string, string> = {
@@ -246,7 +252,7 @@ export async function startPython(): Promise<void> {
         DLC_DIR: dlcDir,
         SLOPSMITH_PLUGINS_DIR: pluginsDir,
         HOME: homeDir,
-        XDG_CACHE_HOME: process.env.XDG_CACHE_HOME || cacheBase,
+        XDG_CACHE_HOME: cacheBase,
         TORCH_HOME: process.env.TORCH_HOME || path.join(cacheBase, 'torch'),
         HF_HOME: process.env.HF_HOME || path.join(cacheBase, 'huggingface'),
         RSCLI_PATH: app.isPackaged
