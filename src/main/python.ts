@@ -219,6 +219,18 @@ export async function startPython(): Promise<void> {
     }
     const pythonPathEnv = pythonPathParts.join(path.delimiter);
 
+    // Pin ML model caches to the user's $HOME/.cache so demucs / torch /
+    // huggingface weights survive across launches and are shareable with
+    // any other torch app on the machine. The libraries already default
+    // to these paths via $HOME, but spelling them out here keeps the
+    // cache anchored to the real home dir even if a future Electron
+    // sandbox / AppImage relocates HOME. sloppak_convert.py uses
+    // env.setdefault on TORCH_HOME / XDG_CACHE_HOME, so values set here
+    // win over its CONFIG_DIR fallback (which is the right behaviour for
+    // Desktop; Docker still falls back to /config/torch_cache).
+    const homeDir = process.env.HOME || '';
+    const cacheBase = path.join(homeDir, '.cache');
+
     // Build environment for Python process
     const pythonEnv: Record<string, string> = {
         ...process.env as Record<string, string>,
@@ -226,6 +238,10 @@ export async function startPython(): Promise<void> {
         CONFIG_DIR: configDir,
         DLC_DIR: dlcDir,
         SLOPSMITH_PLUGINS_DIR: pluginsDir,
+        HOME: homeDir,
+        XDG_CACHE_HOME: process.env.XDG_CACHE_HOME || cacheBase,
+        TORCH_HOME: process.env.TORCH_HOME || path.join(cacheBase, 'torch'),
+        HF_HOME: process.env.HF_HOME || path.join(cacheBase, 'huggingface'),
         RSCLI_PATH: app.isPackaged
             ? path.join(process.resourcesPath, 'bin', 'rscli', process.platform === 'win32' ? 'RsCli.exe' : 'RsCli')
             : '',
