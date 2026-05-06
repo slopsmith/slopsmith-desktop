@@ -28,8 +28,12 @@ void NoiseGate::setParameters(bool enabled, float thresholdDb, float releaseMs, 
 {
     using namespace NoiseGateSpecs;
 
-    paramEnabled.store(enabled, std::memory_order_relaxed);
-
+    // Publish derived params first with relaxed ordering, then release-store
+    // paramEnabled. The audio thread acquire-loads paramEnabled in processBlock,
+    // so when it sees enabled=true the threshold/release/depth values stored
+    // here are guaranteed visible. (Updates while already enabled can still
+    // briefly mix old/new params across two fields — acceptable for slow-moving
+    // UI changes; a SeqLock or versioned struct would be needed to fully avoid.)
     const float tDb = juce::jlimit(kThresholdDbMin, kThresholdDbMax, thresholdDb);
     paramThresholdDb.store(tDb, std::memory_order_relaxed);
     const float tLin = std::pow(10.0f, tDb / 20.0f);
@@ -42,11 +46,15 @@ void NoiseGate::setParameters(bool enabled, float thresholdDb, float releaseMs, 
     paramDepthDb.store(dDb, std::memory_order_relaxed);
     const float dLin = std::pow(10.0f, dDb / 20.0f);
     paramDepthLinear.store(juce::jlimit(kAmpFloor, 1.0f, dLin), std::memory_order_relaxed);
+
+    paramEnabled.store(enabled, std::memory_order_release);
 }
 
 void NoiseGate::processBlock(juce::AudioBuffer<float>& buffer)
 {
-    if (!paramEnabled.load(std::memory_order_relaxed))
+    // Acquire-load pairs with the release-store in setParameters so that when
+    // we see enabled=true the threshold/release/depth values are fully visible.
+    if (!paramEnabled.load(std::memory_order_acquire))
         return;
 
     const int numChannels = buffer.getNumChannels();
@@ -60,19 +68,14 @@ void NoiseGate::processBlock(juce::AudioBuffer<float>& buffer)
 
     const float coeffRelease = timeMsToAlpha(sampleRate, releaseMs);
 
-    // Cache channel pointers once — avoids per-sample getSample/setSample
-    // function-call + bounds-check overhead in the audio callback. Capacity
-    // covers typical interface configurations (mono, stereo, 5.1, 7.1).
-    constexpr int kMaxChannels = 16;
-    float* channelData[kMaxChannels] = {};
-    const int activeChannels = juce::jmin(numChannels, kMaxChannels);
-    for (int ch = 0; ch < activeChannels; ++ch)
-        channelData[ch] = buffer.getWritePointer(ch);
+    // juce::AudioBuffer maintains its own per-channel pointer table internally;
+    // reuse it (no allocation, no arbitrary cap) instead of building our own.
+    float* const* channelData = buffer.getArrayOfWritePointers();
 
     for (int i = 0; i < numSamples; ++i)
     {
         float det = 0.0f;
-        for (int ch = 0; ch < activeChannels; ++ch)
+        for (int ch = 0; ch < numChannels; ++ch)
             det = juce::jmax(det, std::abs(channelData[ch][i]));
 
         if (det > thresh)
@@ -81,7 +84,7 @@ void NoiseGate::processBlock(juce::AudioBuffer<float>& buffer)
             currentGain += coeffRelease * (depthLin - currentGain);
 
         const float g = currentGain;
-        for (int ch = 0; ch < activeChannels; ++ch)
+        for (int ch = 0; ch < numChannels; ++ch)
             channelData[ch][i] *= g;
     }
 }
