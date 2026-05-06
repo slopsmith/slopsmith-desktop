@@ -55,7 +55,14 @@ void NoiseGate::processBlock(juce::AudioBuffer<float>& buffer)
     // Acquire-load pairs with the release-store in setParameters so that when
     // we see enabled=true the threshold/release/depth values are fully visible.
     if (!paramEnabled.load(std::memory_order_acquire))
+    {
+        // Park currentGain at unity while disabled so re-enabling the gate
+        // doesn't inherit a previously-closed envelope (which would otherwise
+        // produce an unintended fade-in until the detector opens). Audio-thread
+        // only writes this; UI thread never touches it.
+        currentGain = 1.0f;
         return;
+    }
 
     const int numChannels = buffer.getNumChannels();
     const int numSamples = buffer.getNumSamples();
