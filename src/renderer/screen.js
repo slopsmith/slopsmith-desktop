@@ -151,13 +151,13 @@
     function aeSyncNoiseGateReleaseLabel() {
         if (!noiseGateReleaseLabel || !noiseGateReleaseSlider) return;
         const ms = parseFloat(noiseGateReleaseSlider.value);
-        noiseGateReleaseLabel.textContent = (Number.isFinite(ms) ? String(Math.round(ms)) : '100') + ' ms';
+        noiseGateReleaseLabel.textContent = (Number.isFinite(ms) ? String(Math.round(ms)) : String(AE_NOISE_GATE_RELEASE_DEFAULT)) + ' ms';
     }
 
     function aeSyncNoiseGateDepthLabel() {
         if (!noiseGateDepthLabel || !noiseGateDepthSlider) return;
         const db = parseFloat(noiseGateDepthSlider.value);
-        noiseGateDepthLabel.textContent = (Number.isFinite(db) ? db.toFixed(0) : '-60') + ' dB';
+        noiseGateDepthLabel.textContent = (Number.isFinite(db) ? db.toFixed(0) : String(AE_NOISE_GATE_DEPTH_DEFAULT)) + ' dB';
     }
 
     function aeSyncNoiseGatePanelVisibility() {

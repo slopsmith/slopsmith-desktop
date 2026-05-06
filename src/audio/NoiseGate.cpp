@@ -60,11 +60,20 @@ void NoiseGate::processBlock(juce::AudioBuffer<float>& buffer)
 
     const float coeffRelease = timeMsToAlpha(sampleRate, releaseMs);
 
+    // Cache channel pointers once — avoids per-sample getSample/setSample
+    // function-call + bounds-check overhead in the audio callback. Capacity
+    // covers typical interface configurations (mono, stereo, 5.1, 7.1).
+    constexpr int kMaxChannels = 16;
+    float* channelData[kMaxChannels] = {};
+    const int activeChannels = juce::jmin(numChannels, kMaxChannels);
+    for (int ch = 0; ch < activeChannels; ++ch)
+        channelData[ch] = buffer.getWritePointer(ch);
+
     for (int i = 0; i < numSamples; ++i)
     {
         float det = 0.0f;
-        for (int ch = 0; ch < numChannels; ++ch)
-            det = juce::jmax(det, std::abs(buffer.getSample(ch, i)));
+        for (int ch = 0; ch < activeChannels; ++ch)
+            det = juce::jmax(det, std::abs(channelData[ch][i]));
 
         if (det > thresh)
             currentGain += coeffAttack * (1.0f - currentGain);
@@ -72,7 +81,7 @@ void NoiseGate::processBlock(juce::AudioBuffer<float>& buffer)
             currentGain += coeffRelease * (depthLin - currentGain);
 
         const float g = currentGain;
-        for (int ch = 0; ch < numChannels; ++ch)
-            buffer.setSample(ch, i, buffer.getSample(ch, i) * g);
+        for (int ch = 0; ch < activeChannels; ++ch)
+            channelData[ch][i] *= g;
     }
 }
