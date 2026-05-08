@@ -138,7 +138,7 @@ clone_slopsmith() {
 		masc0t/slopsmith-plugin-invert-highway
 		masc0t/slopsmith-plugin-the-daily
 		masc0t/slopsmith-plugin-themes
-		byrongamatos/slopsmith-plugin-update-manager:update_manager
+		masc0t/slopsmith-update-manager:update_manager
 		narvasus/slopsmith-plugin-stem-mixer
 		renanboni/slopsmith-plugin-jumpingtab
 		topkoa/slopsmith-plugin-guitar-theory
