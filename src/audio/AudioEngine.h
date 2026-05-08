@@ -22,9 +22,22 @@ public:
         juce::StringArray inputDevices;
         juce::StringArray outputDevices;
     };
+    struct DeviceOptions
+    {
+        juce::String type;
+        juce::String input;
+        juce::String output;
+        juce::Array<double> sampleRates;
+        juce::Array<int> bufferSizes;
+        juce::String error;
+    };
     juce::Array<DeviceTypeInfo> getDeviceTypes();
     juce::Array<double> getSampleRates();
     juce::Array<int> getBufferSizes();
+    DeviceOptions probeDeviceOptions(const juce::String& typeName,
+                                     const juce::String& inputName,
+                                     const juce::String& outputName,
+                                     double sampleRate = 0.0);
     juce::String getCurrentDeviceType();
     juce::String getCurrentInputDevice();
     juce::String getCurrentOutputDevice();

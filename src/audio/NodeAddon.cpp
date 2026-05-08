@@ -182,6 +182,45 @@ static Napi::Value GetBufferSizes(const Napi::CallbackInfo& info)
     return result;
 }
 
+static Napi::Value ProbeDeviceOptions(const Napi::CallbackInfo& info)
+{
+    auto env = info.Env();
+    auto obj = Napi::Object::New(env);
+    auto ratesArray = Napi::Array::New(env);
+    auto buffersArray = Napi::Array::New(env);
+
+    obj.Set("sampleRates", ratesArray);
+    obj.Set("bufferSizes", buffersArray);
+    if (!engine)
+    {
+        obj.Set("error", "Audio engine not initialized");
+        return obj;
+    }
+
+    auto type = info.Length() > 0 && !info[0].IsNull() ? info[0].As<Napi::String>().Utf8Value() : "";
+    auto input = info.Length() > 1 && !info[1].IsNull() ? info[1].As<Napi::String>().Utf8Value() : "";
+    auto output = info.Length() > 2 && !info[2].IsNull() ? info[2].As<Napi::String>().Utf8Value() : "";
+    double sampleRate = info.Length() > 3 && !info[3].IsUndefined() ? info[3].As<Napi::Number>().DoubleValue() : 0.0;
+
+    auto options = engine->probeDeviceOptions(juce::String(type), juce::String(input), juce::String(output), sampleRate);
+    obj.Set("type", options.type.toStdString());
+    obj.Set("input", options.input.toStdString());
+    obj.Set("output", options.output.toStdString());
+    obj.Set("error", options.error.toStdString());
+
+    ratesArray = Napi::Array::New(env, options.sampleRates.size());
+    for (int i = 0; i < options.sampleRates.size(); ++i)
+        ratesArray.Set((uint32_t)i, options.sampleRates[i]);
+    obj.Set("sampleRates", ratesArray);
+
+    buffersArray = Napi::Array::New(env, options.bufferSizes.size());
+    for (int i = 0; i < options.bufferSizes.size(); ++i)
+        buffersArray.Set((uint32_t)i, options.bufferSizes[i]);
+    obj.Set("bufferSizes", buffersArray);
+
+    return obj;
+}
+
 static Napi::Value GetCurrentDevice(const Napi::CallbackInfo& info)
 {
     auto env = info.Env();
@@ -1076,6 +1115,7 @@ static Napi::Object InitModule(Napi::Env env, Napi::Object exports)
     exports.Set("getDeviceTypes", Napi::Function::New(env, GetDeviceTypes));
     exports.Set("getSampleRates", Napi::Function::New(env, GetSampleRates));
     exports.Set("getBufferSizes", Napi::Function::New(env, GetBufferSizes));
+    exports.Set("probeDeviceOptions", Napi::Function::New(env, ProbeDeviceOptions));
     exports.Set("getCurrentDevice", Napi::Function::New(env, GetCurrentDevice));
     exports.Set("setDeviceType", Napi::Function::New(env, SetDeviceType));
     exports.Set("setDevice", Napi::Function::New(env, SetDevice));

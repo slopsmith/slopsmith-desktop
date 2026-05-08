@@ -22,6 +22,8 @@ contextBridge.exposeInMainWorld('slopsmithDesktop', {
         getDeviceTypes: () => ipcRenderer.invoke('audio:getDeviceTypes'),
         getSampleRates: () => ipcRenderer.invoke('audio:getSampleRates'),
         getBufferSizes: () => ipcRenderer.invoke('audio:getBufferSizes'),
+        probeDeviceOptions: (typeName: string, input: string, output: string, sampleRate: number) =>
+            ipcRenderer.invoke('audio:probeDeviceOptions', typeName, input, output, sampleRate),
         getCurrentDevice: () => ipcRenderer.invoke('audio:getCurrentDevice'),
         setDeviceType: (typeName: string) => ipcRenderer.invoke('audio:setDeviceType', typeName),
         setDevice: (input: string, output: string, sampleRate: number, bufferSize: number) =>

@@ -77,6 +77,86 @@ juce::Array<int> AudioEngine::getBufferSizes()
     return sizes;
 }
 
+AudioEngine::DeviceOptions AudioEngine::probeDeviceOptions(const juce::String& typeName,
+                                                           const juce::String& inputName,
+                                                           const juce::String& outputName,
+                                                           double sampleRate)
+{
+    DeviceOptions options;
+
+    juce::AudioIODeviceType* selectedType = nullptr;
+    for (auto* type : deviceManager.getAvailableDeviceTypes())
+    {
+        if ((typeName.isNotEmpty() && type->getTypeName() == typeName)
+            || (typeName.isEmpty() && selectedType == nullptr))
+        {
+            selectedType = type;
+            if (typeName.isNotEmpty())
+                break;
+        }
+    }
+
+    if (selectedType == nullptr)
+    {
+        options.error = "Device type not found";
+        return options;
+    }
+
+    try
+    {
+        options.type = selectedType->getTypeName();
+
+        auto inputs = selectedType->getDeviceNames(true);
+        auto outputs = selectedType->getDeviceNames(false);
+        options.input = inputName;
+        options.output = outputName;
+
+        if (options.input.isEmpty() && inputs.size() > 0)
+            options.input = inputs[0];
+        if (options.output.isEmpty() && outputs.size() > 0)
+            options.output = outputs[0];
+
+        std::unique_ptr<juce::AudioIODevice> device(
+            selectedType->createDevice(options.output, options.input));
+
+        if (!device)
+        {
+            options.error = "Could not create probe device";
+            return options;
+        }
+
+        for (auto rate : device->getAvailableSampleRates())
+            options.sampleRates.addIfNotAlreadyThere(rate);
+
+        const auto advertisedBuffers = device->getAvailableBufferSizes();
+        const double rateToReport = sampleRate > 0.0
+            ? sampleRate
+            : (options.sampleRates.contains(48000.0) ? 48000.0
+               : (options.sampleRates.size() > 0 ? options.sampleRates[0] : 0.0));
+
+        // Keep probing cheap. Some Windows drivers, especially WASAPI exclusive,
+        // take a long time to open/close for each candidate buffer size. The
+        // real device setup still reports the actual accepted block size after
+        // Apply, so use advertised sizes here and reconcile after selection.
+        for (auto size : advertisedBuffers)
+            options.bufferSizes.addIfNotAlreadyThere(size);
+
+        fprintf(stderr, "[AudioEngine] Probed device options: type='%s' in='%s' out='%s' sr=%.0f rates=%d buffers=%d\n",
+                options.type.toRawUTF8(), options.input.toRawUTF8(), options.output.toRawUTF8(),
+                rateToReport, options.sampleRates.size(), options.bufferSizes.size());
+    }
+    catch (const std::exception& e)
+    {
+        options.error = e.what();
+    }
+    catch (...)
+    {
+        options.error = "Probe failed";
+    }
+
+    return options;
+}
+
 juce::String AudioEngine::getCurrentDeviceType()
 {
     if (auto* type = deviceManager.getCurrentDeviceTypeObject())
@@ -120,6 +200,15 @@ double AudioEngine::getLatencyMs() const
 
 bool AudioEngine::setDeviceType(const juce::String& typeName)
 {
+    if (auto* currentType = deviceManager.getCurrentDeviceTypeObject())
+    {
+        if (currentType->getTypeName() == typeName)
+        {
+            fprintf(stderr, "[AudioEngine] Device type already selected: %s\n", typeName.toRawUTF8());
+            return true;
+        }
+    }
+
     for (auto* type : deviceManager.getAvailableDeviceTypes())
     {
         if (type->getTypeName() == typeName)
@@ -167,7 +256,10 @@ bool AudioEngine::setAudioDevice(const juce::String& inputName, const juce::Stri
     if (auto* currentType = deviceManager.getCurrentDeviceTypeObject())
         currentTypeName = currentType->getTypeName();
 
-    // Close the device completely to avoid ALSA deadlocks on reconfigure
+    // Close the device completely on Linux to avoid ALSA deadlocks on
+    // reconfigure. On Windows, setAudioDeviceSetup can reconfigure in place
+    // and closing first makes WASAPI driver changes much slower.
+#if JUCE_LINUX
     if (deviceManager.getCurrentAudioDevice() != nullptr)
     {
         try {
@@ -181,6 +273,7 @@ bool AudioEngine::setAudioDevice(const juce::String& inputName, const juce::Stri
             fprintf(stderr, "[AudioEngine] closeAudioDevice crashed, continuing\n");
         }
     }
+#endif
 
     // Initialize if no device type set yet.
     //
@@ -281,15 +374,23 @@ bool AudioEngine::setAudioDevice(const juce::String& inputName, const juce::Stri
         }
     }
 
-    fprintf(stderr, "[AudioEngine] Device configured OK. Current device: %s\n",
-            deviceManager.getCurrentAudioDevice() ? deviceManager.getCurrentAudioDevice()->getName().toRawUTF8() : "none");
+    if (auto* configuredDevice = deviceManager.getCurrentAudioDevice())
+    {
+        currentSampleRate = configuredDevice->getCurrentSampleRate();
+        currentBlockSize = configuredDevice->getCurrentBufferSizeSamples();
 
-    signalChain.prepare(
-        deviceManager.getCurrentAudioDevice()->getCurrentSampleRate(),
-        deviceManager.getCurrentAudioDevice()->getCurrentBufferSizeSamples());
+        fprintf(stderr, "[AudioEngine] Device configured OK. Current device: %s\n",
+                configuredDevice->getName().toRawUTF8());
+        fprintf(stderr, "[AudioEngine] Actual device setup: sr=%.0f bs=%d (requested bs=%d)\n",
+                currentSampleRate, currentBlockSize, bufferSize);
 
-    noiseGate.prepare(deviceManager.getCurrentAudioDevice()->getCurrentSampleRate(),
-                      deviceManager.getCurrentAudioDevice()->getCurrentBufferSizeSamples());
+        signalChain.prepare(currentSampleRate, currentBlockSize);
+        noiseGate.prepare(currentSampleRate, currentBlockSize);
+    }
+    else
+    {
+        fprintf(stderr, "[AudioEngine] Device configured OK. Current device: none\n");
+    }
 
     if (wasRunning) startAudio();
     return true;
