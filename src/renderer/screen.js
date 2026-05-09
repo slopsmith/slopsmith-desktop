@@ -3003,10 +3003,12 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
     hookState.stopSongImpl = async function(args, nextStopSong) {
         if (_toneMonitor) { clearInterval(_toneMonitor); _toneMonitor = null; }
         window._toneAutoSwitchActive = false;
-        const result = await nextStopSong.apply(this, args);
-        if (window._closeChainPanel) window._closeChainPanel();
-        if (window._aeLoadDefaultPreset) void window._aeLoadDefaultPreset('song-stop');
-        return result;
+        try {
+            return await nextStopSong.apply(this, args);
+        } finally {
+            if (window._closeChainPanel) window._closeChainPanel();
+            if (window._aeLoadDefaultPreset) void window._aeLoadDefaultPreset('song-stop');
+        }
     };
     if (typeof window.stopSong === 'function' && !hookState.stopSongInstalled) {
         hookState.stopSongBaseStopSong = window.stopSong;
