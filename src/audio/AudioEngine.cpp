@@ -442,12 +442,17 @@ bool AudioEngine::loadBackingTrack(const juce::File& file)
         return false;
     }
 
+    const double readerSampleRate = reader->sampleRate;
+    const juce::int64 readerLengthInSamples = reader->lengthInSamples;
     backingSource = std::make_unique<juce::AudioFormatReaderSource>(reader, true);
     backingTransport = std::make_unique<juce::AudioTransportSource>();
-    backingTransport->setSource(backingSource.get(), 0, nullptr, reader->sampleRate);
+    backingTransport->setSource(backingSource.get(), 0, nullptr, readerSampleRate);
     backingTransport->prepareToPlay(currentBlockSize, currentSampleRate);
     cachedBackingDuration.store(backingTransport->getLengthInSeconds());
     cachedBackingPosition.store(0.0);
+    std::cerr << "[AudioEngine] loadBackingTrack OK sr=" << readerSampleRate
+              << " len=" << readerLengthInSamples
+              << std::endl;
     return true;
 }
 
