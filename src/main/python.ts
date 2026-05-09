@@ -256,11 +256,14 @@ export async function startPython(): Promise<void> {
         HF_HOME: process.env.HF_HOME || path.join(cacheBase, 'huggingface'),
         RSCLI_PATH: app.isPackaged
             ? path.join(process.resourcesPath, 'bin', 'rscli', process.platform === 'win32' ? 'RsCli.exe' : 'RsCli')
-            : '',
-        RESOURCESPATH: app.isPackaged ? process.resourcesPath : '',
+            : path.join(__dirname, '..', '..', 'resources', 'bin', 'rscli', process.platform === 'win32' ? 'RsCli.exe' : 'RsCli'),
+        RESOURCESPATH: app.isPackaged
+            ? process.resourcesPath
+            : path.join(__dirname, '..', '..', 'resources'),
         PATH: (app.isPackaged
             ? path.join(process.resourcesPath, 'bin') + path.delimiter
-            : '') + (process.env.PATH || ''),
+            : path.join(__dirname, '..', '..', 'resources', 'bin') + path.delimiter
+        ) + (process.env.PATH || ''),
     };
 
     // Honour the "Audio Quality" preference: if the user has opted into the
