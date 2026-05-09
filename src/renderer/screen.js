@@ -15,6 +15,14 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
         return;
     }
 
+    // Hook registry survives renderer re-evaluation; interval IDs live here so a
+    // re-run of this IIFE can still cancel timers started by the previous run.
+    const hookState = window.__slopsmithDesktopAudioHooks;
+    if (hookState.toneMonitorInterval) {
+        clearInterval(hookState.toneMonitorInterval);
+        hookState.toneMonitorInterval = null;
+    }
+
     // ── State ─────────────────────────────────────────────────────────────────
     let audioRunning = false;
     let meterAnimFrame = null;
@@ -1169,7 +1177,6 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
 
     // ── Tone Switching ───────────────────────────────────────────────────────────
     let toneSwitcher = null;
-    let toneMonitorInterval = null;
     let autoSwitchEnabled = localStorage.getItem('slopsmith-tone-auto-switch') === 'true';
     const originalToneNamesCache = new Map();
 
@@ -1494,8 +1501,8 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
         // If IIFE2's startToneAutoSwitch is already running its own 50ms polling loop,
         // don't start a parallel interval — both would call switchToTone at 50ms cadence.
         if (window._toneAutoSwitchActive) return;
-        if (toneMonitorInterval) clearInterval(toneMonitorInterval);
-        toneMonitorInterval = setInterval(() => {
+        if (hookState.toneMonitorInterval) clearInterval(hookState.toneMonitorInterval);
+        hookState.toneMonitorInterval = setInterval(() => {
             if (!toneSwitcher || !autoSwitchEnabled) return;
             const hw = window.highway || window._slopsmithHighway;
             if (!hw || !hw.getTime) return;
@@ -1627,7 +1634,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
     }
 
     function stopToneMonitor() {
-        if (toneMonitorInterval) { clearInterval(toneMonitorInterval); toneMonitorInterval = null; }
+        if (hookState.toneMonitorInterval) { clearInterval(hookState.toneMonitorInterval); hookState.toneMonitorInterval = null; }
     }
 
     // ── Floating Tone Panel in Player ──────────────────────────────────────────
@@ -2167,7 +2174,6 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
 
     // Hook playSong for tone switching setup. Keep the wrapper singleton-style so
     // renderer rehydration updates this implementation without stacking wrappers.
-    const hookState = window.__slopsmithDesktopAudioHooks;
     hookState.toneSetupImpl = async function(filename, arrangement, nextPlaySong) {
         if (window._aeMarkSongTransition) window._aeMarkSongTransition(7000);
         stopToneMonitor();
@@ -2554,10 +2560,16 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
 // ── Chain button + tone auto-switch (runs outside IIFE so it works without audio API) ──
 (function() {
     const hookState = window.__slopsmithDesktopAudioHooks;
+    // Cancel any auto-switch interval left over from a previous evaluation of
+    // this IIFE — the prior closure is gone and can't clear it itself.
+    if (hookState.toneAutoMonitor) {
+        clearInterval(hookState.toneAutoMonitor);
+        hookState.toneAutoMonitor = null;
+        window._toneAutoSwitchActive = false;
+    }
     const origPS = hookState.toneAutoBasePlaySong || window.playSong;
     if (!origPS) return;
 
-    let _toneMonitor = null;
     let _lastTone = null;
     /** Song + arrangement — invalidates preload when switching Lead/Bass/etc. on the same file */
     let _preloadedToneCacheKey = null;
@@ -2609,24 +2621,24 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
 
     window._aeStartToneAutoSwitch = function() { startToneAutoSwitch(); };
     window._aeStopToneMonitor = function() {
-        if (_toneMonitor) { clearInterval(_toneMonitor); _toneMonitor = null; }
+        if (hookState.toneAutoMonitor) { clearInterval(hookState.toneAutoMonitor); hookState.toneAutoMonitor = null; }
         window._toneAutoSwitchActive = false;
     };
 
     function startToneAutoSwitch() {
-        if (_toneMonitor) clearInterval(_toneMonitor);
+        if (hookState.toneAutoMonitor) clearInterval(hookState.toneAutoMonitor);
         _lastTone = null;
         window._toneAutoSwitchActive = true;
 
-        _toneMonitor = setInterval(() => {
+        hookState.toneAutoMonitor = setInterval(() => {
             const hw = window.highway || window._slopsmithHighway;
             if (!hw || !hw.getTime) return;
 
             const autoOn = localStorage.getItem('slopsmith-tone-auto-switch') === 'true';
             const taOn = window._aeToneAutomation?.isEnabled?.() === true;
             if (!autoOn && !taOn) {
-                clearInterval(_toneMonitor);
-                _toneMonitor = null;
+                clearInterval(hookState.toneAutoMonitor);
+                hookState.toneAutoMonitor = null;
                 window._toneAutoSwitchActive = false;
                 return;
             }
@@ -2660,7 +2672,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
 
     hookState.toneAutoImpl = async function(filename, arrangement, nextPlaySong) {
         if (window._aeMarkSongTransition) window._aeMarkSongTransition(7000);
-        if (_toneMonitor) { clearInterval(_toneMonitor); _toneMonitor = null; }
+        if (hookState.toneAutoMonitor) { clearInterval(hookState.toneAutoMonitor); hookState.toneAutoMonitor = null; }
         window._toneAutoSwitchActive = false;
         window._aeDidClearChainForNewSong = false;
         window._aeClearingChainForNewSong = false;
@@ -2728,7 +2740,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
             if (autoOn || taOn) {
                 startToneAutoSwitch();
             } else {
-                if (_toneMonitor) { clearInterval(_toneMonitor); _toneMonitor = null; }
+                if (hookState.toneAutoMonitor) { clearInterval(hookState.toneAutoMonitor); hookState.toneAutoMonitor = null; }
                 window._toneAutoSwitchActive = false;
             }
 
@@ -3001,7 +3013,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
     }
 
     hookState.stopSongImpl = async function(args, nextStopSong) {
-        if (_toneMonitor) { clearInterval(_toneMonitor); _toneMonitor = null; }
+        if (hookState.toneAutoMonitor) { clearInterval(hookState.toneAutoMonitor); hookState.toneAutoMonitor = null; }
         window._toneAutoSwitchActive = false;
         try {
             return await nextStopSong.apply(this, args);
