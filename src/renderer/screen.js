@@ -2,6 +2,8 @@
 // Communicates with the JUCE audio engine via window.slopsmithDesktop.audio
 // Desktop audio engine plugin
 
+window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
+
 (function() {
     'use strict';
 
@@ -2163,19 +2165,25 @@
         }
     }
 
-    // Hook playSong for tone switching setup
-    const _origPlaySong = window.playSong;
-    if (_origPlaySong) {
+    // Hook playSong for tone switching setup. Keep the wrapper singleton-style so
+    // renderer rehydration updates this implementation without stacking wrappers.
+    const hookState = window.__slopsmithDesktopAudioHooks;
+    hookState.toneSetupImpl = async function(filename, arrangement, nextPlaySong) {
+        if (window._aeMarkSongTransition) window._aeMarkSongTransition(7000);
+        stopToneMonitor();
+        closeTonePanel();
+        await nextPlaySong.call(this, filename, arrangement);
+        // Inject tones button into player controls
+        setTimeout(() => injectPlayerToneButton(), 500);
+        // Tone-chain preload is handled only by the outer playSong timer (single path — avoids
+        // stacking the menu chain with a second preload).
+    };
+    if (typeof window.playSong === 'function' && !hookState.toneSetupInstalled) {
+        hookState.toneSetupBasePlaySong = window.playSong;
         window.playSong = async function(filename, arrangement) {
-            if (window._aeMarkSongTransition) window._aeMarkSongTransition(7000);
-            stopToneMonitor();
-            closeTonePanel();
-            await _origPlaySong(filename, arrangement);
-            // Inject tones button into player controls
-            setTimeout(() => injectPlayerToneButton(), 500);
-            // Tone-chain preload is handled only by the outer playSong timer (single path — avoids
-            // stacking the menu chain with a second preload).
+            return hookState.toneSetupImpl.call(this, filename, arrangement, hookState.toneSetupBasePlaySong);
         };
+        hookState.toneSetupInstalled = true;
     }
 
     // ── Tone Automation ────────────────────────────────────────────────────────
@@ -2545,7 +2553,8 @@
 
 // ── Chain button + tone auto-switch (runs outside IIFE so it works without audio API) ──
 (function() {
-    const origPS = window.playSong;
+    const hookState = window.__slopsmithDesktopAudioHooks;
+    const origPS = hookState.toneAutoBasePlaySong || window.playSong;
     if (!origPS) return;
 
     let _toneMonitor = null;
@@ -2649,7 +2658,7 @@
         }, 50);
     }
 
-    window.playSong = async function(filename, arrangement) {
+    hookState.toneAutoImpl = async function(filename, arrangement, nextPlaySong) {
         if (window._aeMarkSongTransition) window._aeMarkSongTransition(7000);
         if (_toneMonitor) { clearInterval(_toneMonitor); _toneMonitor = null; }
         window._toneAutoSwitchActive = false;
@@ -2670,7 +2679,7 @@
             }
         }
 
-        await origPS(filename, arrangement);
+        await nextPlaySong.call(this, filename, arrangement);
 
         // Tear down the menu/default chain after load (never await clearChain here — it can re-enter
         // the audio host during playSong and crash). The timed preload below rebuilds song presets.
@@ -2983,16 +2992,28 @@
         }, 800);
     };
 
-    const origStopSong = window.stopSong;
-    if (typeof origStopSong === 'function') {
-        window.stopSong = async function(...args) {
-            if (_toneMonitor) { clearInterval(_toneMonitor); _toneMonitor = null; }
-            window._toneAutoSwitchActive = false;
-            const result = await origStopSong.apply(this, args);
-            if (window._closeChainPanel) window._closeChainPanel();
-            if (window._aeLoadDefaultPreset) void window._aeLoadDefaultPreset('song-stop');
-            return result;
+    if (!hookState.toneAutoInstalled) {
+        hookState.toneAutoBasePlaySong = origPS;
+        window.playSong = async function(filename, arrangement) {
+            return hookState.toneAutoImpl.call(this, filename, arrangement, hookState.toneAutoBasePlaySong);
         };
+        hookState.toneAutoInstalled = true;
+    }
+
+    hookState.stopSongImpl = async function(args, nextStopSong) {
+        if (_toneMonitor) { clearInterval(_toneMonitor); _toneMonitor = null; }
+        window._toneAutoSwitchActive = false;
+        const result = await nextStopSong.apply(this, args);
+        if (window._closeChainPanel) window._closeChainPanel();
+        if (window._aeLoadDefaultPreset) void window._aeLoadDefaultPreset('song-stop');
+        return result;
+    };
+    if (typeof window.stopSong === 'function' && !hookState.stopSongInstalled) {
+        hookState.stopSongBaseStopSong = window.stopSong;
+        window.stopSong = async function(...args) {
+            return hookState.stopSongImpl.call(this, args, hookState.stopSongBaseStopSong);
+        };
+        hookState.stopSongInstalled = true;
     }
 
     // Inject Chain button immediately at startup so it's always visible in the
