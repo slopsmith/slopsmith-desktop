@@ -3011,8 +3011,10 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
     }
 
     hookState.stopSongImpl = async function(args, nextStopSong) {
-        if (hookState.toneAutoMonitor) { clearInterval(hookState.toneAutoMonitor); hookState.toneAutoMonitor = null; }
-        window._toneAutoSwitchActive = false;
+        // Tear down both monitors (IIFE 1's toneMonitorInterval + IIFE 2's
+        // toneAutoMonitor) — leaving either running after stopSong would keep
+        // polling/switching tones on a stopped song until the next playSong.
+        if (window._aeStopToneMonitor) window._aeStopToneMonitor();
         try {
             return await nextStopSong.apply(this, args);
         } finally {
