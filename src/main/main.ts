@@ -1,13 +1,30 @@
 // Slopsmith Desktop — Electron Main Process
 // Manages: window lifecycle, Python subprocess, audio engine bridge, plugin management
 
-import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, session } from 'electron';
 import * as path from 'path';
 import { startPython, stopPython, waitForPython, getPythonPort, getStartupStatus, StartupStatus } from './python';
 import { IPC_STARTUP_STATUS, IPC_STARTUP_GET_STATUS, IPC_STARTUP_REQUEST_STATUS } from './ipc-channels';
 import { initAudioBridge, shutdownAudio } from './audio-bridge';
 import { initPluginManager } from './plugin-manager';
 import { initSoundfontManager } from './soundfont-manager';
+
+// Linux: enable Chromium's PipeWire capturer feature so getUserMedia can see
+// audio devices on PipeWire-only distros (Fedora 36+, recent Ubuntu, Arch).
+// Without this, Chromium falls back to PulseAudio enumeration, which on
+// PipeWire systems sometimes returns an empty device list even when the JUCE
+// engine sees the hardware fine. Must be set BEFORE app.whenReady() resolves —
+// command-line switches are read during Chromium initialization.
+//
+// This is paired with the per-session permission handler installed in
+// startup() below; together they unblock any renderer code that still calls
+// navigator.mediaDevices.getUserMedia (the bundled note_detect plugin has
+// since been routed through the JUCE bridge in
+// slopsmith-plugin-notedetect#27, but third-party plugins may still hit the
+// Web-Audio path on their own).
+if (process.platform === 'linux') {
+    app.commandLine.appendSwitch('enable-features', 'WebRTCPipeWireCapturer');
+}
 
 // Prevent error dialogs from showing when the Python subprocess has issues.
 // Both handlers log and swallow — don't let a stray rejection in one of the
@@ -188,8 +205,54 @@ function createWindow(port: number): void {
     }
 }
 
+// Auto-grant the renderer's microphone/camera ("media") requests when they
+// come from the localhost-served Slopsmith app. Without this, Chromium in
+// Electron silently denies getUserMedia for the http://127.0.0.1 origin we
+// load, which surfaces as the "Could not access audio input" popup the
+// note_detect plugin used to show on Linux (#52). The bundled note_detect
+// now routes pitch detection through the JUCE bridge so it doesn't need
+// this, but other plugins / future renderer code may still call
+// getUserMedia and we don't want them to hit the same wall.
+//
+// Scoped tightly to http(s)://127.0.0.1[:port]/ and http(s)://localhost[:port]/
+// so a navigation to any other origin (a paste, a redirect, a misconfigured
+// plugin) does NOT silently grant mic access — those fall through to
+// Chromium's default deny.
+function isLocalRendererOrigin(url: string): boolean {
+    if (!url) return false;
+    return /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/.*)?$/.test(url);
+}
+
+function installLocalhostMediaPermissions(): void {
+    const def = session.defaultSession;
+    // Electron's default (with no handler installed) is to grant every
+    // permission request. We only want to be MORE restrictive for one
+    // specific case — `media` requests from a non-local origin — so other
+    // permissions (clipboard, notifications, fullscreen, ...) fall through
+    // to the prior default-allow behaviour. Denying them here would silently
+    // break unrelated renderer/plugin features that worked before.
+    def.setPermissionRequestHandler((_wc, permission, callback, details) => {
+        if (permission === 'media') {
+            callback(isLocalRendererOrigin(details.requestingUrl || ''));
+            return;
+        }
+        callback(true);
+    });
+    def.setPermissionCheckHandler((_wc, permission, requestingOrigin) => {
+        if (permission === 'media') {
+            return isLocalRendererOrigin(requestingOrigin || '');
+        }
+        return true;
+    });
+}
+
 async function startup(): Promise<void> {
     console.log('[main] Starting Slopsmith Desktop...');
+
+    // Install permission handlers first so any preload script / plugin that
+    // probes getUserMedia during early renderer startup sees the localhost
+    // grant rather than the default-deny.
+    installLocalhostMediaPermissions();
 
     // Register startup status IPC handlers before creating the splash window
     // so the splash preload's immediate startup:requestStatus is handled.
