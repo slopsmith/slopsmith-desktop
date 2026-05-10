@@ -26,12 +26,15 @@ if (process.platform === 'linux') {
     // Merge with any existing `--enable-features=` value (set by Electron
     // defaults, parent env, or future code) instead of overwriting — a bare
     // appendSwitch would replace the comma-separated list and silently
-    // disable everything else that was enabled.
+    // disable everything else that was enabled. Split-and-dedupe so the
+    // value stays stable across re-initializations (or if Chromium itself
+    // already has WebRTCPipeWireCapturer in its baseline list).
     const existing = app.commandLine.getSwitchValue('enable-features');
-    const merged = existing
-        ? `${existing},WebRTCPipeWireCapturer`
-        : 'WebRTCPipeWireCapturer';
-    app.commandLine.appendSwitch('enable-features', merged);
+    const features = new Set<string>(
+        (existing || '').split(',').map((f) => f.trim()).filter(Boolean),
+    );
+    features.add('WebRTCPipeWireCapturer');
+    app.commandLine.appendSwitch('enable-features', Array.from(features).join(','));
 }
 
 // Prevent error dialogs from showing when the Python subprocess has issues.
@@ -214,13 +217,19 @@ function createWindow(port: number): void {
 }
 
 // Predicate: did a permission request originate from the localhost-served
-// Slopsmith renderer? Tight match on http(s)://(127.0.0.1|localhost)[:port][/...]
-// so a stray navigation to e.g. http://localhost.evil.com cannot impersonate
-// the local origin. Used by `installLocalhostPermissions` below to gate
-// every permission request — see that function for the policy.
+// Slopsmith renderer? Parses via WHATWG URL so that query strings,
+// fragments, IPv6 brackets and other valid-but-uncommon shapes don't trip
+// the check (a bare regex like /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/.*)?$/
+// would reject `http://127.0.0.1?x=1` because there's no `/` before the
+// query string). URL parsing also gives strong host-matching, so
+// `http://localhost.evil.com/` cannot impersonate localhost. Used by
+// `installLocalhostPermissions` below to gate every permission request.
 function isLocalRendererOrigin(url: string): boolean {
     if (!url) return false;
-    return /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/.*)?$/.test(url);
+    let parsed: URL;
+    try { parsed = new URL(url); } catch { return false; }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+    return parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost';
 }
 
 // Origin-scoped permission policy for the default session.
