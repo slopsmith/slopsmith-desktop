@@ -15,6 +15,13 @@ let audio: AudioModule | null = null;
 // while this set is non-empty, so unsubscribed/closed windows don't pay
 // the IPC cost.
 const inputFrameSubscribers = new Set<WebContents>();
+// WebContents we've already attached a `destroyed` cleanup listener to.
+// A renderer may subscribe and unsubscribe many times across its
+// lifetime; registering a fresh `once('destroyed', ...)` per subscribe
+// would accumulate one-shot listeners that never fire until window
+// close, slowly growing the listener registry. A WeakSet drops the
+// reference automatically once the WebContents is GC'd.
+const inputFrameDestroyHooked = new WeakSet<WebContents>();
 let inputFrameTimer: NodeJS.Timeout | null = null;
 let inputFrameSequence = 0;
 const INPUT_FRAME_INTERVAL_MS = 50;
@@ -267,11 +274,15 @@ export function initAudioBridge(mainWindow: BrowserWindow | null): void {
         if (!audio) return;
         if (inputFrameSubscribers.has(wc)) return;
         inputFrameSubscribers.add(wc);
-        // Drop the subscription if the renderer goes away. `destroyed`
-        // fires on window close, navigation to a different webContents,
-        // and crash recovery — covering every way the renderer can stop
-        // being a valid send target.
-        wc.once('destroyed', () => removeInputFrameSubscriber(wc));
+        // Attach the destroyed-cleanup listener at most once per
+        // WebContents lifetime — without the WeakSet guard, repeated
+        // subscribe/unsubscribe cycles (plugin mount/unmount) would
+        // accumulate one-shot listeners that never fire until window
+        // close.
+        if (!inputFrameDestroyHooked.has(wc)) {
+            inputFrameDestroyHooked.add(wc);
+            wc.once('destroyed', () => removeInputFrameSubscriber(wc));
+        }
         ensureInputFrameTimer();
     });
 
@@ -387,9 +398,12 @@ export function initAudioBridge(mainWindow: BrowserWindow | null): void {
 }
 
 export function shutdownAudio(): void {
-    // Drop input-frame subscribers and stop the dispatch timer first.
-    // The webContents may be tearing down concurrently; defer the timer
-    // clear to the post-set step so the empty-check fires.
+    // Drop input-frame subscribers and stop the dispatch timer before
+    // tearing down the engine — once `audio` is null the dispatch
+    // callback would clear them itself, but stopping the timer here is
+    // an unconditional one-shot (we're never re-init'ing in the same
+    // process, so the stop-timer helper's empty-set guard doesn't add
+    // value here).
     inputFrameSubscribers.clear();
     if (inputFrameTimer) {
         clearInterval(inputFrameTimer);

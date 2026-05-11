@@ -510,6 +510,15 @@ void AudioEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
     currentSampleRate = device->getCurrentSampleRate();
     currentBlockSize = device->getCurrentBufferSizeSamples();
 
+    // Reset the input ring buffer so a stop→start cycle delivers a
+    // clean zero-padded cold-start frame instead of mixing in stale
+    // samples from the previous run. Plain relaxed stores are fine —
+    // the audio thread isn't running yet (this is the device-start
+    // hook), so there's no race to worry about here.
+    inputFrameRingWriteIndex.store(0, std::memory_order_relaxed);
+    for (auto& slot : inputFrameRing)
+        slot.store(0.0f, std::memory_order_relaxed);
+
     signalChain.prepare(currentSampleRate, currentBlockSize);
     pitchDetector.prepare(currentSampleRate, currentBlockSize);
     noiseGate.prepare(currentSampleRate, currentBlockSize);
@@ -522,6 +531,11 @@ void AudioEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
 void AudioEngine::audioDeviceStopped()
 {
     signalChain.releaseResources();
+    // Also flatten the input ring index on stop so a getInputFrame()
+    // call made between stopAudio() and the next startAudio() returns
+    // the cold-start zero-padded frame rather than stale samples from
+    // the just-finished session.
+    inputFrameRingWriteIndex.store(0, std::memory_order_relaxed);
 }
 
 void AudioEngine::audioDeviceIOCallbackWithContext(
