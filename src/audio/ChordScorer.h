@@ -26,7 +26,19 @@ public:
     // Standard-tuning MIDI base for the supported (arrangement, stringCount)
     // pairs. Lifted from screen.js `_ND_TUNING_*` constants verbatim so the
     // open-string MIDI values match between the native and JS paths.
-    static const std::vector<int>& standardMidiFor(const std::string& arrangement, int stringCount);
+    // Returns `nullptr` for unsupported pairs (e.g. "guitar" + 5-string,
+    // or any unknown arrangement string) — caller is expected to fail
+    // the request rather than guess a fallback tuning.
+    static const std::vector<int>* standardMidiFor(const std::string& arrangement, int stringCount);
+
+    // Hard upper bound on the FFT size we will ever build. The 3 Hz
+    // bin-width floor in scoreChord() implies fftSize ≈ nextPow2(SR/3),
+    // which is 16384 at 48 kHz, 32768 at 96 kHz, 65536 at 192 kHz —
+    // already the largest realistic audio-interface rate. Bounding this
+    // here protects the addon against caller-controlled `numSamples`
+    // forcing pathological reallocations of the FFT plan and scratch
+    // buffers over IPC.
+    static constexpr int kMaxFftSize = 65536;
 
     // One chord-note in the request payload. Mirrors the chart-note shape
     // the JS chord scorer consumes from `matchNotes()`: `s` = string

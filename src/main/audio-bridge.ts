@@ -184,6 +184,18 @@ export function initAudioBridge(): void {
         return 48000;
     });
 
+    // Why this is a synchronous handler (and not an N-API AsyncWorker /
+    // worker thread): the only caller is the notedetect plugin's
+    // `processFrame()` tick, which fires at ~20 Hz and awaits each
+    // result before issuing the next — natural back-pressure, no
+    // queueing or coalescing needed. A 16384-point juce::dsp::FFT at
+    // 48 kHz takes ~0.5 ms on modern x86, plus negligible per-string
+    // band-energy work, for a per-call cost well under the 50 ms
+    // budget. The JS path it replaces runs the same FFT synchronously
+    // in the renderer event loop today; moving to async would also
+    // require a mutex around ChordScorer's reusable FFT/scratch state.
+    // The trade-off doesn't pay back for this workload — revisit only
+    // if profiling shows actual main-loop stalls.
     ipcMain.handle('audio:scoreChord', (_event, ctx: unknown) => {
         // Feature-detect the native method the same way getSampleRate
         // above does — a downlevel addon (pre-ChordScorer build) should

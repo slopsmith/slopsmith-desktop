@@ -89,13 +89,22 @@ namespace
     }
 }
 
-const std::vector<int>& ChordScorer::standardMidiFor(const std::string& arrangement, int stringCount)
+const std::vector<int>* ChordScorer::standardMidiFor(const std::string& arrangement, int stringCount)
 {
     if (arrangement == "bass")
-        return stringCount == 5 ? kTuningBass5 : kTuningBass4;
-    if (stringCount == 8) return kTuningGuitar8;
-    if (stringCount == 7) return kTuningGuitar7;
-    return kTuningGuitar6;
+    {
+        if (stringCount == 4) return &kTuningBass4;
+        if (stringCount == 5) return &kTuningBass5;
+        return nullptr;
+    }
+    if (arrangement == "guitar")
+    {
+        if (stringCount == 6) return &kTuningGuitar6;
+        if (stringCount == 7) return &kTuningGuitar7;
+        if (stringCount == 8) return &kTuningGuitar8;
+        return nullptr;
+    }
+    return nullptr;
 }
 
 void ChordScorer::ensureFft(int fftSize)
@@ -150,14 +159,32 @@ ChordScorer::Result ChordScorer::scoreChord(const float* buffer, int numSamples,
     if (numSamples <= 0 || sampleRate <= 0.0 || buffer == nullptr || out.totalStrings == 0)
         return out;
 
+    // Validate request shape. Unsupported (arrangement, stringCount)
+    // pairs and undersized/mismatched tuningOffsets used to silently
+    // fall back to bass-4 / guitar-6 with zero offsets, producing
+    // plausible-looking but wrong scores. Fail closed instead — return
+    // an empty results[] so the caller sees totalStrings>0 with hits=0
+    // and can detect the misuse.
+    const auto* basePtr = standardMidiFor(req.arrangement, req.stringCount);
+    if (basePtr == nullptr) return out;
+    const auto& base = *basePtr;
+    if ((int) req.tuningOffsets.size() != req.stringCount) return out;
+    for (const auto& n : req.notes)
+        if (n.string < 0 || n.string >= req.stringCount) return out;
+
     // Size the FFT exactly the way JS does: at least nextPow2(numSamples),
     // but never finer than the bin-width floor derived from sampleRate so
     // the low-B fundamental on 5-string bass remains resolvable across
-    // device rates.
-    const int resolutionFloor = nextPow2((int) std::ceil(sampleRate / kTargetBinHz));
-    const int fftSize = std::max(nextPow2(numSamples), resolutionFloor);
+    // device rates. Clamp the final size to kMaxFftSize so a caller-
+    // controlled `numSamples` (or a pathological sampleRate) can't force
+    // an oversized FFT-plan/scratch allocation across the IPC boundary.
+    const int clampedSamples = std::min(numSamples, kMaxFftSize);
+    const int resolutionFloor = std::min(
+        nextPow2((int) std::ceil(sampleRate / kTargetBinHz)),
+        kMaxFftSize);
+    const int fftSize = std::max(nextPow2(clampedSamples), resolutionFloor);
     ensureFft(fftSize);
-    computeMagnitudes(buffer, numSamples);
+    computeMagnitudes(buffer, clampedSamples);
 
     const double binHz = sampleRate / fftSize;
     lastBinHz = binHz;
@@ -168,8 +195,6 @@ ChordScorer::Result ChordScorer::scoreChord(const float* buffer, int numSamples,
     double totalEnergy = 0.0;
     for (float m : magnitudes)
         totalEnergy += (double) m * m;
-
-    const auto& base = standardMidiFor(req.arrangement, req.stringCount);
 
     out.results.reserve(req.notes.size());
     int hits = 0;

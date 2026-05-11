@@ -756,6 +756,28 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
 
 ChordScorer::Result AudioEngine::scoreChord(const ChordScorer::Request& req)
 {
+    // Fast-path when the device isn't running — the input ring is
+    // zeroed in audioDeviceStopped() (and stays at zero between init
+    // and the first device start), so any FFT we ran here would just
+    // produce an all-miss score against a silence buffer. Skip the
+    // ring snapshot + FFT and synthesize the same shape directly.
+    // Keeps a renderer that polls scoreChord during a transport stop
+    // from spending main-thread CPU on a known-no-op call.
+    if (! audioRunning.load(std::memory_order_relaxed))
+    {
+        ChordScorer::Result out{};
+        out.totalStrings = (int) req.notes.size();
+        out.results.reserve(req.notes.size());
+        for (const auto& n : req.notes)
+        {
+            ChordScorer::NoteResult r{};
+            r.string = n.string;
+            r.fret = n.fret;
+            out.results.push_back(r);
+        }
+        return out;
+    }
+
     // Snapshot the input ring at the requested window size and forward
     // to the scorer. The renderer never sees audio data — only the
     // result object — which is the whole point of running the scoring

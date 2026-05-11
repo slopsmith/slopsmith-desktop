@@ -9,6 +9,48 @@ import { IPC_STARTUP_STATUS, IPC_STARTUP_GET_STATUS, IPC_STARTUP_REQUEST_STATUS 
 // Audio sync offset — set as a mutable property via the isolated world bridge.
 // The settings panel reads/writes localStorage and updates this at runtime.
 
+// Polyphonic chord-scoring request/response contract. Mirrors the C++
+// ChordScorer::Request / Result structs and the JS _ndScoreChord
+// payload — kept in sync by hand since N-API doesn't generate
+// bindings. Optional `mt` field on Note isn't read by the scorer
+// (matches JS) but is allowed in the request shape so callers can
+// pass through the same chart-note objects they consume in JS.
+export interface ChordScoreNote {
+    s: number;   // 0-based string index
+    f: number;   // fret
+    mt?: number; // mute flag (ignored by scorer)
+    ho?: boolean; // hammer-on
+    po?: boolean; // pull-off
+    b?: boolean;  // bend
+    sl?: boolean; // slide
+    hm?: boolean; // harmonic (energy-only check)
+}
+export interface ChordScoreRequest {
+    arrangement: 'guitar' | 'bass';
+    stringCount: number;
+    offsets: number[];        // tuning offsets, length == stringCount
+    capo?: number;
+    pitchCheckCents?: number; // 0 = energy-only chord check
+    minHitRatio?: number;
+    numSamples?: number;      // override the 4096 default window
+    notes: ChordScoreNote[];
+}
+export interface ChordScoreNoteResult {
+    s: number;
+    f: number;
+    hit: boolean;
+    bandEnergy: number;
+    centsDiff: number | null;
+    centsError: number | null;
+}
+export interface ChordScoreResult {
+    score: number;
+    hitStrings: number;
+    totalStrings: number;
+    isHit: boolean;
+    results: ChordScoreNoteResult[];
+}
+
 contextBridge.exposeInMainWorld('slopsmithDesktop', {
     // Platform detection
     isDesktop: true,
@@ -66,7 +108,7 @@ contextBridge.exposeInMainWorld('slopsmithDesktop', {
         // cross IPC; only the small result object does. Returns `null`
         // on a downlevel addon that predates ChordScorer so the caller
         // can fall back gracefully.
-        scoreChord: (ctx: unknown): Promise<unknown> =>
+        scoreChord: (ctx: ChordScoreRequest): Promise<ChordScoreResult | null> =>
             ipcRenderer.invoke('audio:scoreChord', ctx),
 
         // VST plugins
