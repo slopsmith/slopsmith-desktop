@@ -238,6 +238,26 @@ function createWindow(port: number): void {
     }
     mainWindow.webContents.on('will-navigate', blockOffOriginNavigation('in-window navigation'));
     mainWindow.webContents.on('will-redirect', blockOffOriginNavigation('cross-origin redirect'));
+    // `will-navigate` only fires for top-level frames. With
+    // `webSecurity: false` and a privileged preload that runs in every
+    // frame, an iframe (or other subframe) loading a remote URL would
+    // get the same preload-exposed IPC surface. `will-frame-navigate`
+    // covers subframe navigations including the main frame, so we lean
+    // on it to catch the case the top-level guards miss. Don't route
+    // subframe blocks to openExternal — popping the system browser
+    // every time an embedded video / ad-frame tries to load is worse
+    // UX than just refusing the load.
+    mainWindow.webContents.on('will-frame-navigate', (event) => {
+        const navUrl = event.url;
+        if (isRendererOrigin(navUrl)) return;
+        // Top-level case is already handled by will-navigate; skip
+        // here so we don't double-log and don't route to openExternal
+        // twice. `event.isMainFrame` is set when the navigation is for
+        // the top-level frame.
+        if (event.isMainFrame) return;
+        event.preventDefault();
+        console.warn(`[main] Blocked subframe navigation to non-renderer origin: ${navUrl}`);
+    });
 
     // Open external links in system browser. Same scheme gate as
     // will-navigate above — a `target=_blank` or `window.open` from the
