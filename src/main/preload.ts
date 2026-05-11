@@ -26,9 +26,16 @@ export interface ChordScoreNote {
     hm?: boolean; // harmonic (energy-only check)
 }
 export interface ChordScoreRequest {
-    arrangement: 'guitar' | 'bass';
-    stringCount: number;
-    offsets: number[];        // tuning offsets, length == stringCount
+    // arrangement and stringCount are optional on the wire — the
+    // native parser defaults them to 'guitar' / 6 when omitted, so a
+    // request that supplies six standard-tuning offsets and notes
+    // can leave them out entirely. They become effectively required
+    // only when you want to score a non-default tuning (any bass
+    // arrangement, or a 7/8-string guitar), since `offsets.length`
+    // must equal `stringCount` for the scorer's validation to pass.
+    arrangement?: 'guitar' | 'bass';
+    stringCount?: number;
+    offsets: number[];        // tuning offsets, length must equal stringCount (default 6)
     capo?: number;
     pitchCheckCents?: number; // 0 = energy-only chord check
     minHitRatio?: number;

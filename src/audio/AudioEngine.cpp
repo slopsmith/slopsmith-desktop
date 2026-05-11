@@ -788,11 +788,14 @@ ChordScorer::Result AudioEngine::scoreChord(const ChordScorer::Request& req)
     auto frame = getInputFrame(numSamples);
     // currentSampleRate is 0 between init() and the first
     // audioDeviceAboutToStart, and can also drop to 0 after a device
-    // teardown. Without this fallback ChordScorer would early-exit
-    // with totalStrings > 0 but an empty results[] array, producing a
-    // result shape the renderer never sees from any other code path.
-    // Mirror NodeAddon::GetSampleRate's 48 kHz floor so the renderer
-    // always gets one result entry per requested note.
+    // teardown. ChordScorer would still return a well-shaped all-miss
+    // result in that case (see its `numSamples <= 0 || sampleRate <= 0`
+    // fail-closed path), so this fallback isn't load-bearing for the
+    // result shape — but a 48 kHz floor lets the scorer actually run
+    // the FFT against whatever stale audio is still in the ring,
+    // giving the renderer a real score during the small window between
+    // device-stop and the next audioRunning=false observation.
+    // Mirrors NodeAddon::GetSampleRate's 48 kHz floor.
     double sr = currentSampleRate.load(std::memory_order_relaxed);
     if (! std::isfinite(sr) || sr <= 0.0) sr = 48000.0;
     return chordScorer.scoreChord(frame.data(), (int) frame.size(), sr, req);
