@@ -215,47 +215,53 @@ function createWindow(port: number): void {
     // via shell.openExternal. Re-derive the predicate locally — the
     // permission handler captured it in a closure that isn't exposed.
     const isRendererOrigin = makeRendererOriginPredicate(port);
-    // Block both initial in-window navigation and 30x redirects that
-    // resolve off the renderer origin. `will-navigate` covers
-    // user/script-initiated navigations (link clicks, location =);
-    // `will-redirect` covers server-side redirects during an
-    // in-progress navigation (the local proxy returning a 302 to a
-    // remote URL is the typical worry here). Both call into the same
-    // handler so the policy and external-routing behaviour stay in
-    // lock-step.
-    function blockOffOriginNavigation(reason: string) {
-        return (event: Electron.Event, navUrl: string) => {
+    // Block off-origin navigations at every layer Electron exposes:
+    //
+    // - `will-navigate`: user/script-initiated navigations on the main
+    //   frame (link clicks, `location =`). Doesn't fire for
+    //   programmatic loadURL — that's how we still let the initial
+    //   load succeed.
+    // - `will-redirect`: server-side 30x redirects during an
+    //   in-progress navigation. The local proxy returning a 302 to a
+    //   remote URL would otherwise bypass `will-navigate`.
+    // - `will-frame-navigate`: navigations inside *any* frame
+    //   (including the main frame). With `webSecurity: false` and a
+    //   privileged preload running in every frame, an iframe loading
+    //   a remote URL would inherit the IPC surface. We skip the main
+    //   frame here so we don't double-process what `will-navigate`
+    //   already handled.
+    //
+    // Electron 35 fires all three with a single `details` Event whose
+    // `url` / `isMainFrame` are properties on the event, *not*
+    // positional callback args. Reading them positionally returns
+    // undefined and silently inverts the policy — `preventDefault()`
+    // fires on every navigation including legitimate ones.
+    function blockOffOriginTopLevel(reason: string) {
+        return (details: Electron.Event<{ url: string }>) => {
+            const navUrl = details.url;
             if (isRendererOrigin(navUrl)) return;
-            event.preventDefault();
+            details.preventDefault();
             console.warn(`[main] Blocked ${reason} to non-renderer origin: ${navUrl}`);
             // Only forward web URLs to the system browser. `file:`,
-            // `javascript:`, `mailto:`, or custom schemes would otherwise
-            // trigger the user's registered protocol handler from a
-            // page-controlled string — that's an obvious foot-gun even
-            // for a navigation we're already blocking.
+            // `javascript:`, `mailto:`, or custom schemes would
+            // otherwise trigger the user's registered protocol handler
+            // from a page-controlled string — a foot-gun even for a
+            // navigation we're already blocking.
             openWebUrlExternally(navUrl);
         };
     }
-    mainWindow.webContents.on('will-navigate', blockOffOriginNavigation('in-window navigation'));
-    mainWindow.webContents.on('will-redirect', blockOffOriginNavigation('cross-origin redirect'));
-    // `will-navigate` only fires for top-level frames. With
-    // `webSecurity: false` and a privileged preload that runs in every
-    // frame, an iframe (or other subframe) loading a remote URL would
-    // get the same preload-exposed IPC surface. `will-frame-navigate`
-    // covers subframe navigations including the main frame, so we lean
-    // on it to catch the case the top-level guards miss. Don't route
-    // subframe blocks to openExternal — popping the system browser
-    // every time an embedded video / ad-frame tries to load is worse
-    // UX than just refusing the load.
-    mainWindow.webContents.on('will-frame-navigate', (event) => {
-        const navUrl = event.url;
+    mainWindow.webContents.on('will-navigate', blockOffOriginTopLevel('in-window navigation'));
+    mainWindow.webContents.on('will-redirect', blockOffOriginTopLevel('cross-origin redirect'));
+    mainWindow.webContents.on('will-frame-navigate', (details) => {
+        // Top-level frame is handled by will-navigate above; skip so
+        // we don't double-log or route to openExternal twice.
+        if (details.isMainFrame) return;
+        const navUrl = details.url;
         if (isRendererOrigin(navUrl)) return;
-        // Top-level case is already handled by will-navigate; skip
-        // here so we don't double-log and don't route to openExternal
-        // twice. `event.isMainFrame` is set when the navigation is for
-        // the top-level frame.
-        if (event.isMainFrame) return;
-        event.preventDefault();
+        details.preventDefault();
+        // Don't openExternal subframe blocks — popping the system
+        // browser every time an embedded video / ad-frame tries to
+        // load is worse UX than silently refusing.
         console.warn(`[main] Blocked subframe navigation to non-renderer origin: ${navUrl}`);
     });
 
