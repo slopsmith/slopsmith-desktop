@@ -6,6 +6,13 @@ const { contextBridge, ipcRenderer } = require('electron');
 import type { StartupStatus } from './python';
 import { IPC_STARTUP_STATUS, IPC_STARTUP_GET_STATUS, IPC_STARTUP_REQUEST_STATUS } from './ipc-channels';
 
+// Ref count of active `audio:inputFrame` listeners installed via
+// `slopsmithDesktop.audio.onInputFrame`. Used to deduplicate the
+// per-renderer subscribe/unsubscribe IPC so the main process sees one
+// subscribe on the first listener and one unsubscribe when the last
+// goes away.
+let inputFrameListenerCount = 0;
+
 // Audio sync offset — set as a mutable property via the isolated world bridge.
 // The settings panel reads/writes localStorage and updates this at runtime.
 
@@ -52,6 +59,49 @@ contextBridge.exposeInMainWorld('slopsmithDesktop', {
 
         // Pitch detection (polled)
         getPitchDetection: () => ipcRenderer.invoke('audio:getPitchDetection'),
+
+        // Current engine sample rate — needed by notedetect's chord
+        // scorer to map FFT bins to Hz on the bridge path (no
+        // AudioContext to read it from). Queried once at startAudio.
+        getSampleRate: (): Promise<number> => ipcRenderer.invoke('audio:getSampleRate'),
+
+        // Raw input frame stream — pushed every ~50ms from the audio
+        // engine's lock-free ring buffer. Used by notedetect's
+        // polyphonic chord scorer (`_ndScoreChord`), which needs the
+        // actual audio samples rather than a derived metric.
+        //
+        // Returns an unsubscribe closure. Listeners are ref-counted at
+        // this preload boundary: the first one triggers an IPC
+        // `subscribe`, the last unsubscribe triggers `unsubscribe`.
+        // The main process treats this renderer as a single subscriber
+        // regardless of how many in-renderer listeners we have, so we
+        // can't just forward each install/uninstall as a sub/unsub.
+        onInputFrame: (
+            callback: (frame: { samples: Float32Array; seq: number }) => void,
+        ): (() => void) => {
+            const listener = (
+                _event: unknown,
+                frame: { samples: Float32Array; seq: number },
+            ) => callback(frame);
+            ipcRenderer.on('audio:inputFrame', listener);
+            inputFrameListenerCount += 1;
+            if (inputFrameListenerCount === 1) {
+                ipcRenderer.send('audio:subscribeInputFrames');
+            }
+            // Idempotent unsubscribe — calling twice on the same handle
+            // must NOT double-decrement the ref-count, or we'd send a
+            // stray `unsubscribe` while other listeners are still live.
+            let removed = false;
+            return () => {
+                if (removed) return;
+                removed = true;
+                ipcRenderer.removeListener('audio:inputFrame', listener);
+                inputFrameListenerCount -= 1;
+                if (inputFrameListenerCount === 0) {
+                    ipcRenderer.send('audio:unsubscribeInputFrames');
+                }
+            };
+        },
 
         // VST plugins
         scanPlugins: (dirs?: string[]) => ipcRenderer.invoke('audio:scanPlugins', dirs),

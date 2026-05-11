@@ -412,6 +412,40 @@ static Napi::Value GetPitchDetection(const Napi::CallbackInfo& info)
     return obj;
 }
 
+// Returns the most recent `numSamples` (default 4096) of mono input audio
+// from the engine's lock-free ring buffer as a Float32Array. Renderer uses
+// this to feed notedetect's polyphonic chord scorer (_ndScoreChord), which
+// runs on raw audio frames rather than the monophonic pitch detector output.
+// The buffer is owned by the JS realm post-return, so no lifetime gymnastics.
+static Napi::Value GetInputFrame(const Napi::CallbackInfo& info)
+{
+    auto env = info.Env();
+    int numSamples = 4096;
+    if (info.Length() > 0 && info[0].IsNumber())
+        numSamples = info[0].As<Napi::Number>().Int32Value();
+    if (!engine)
+        return Napi::Float32Array::New(env, 0);
+
+    auto frame = engine->getInputFrame(numSamples);
+    const size_t byteLength = frame.size() * sizeof(float);
+    auto ab = Napi::ArrayBuffer::New(env, byteLength);
+    if (byteLength > 0)
+        std::memcpy(ab.Data(), frame.data(), byteLength);
+    return Napi::Float32Array::New(env, frame.size(), ab, 0);
+}
+
+// Sample rate the audio device is running at. Notedetect's chord scorer
+// needs this to map FFT bins to Hz; on the bridge path there's no
+// AudioContext to read it from. Falls back to 48000 if the engine isn't
+// ready (matches the historical fallback in screen.js).
+static Napi::Value GetSampleRate(const Napi::CallbackInfo& info)
+{
+    auto env = info.Env();
+    if (!engine)
+        return Napi::Number::New(env, 48000.0);
+    return Napi::Number::New(env, engine->getCurrentSampleRate());
+}
+
 // ── VST Plugin Scanning ──────────────────────────────────────────────────────
 
 class ScanPluginsWorker : public Napi::AsyncWorker
@@ -1139,6 +1173,8 @@ static Napi::Object InitModule(Napi::Env env, Napi::Object exports)
 
     // Pitch detection
     exports.Set("getPitchDetection", Napi::Function::New(env, GetPitchDetection));
+    exports.Set("getInputFrame", Napi::Function::New(env, GetInputFrame));
+    exports.Set("getSampleRate", Napi::Function::New(env, GetSampleRate));
 
     // VST scanning
     exports.Set("scanPlugins", Napi::Function::New(env, ScanPlugins));

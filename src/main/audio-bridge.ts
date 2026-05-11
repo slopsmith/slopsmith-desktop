@@ -2,13 +2,23 @@
 // The native addon is loaded via require() and its methods are
 // exposed to the renderer process via ipcMain.handle().
 
-import { ipcMain, BrowserWindow } from 'electron';
+import { ipcMain, BrowserWindow, WebContents } from 'electron';
 import * as path from 'path';
 import { app } from 'electron';
 
 type AudioModule = Record<string, (...args: any[]) => any>;
 
 let audio: AudioModule | null = null;
+
+// Renderers that have called `audio:subscribeInputFrames`. We push raw
+// input frames to each one on a shared 50 ms timer that's only running
+// while this set is non-empty, so unsubscribed/closed windows don't pay
+// the IPC cost.
+const inputFrameSubscribers = new Set<WebContents>();
+let inputFrameTimer: NodeJS.Timeout | null = null;
+let inputFrameSequence = 0;
+const INPUT_FRAME_INTERVAL_MS = 50;
+const INPUT_FRAME_SAMPLES = 4096;
 
 function loadNativeAddon(): AudioModule | null {
     const addonPaths = [
@@ -160,6 +170,66 @@ export function initAudioBridge(mainWindow: BrowserWindow | null): void {
         return audio?.getPitchDetection() ?? { frequency: -1, confidence: 0, midiNote: -1, cents: 0, noteName: '' };
     });
 
+    // ── Input Frame Streaming ──────────────────────────────────────────────
+    // Used by the notedetect plugin's polyphonic chord scorer, which needs
+    // raw audio frames (not just monophonic pitch). The renderer subscribes
+    // via `audio:subscribeInputFrames`; we drive a single 50ms timer that
+    // polls the JUCE engine's ring buffer and dispatches to every active
+    // subscriber. Timer stops the moment the subscriber set goes empty so
+    // we don't burn IPC bandwidth when no one is listening.
+
+    ipcMain.handle('audio:getSampleRate', () => {
+        return audio?.getSampleRate() ?? 48000;
+    });
+
+    function dispatchInputFrames(): void {
+        if (!audio || inputFrameSubscribers.size === 0) return;
+        const samples: Float32Array | undefined = audio.getInputFrame(INPUT_FRAME_SAMPLES);
+        if (!samples || samples.length === 0) return;
+        const seq = ++inputFrameSequence;
+        for (const wc of inputFrameSubscribers) {
+            if (wc.isDestroyed()) continue;
+            // Electron's structured-clone IPC copies the typed array per
+            // recipient, so each subscriber gets its own buffer — no
+            // shared-state worries.
+            wc.send('audio:inputFrame', { samples, seq });
+        }
+    }
+
+    function ensureInputFrameTimer(): void {
+        if (inputFrameTimer || inputFrameSubscribers.size === 0) return;
+        inputFrameTimer = setInterval(dispatchInputFrames, INPUT_FRAME_INTERVAL_MS);
+    }
+
+    function stopInputFrameTimer(): void {
+        if (inputFrameTimer && inputFrameSubscribers.size === 0) {
+            clearInterval(inputFrameTimer);
+            inputFrameTimer = null;
+        }
+    }
+
+    function removeInputFrameSubscriber(wc: WebContents): void {
+        if (inputFrameSubscribers.delete(wc)) {
+            stopInputFrameTimer();
+        }
+    }
+
+    ipcMain.on('audio:subscribeInputFrames', (event) => {
+        const wc = event.sender;
+        if (inputFrameSubscribers.has(wc)) return;
+        inputFrameSubscribers.add(wc);
+        // Drop the subscription if the renderer goes away. `destroyed`
+        // fires on window close, navigation to a different webContents,
+        // and crash recovery — covering every way the renderer can stop
+        // being a valid send target.
+        wc.once('destroyed', () => removeInputFrameSubscriber(wc));
+        ensureInputFrameTimer();
+    });
+
+    ipcMain.on('audio:unsubscribeInputFrames', (event) => {
+        removeInputFrameSubscriber(event.sender);
+    });
+
     // ── VST Scanning ───────────────────────────────────────────────────────
 
     ipcMain.handle('audio:scanPlugins', async (_event, dirs?: string[]) => {
@@ -268,6 +338,14 @@ export function initAudioBridge(mainWindow: BrowserWindow | null): void {
 }
 
 export function shutdownAudio(): void {
+    // Drop input-frame subscribers and stop the dispatch timer first.
+    // The webContents may be tearing down concurrently; defer the timer
+    // clear to the post-set step so the empty-check fires.
+    inputFrameSubscribers.clear();
+    if (inputFrameTimer) {
+        clearInterval(inputFrameTimer);
+        inputFrameTimer = null;
+    }
     if (audio) {
         try {
             audio.shutdown();

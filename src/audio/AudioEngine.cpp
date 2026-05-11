@@ -567,7 +567,22 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
 
     // Feed pitch detector (before processing so we detect the dry guitar signal)
     if (numOutputChannels > 0)
-        pitchDetector.pushSamples(buffer.getReadPointer(0), numSamples);
+    {
+        const float* monoIn = buffer.getReadPointer(0);
+        pitchDetector.pushSamples(monoIn, numSamples);
+
+        // Mirror the same mono signal into the lock-free ring buffer that
+        // backs getInputFrame(). The renderer-side notedetect plugin reads
+        // this on the bridge path to run polyphonic chord scoring. Keep
+        // the writer allocation-free and store the new write index with
+        // release ordering so the main-thread reader's matching acquire
+        // load sees every sample written before the index update.
+        const uint64_t w = inputFrameRingWriteIndex.load(std::memory_order_relaxed);
+        constexpr int kMask = kInputFrameRingCapacity - 1;
+        for (int i = 0; i < numSamples; ++i)
+            inputFrameRing[(w + (uint64_t) i) & (uint64_t) kMask] = monoIn[i];
+        inputFrameRingWriteIndex.store(w + (uint64_t) numSamples, std::memory_order_release);
+    }
 
     noiseGate.processBlock(buffer);
 
@@ -622,4 +637,35 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
         float prevPeak = outputPeak.load();
         if (peak > prevPeak) outputPeak.store(peak);
     }
+}
+
+std::vector<float> AudioEngine::getInputFrame(int numSamples) const
+{
+    if (numSamples <= 0) return {};
+    if (numSamples > kInputFrameRingCapacity)
+        numSamples = kInputFrameRingCapacity;
+
+    // Acquire pairs with the audio thread's release store of the write
+    // index: every sample written into the ring before that index is
+    // visible to us here.
+    const uint64_t w = inputFrameRingWriteIndex.load(std::memory_order_acquire);
+    std::vector<float> out((size_t) numSamples, 0.0f);
+
+    // Cold-start: audio thread hasn't filled `numSamples` yet. Return
+    // what we have, zero-padded on the *left* so the most-recent
+    // samples land at the end of the buffer (the YIN/HPS algorithms
+    // expect time-aligned data).
+    if (w < (uint64_t) numSamples)
+    {
+        const size_t available = (size_t) w;
+        for (size_t i = 0; i < available; ++i)
+            out[(size_t) numSamples - available + i] = inputFrameRing[i];
+        return out;
+    }
+
+    constexpr uint64_t kMask = (uint64_t) kInputFrameRingCapacity - 1;
+    const uint64_t start = w - (uint64_t) numSamples;
+    for (int i = 0; i < numSamples; ++i)
+        out[(size_t) i] = inputFrameRing[(start + (uint64_t) i) & kMask];
+    return out;
 }

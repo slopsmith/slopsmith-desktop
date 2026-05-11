@@ -4,6 +4,10 @@
 #include "PitchDetector.h"
 #include <juce_audio_devices/juce_audio_devices.h>
 #include <juce_audio_formats/juce_audio_formats.h>
+#include <array>
+#include <atomic>
+#include <cstdint>
+#include <vector>
 
 class AudioEngine : private juce::AudioIODeviceCallback
 {
@@ -93,6 +97,17 @@ public:
     // Latency
     double getLatencyMs() const;
 
+    // Raw input frame snapshot for renderer-side polyphonic chord scoring
+    // in notedetect. The audio callback appends the post-input-gain mono
+    // signal (same one fed to the pitch detector) into a lock-free ring;
+    // callers on the main thread can copy out the most-recent N samples.
+    // Capacity is a power of two so audio-thread wrap is a single mask.
+    static constexpr int kInputFrameRingCapacity = 8192;
+    // Default snapshot size matches notedetect's _ND_MIN_YIN_SAMPLES (4096
+    // samples — enough for low-E autocorrelation at 48 kHz). Caller can
+    // request fewer; anything larger than the ring capacity gets clamped.
+    std::vector<float> getInputFrame(int numSamples = 4096) const;
+
 private:
     void audioDeviceIOCallbackWithContext(const float* const* inputData,
                                           int numInputChannels,
@@ -132,6 +147,19 @@ private:
     bool audioRunning = false;
     double currentSampleRate = 48000.0;
     int currentBlockSize = 256;
+
+    // Lock-free SPSC ring buffer for raw mono input. Single producer is
+    // the audio thread (audioDeviceIOCallbackWithContext); single consumer
+    // is the main thread via getInputFrame(). Capacity is a power of two
+    // so the audio-thread store can mask instead of modulo. The write
+    // index is monotonically increasing in samples-since-start and never
+    // wraps in practice (uint64 covers >12 million years at 48 kHz).
+    // Reader tolerates a small amount of tearing on the very oldest
+    // samples when the writer laps mid-snapshot — at 4096 samples vs the
+    // 256-sample audio block, worst case is ~6% of the buffer, and the
+    // YIN/HPS chord-scoring math is well below that sensitivity.
+    std::array<float, kInputFrameRingCapacity> inputFrameRing{};
+    std::atomic<uint64_t> inputFrameRingWriteIndex{0};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioEngine)
 };
