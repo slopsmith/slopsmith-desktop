@@ -50,10 +50,16 @@ namespace
         return delta;
     }
 
-    // Octave-fold cents deviation into [-600, +600). Used by the per-
+    // Octave-fold cents deviation into (-600, +600]. Used by the per-
     // string pitch check so a detected octave-mismatched fundamental
     // (very common on guitar — strong 2nd harmonic in DI tones) still
     // counts as the right note. Mirrors `_ndFoldOctaveCents`.
+    //
+    // Range note: `std::round` ties away from zero, so an input of
+    // exactly +600 folds to -600 while an input of -600 stays at -600 +
+    // 1200 = +600. The asymmetry doesn't affect the hit/miss decision
+    // because the caller compares `std::abs(centsError) <= tolerance`,
+    // which collapses both endpoints to magnitude 600.
     float foldOctaveCents(float cents) noexcept
     {
         if (! std::isfinite(cents)) return std::numeric_limits<float>::infinity();

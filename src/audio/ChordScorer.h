@@ -9,9 +9,11 @@
 // The math is a direct C++ translation of the JS originals
 // (`_ndFftMagnitude`, `_ndStringBandHz`, `_ndBandEnergy`, `_ndTotalEnergy`,
 // `_ndConstraintCheckString`, `_ndScoreChord`). The custom radix-2
-// Cooley-Tukey in JS is replaced with `juce::dsp::FFT`; all other helpers
-// are line-for-line translations so the algorithm stays bit-for-bit
-// comparable to the browser path that still runs the JS implementation.
+// Cooley-Tukey in JS is replaced with `juce::dsp::FFT`; the rest of the
+// helpers are line-for-line translations. Behavioural parity with the
+// browser path is the target — bin-for-bin floating-point identity is
+// not, since the JS FFT and `juce::dsp::FFT` evaluate the butterflies
+// in different orders and may also use vectorised intrinsics natively.
 
 #include <juce_dsp/juce_dsp.h>
 #include <memory>
@@ -84,8 +86,12 @@ public:
 
     // Score a chord against `buffer` (numSamples mono floats). Audio is
     // not stored; the caller (AudioEngine) snapshots its input ring and
-    // passes the pointer in. Re-uses internal FFT scratch across calls
-    // so steady-state scoring is allocation-free.
+    // passes the pointer in. The FFT plan, the complex scratch buffer
+    // and the magnitude buffer are reused across calls, so the
+    // FFT/peak-pick path itself is allocation-free in steady state. The
+    // returned `Result` still allocates its `results` vector (one entry
+    // per requested note) — that's a tiny per-call cost the IPC layer
+    // pays anyway when serialising the response.
     Result scoreChord(const float* buffer, int numSamples, double sampleRate, const Request& req);
 
 private:
