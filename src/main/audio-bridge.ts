@@ -52,7 +52,7 @@ function loadNativeAddon(): AudioModule | null {
     return null;
 }
 
-export function initAudioBridge(mainWindow: BrowserWindow | null): void {
+export function initAudioBridge(getMainWindow: () => BrowserWindow | null): void {
     audio = loadNativeAddon();
 
     if (audio) {
@@ -284,6 +284,15 @@ export function initAudioBridge(mainWindow: BrowserWindow | null): void {
 
     ipcMain.on('audio:subscribeInputFrames', (event) => {
         const wc = event.sender;
+        // Restrict to the trusted main-window renderer. Raw input
+        // samples are substantially more sensitive than the existing
+        // derived pitch data, so a stray webview / dev-tools panel /
+        // future BrowserWindow shouldn't be able to opt itself into
+        // the stream just by sending the IPC. The existing permission
+        // policy on session.defaultSession only gates web APIs like
+        // getUserMedia, not custom IPC channels, so we enforce here.
+        const mw = getMainWindow();
+        if (!mw || mw.isDestroyed() || wc.id !== mw.webContents.id) return;
         // Refuse the subscription if the engine isn't available — better
         // to leave the renderer to retry on next session start than to
         // keep an indefinitely-stalled subscriber. The plugin's

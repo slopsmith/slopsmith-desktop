@@ -242,7 +242,7 @@ bool AudioEngine::setAudioDevice(const juce::String& inputName, const juce::Stri
         }
     }
 
-    bool wasRunning = audioRunning;
+    bool wasRunning = audioRunning.load(std::memory_order_relaxed);
     if (wasRunning) stopAudio();
 
     // Save current device type name before closing
@@ -400,18 +400,22 @@ bool AudioEngine::setAudioDevice(const juce::String& inputName, const juce::Stri
 
 void AudioEngine::startAudio()
 {
-    if (audioRunning) { fprintf(stderr, "[AudioEngine] startAudio: already running\n"); return; }
+    if (audioRunning.load(std::memory_order_relaxed))
+    {
+        fprintf(stderr, "[AudioEngine] startAudio: already running\n");
+        return;
+    }
     deviceManager.addAudioCallback(this);
-    audioRunning = true;
-    fprintf(stderr, "[AudioEngine] startAudio: callback added, running=%d, device=%s\n",
-            audioRunning, deviceManager.getCurrentAudioDevice() ? deviceManager.getCurrentAudioDevice()->getName().toRawUTF8() : "none");
+    audioRunning.store(true, std::memory_order_relaxed);
+    fprintf(stderr, "[AudioEngine] startAudio: callback added, running=1, device=%s\n",
+            deviceManager.getCurrentAudioDevice() ? deviceManager.getCurrentAudioDevice()->getName().toRawUTF8() : "none");
 }
 
 void AudioEngine::stopAudio()
 {
-    if (!audioRunning) return;
+    if (!audioRunning.load(std::memory_order_relaxed)) return;
     deviceManager.removeAudioCallback(this);
-    audioRunning = false;
+    audioRunning.store(false, std::memory_order_relaxed);
 }
 
 // ── Backing Track ─────────────────────────────────────────────────────────────
@@ -524,6 +528,13 @@ void AudioEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
     for (auto& slot : inputFrameRing)
         slot.store(0.0f, std::memory_order_relaxed);
 
+    // Size the mono-mix scratch buffer to fit this device's block
+    // size so the audio thread never has to allocate. The buffer is
+    // only read/written on the audio thread, so a plain vector is
+    // fine — we just need its storage prepared up front.
+    if ((int) monoMixScratch.size() < bs)
+        monoMixScratch.assign((size_t) bs, 0.0f);
+
     signalChain.prepare(sr, bs);
     pitchDetector.prepare(sr, bs);
     noiseGate.prepare(sr, bs);
@@ -584,30 +595,20 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
         if (peak > prevPeak) inputPeak.store(peak);
     }
 
-    // Feed pitch detector (before processing so we detect the dry guitar signal)
+    // Feed pitch detector and the input-frame ring (before processing
+    // so we detect the dry guitar signal). Build a single mono source
+    // and route it to both consumers so they always see the same
+    // signal — important when selectedInputChannel is -1 ("mono mix")
+    // on a stereo input, where channel 0 alone wouldn't reflect what
+    // the user asked for. For explicit single-channel selection
+    // (0/1) and single-input devices, the output buffer's channel 0
+    // already holds the right signal post-gain, so we skip the mix
+    // and read it directly.
     if (numOutputChannels > 0)
     {
-        const float* monoIn = buffer.getReadPointer(0);
-        pitchDetector.pushSamples(monoIn, numSamples);
-
-        // Mirror an input signal into the lock-free ring buffer that
-        // backs getInputFrame(). The renderer-side notedetect plugin
-        // reads this on the bridge path to run polyphonic chord
-        // scoring. When the caller has explicitly picked a single
-        // input channel (0=left, 1=right) the buffer's channel 0 is
-        // already that selected source, so we use it directly. When
-        // selectedInputChannel is -1 ("mono mix") and the device has
-        // multiple input channels, compute the average across the
-        // *input* channels with the same input gain the channel-copy
-        // loop above applied to the output buffer. This is
-        // independent of output topology — a mono output device or a
-        // surround output with zeroed extra channels would otherwise
-        // produce either no mix (output<=1) or a diluted one
-        // (output>input), both wrong.
-        const uint64_t w = inputFrameRingWriteIndex.load(std::memory_order_relaxed);
-        constexpr int kMask = kInputFrameRingCapacity - 1;
+        const float* monoSource = nullptr;
         const bool mixMono = (selectedCh < 0) && (numInputChannels > 1);
-        if (mixMono)
+        if (mixMono && (int) monoMixScratch.size() >= numSamples)
         {
             const float invCh = 1.0f / (float) numInputChannels;
             for (int i = 0; i < numSamples; ++i)
@@ -615,21 +616,34 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
                 float mix = 0.0f;
                 for (int ch = 0; ch < numInputChannels; ++ch)
                     mix += inputData[ch][i];
-                inputFrameRing[(w + (uint64_t) i) & (uint64_t) kMask]
-                    .store(mix * invCh * inGain, std::memory_order_relaxed);
+                monoMixScratch[(size_t) i] = mix * invCh * inGain;
             }
+            monoSource = monoMixScratch.data();
         }
         else
         {
-            for (int i = 0; i < numSamples; ++i)
-                inputFrameRing[(w + (uint64_t) i) & (uint64_t) kMask]
-                    .store(monoIn[i], std::memory_order_relaxed);
+            // Either no mix wanted (explicit channel select / single
+            // input) or scratch buffer not yet sized (a block came in
+            // before audioDeviceAboutToStart finished — shouldn't
+            // happen but stay safe). Channel 0 of the post-copy buffer
+            // is the right answer in both cases.
+            monoSource = buffer.getReadPointer(0);
         }
-        // Release-store the new write index so the main-thread reader's
-        // matching acquire load sees every sample written above. Per-
-        // sample stores are atomic-relaxed so the concurrent read by
-        // getInputFrame() isn't a data race (UB) when the writer laps
-        // mid-snapshot.
+
+        pitchDetector.pushSamples(monoSource, numSamples);
+
+        // Mirror the same signal into the lock-free ring buffer that
+        // backs getInputFrame(). The release-store on the write index
+        // pairs with the main-thread reader's acquire load so every
+        // sample written below is visible before the index update.
+        // Per-slot stores are atomic-relaxed so the concurrent read
+        // by getInputFrame() isn't a data race (UB) when the writer
+        // laps mid-snapshot.
+        const uint64_t w = inputFrameRingWriteIndex.load(std::memory_order_relaxed);
+        constexpr int kMask = kInputFrameRingCapacity - 1;
+        for (int i = 0; i < numSamples; ++i)
+            inputFrameRing[(w + (uint64_t) i) & (uint64_t) kMask]
+                .store(monoSource[i], std::memory_order_relaxed);
         inputFrameRingWriteIndex.store(w + (uint64_t) numSamples, std::memory_order_release);
     }
 

@@ -55,7 +55,7 @@ public:
     // Audio start/stop
     void startAudio();
     void stopAudio();
-    bool isAudioRunning() const { return audioRunning; }
+    bool isAudioRunning() const { return audioRunning.load(std::memory_order_relaxed); }
 
     // Gain controls
     void setInputGain(float gain) { inputGain.store(gain); }
@@ -151,7 +151,11 @@ private:
     std::atomic<double> cachedBackingDuration{0.0};
     juce::CriticalSection backingLock;
 
-    bool audioRunning = false;
+    // Toggled from startAudio()/stopAudio() (main / device-management
+    // threads) and read from isAudioRunning() on the JS thread via the
+    // audio-bridge dispatch loop. Plain bool would be a data race;
+    // relaxed-atomic is well-defined and compiles to a plain MOV.
+    std::atomic<bool> audioRunning{false};
     // Sample rate is written from the JUCE device callbacks (audio
     // thread / device-management thread) and read from arbitrary
     // callers including the JS thread via getCurrentSampleRate(),
@@ -169,8 +173,13 @@ private:
     // the audio thread (audioDeviceIOCallbackWithContext); single consumer
     // is the main thread via getInputFrame(). Capacity is a power of two
     // so the audio-thread store can mask instead of modulo. The write
-    // index is monotonically increasing in samples-since-start and never
-    // wraps in practice (uint64 covers >12 million years at 48 kHz).
+    // index is monotonically increasing in samples while audio is
+    // running, and is reset to 0 on audioDeviceAboutToStart() and
+    // audioDeviceStopped() so a stop→start cycle delivers a clean
+    // cold-start frame instead of mixing in stale samples from the
+    // previous run. Within a single run uint64 covers >12 million years
+    // at 48 kHz before wrap, so the wraparound case is unreachable in
+    // practice between lifecycle resets.
     //
     // Each slot is std::atomic<float> with relaxed loads/stores: plain
     // float concurrent access would be a data race (undefined behavior)
@@ -185,6 +194,16 @@ private:
     // that sensitivity.
     std::array<std::atomic<float>, kInputFrameRingCapacity> inputFrameRing{};
     std::atomic<uint64_t> inputFrameRingWriteIndex{0};
+
+    // Audio-thread scratch buffer for the mono-mix path. Sized once in
+    // audioDeviceAboutToStart() so the hot loop never allocates. Holds
+    // the per-block mono-mix samples that get fed to BOTH the pitch
+    // detector and the input-frame ring, so both consumers see the
+    // same signal (the alternative — channel 0 to pitch, mix to ring
+    // — would leave the renderer's chord scorer and the engine's
+    // pitch detector looking at different audio when -1 is selected
+    // on a stereo input).
+    std::vector<float> monoMixScratch;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioEngine)
 };
