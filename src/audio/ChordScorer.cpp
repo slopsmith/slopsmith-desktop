@@ -159,18 +159,46 @@ ChordScorer::Result ChordScorer::scoreChord(const float* buffer, int numSamples,
     if (numSamples <= 0 || sampleRate <= 0.0 || buffer == nullptr || out.totalStrings == 0)
         return out;
 
+    // Build the all-miss shape the validation-failure path returns. The
+    // caller's contract is one result entry per requested note (matches
+    // AudioEngine::scoreChord's audio-not-running fast path) — without
+    // this, an out-of-range or mismatched request would yield
+    // totalStrings > 0 with results.length == 0 and break renderers
+    // that iterate results[] one-to-one with the chord-note list.
+    auto fillMissResults = [&out, &req]() {
+        out.results.clear();
+        out.results.reserve(req.notes.size());
+        for (const auto& n : req.notes)
+        {
+            NoteResult r{};
+            r.string = n.string;
+            r.fret = n.fret;
+            out.results.push_back(r);
+        }
+    };
+
     // Validate request shape. Unsupported (arrangement, stringCount)
     // pairs and undersized/mismatched tuningOffsets used to silently
     // fall back to bass-4 / guitar-6 with zero offsets, producing
-    // plausible-looking but wrong scores. Fail closed instead — return
-    // an empty results[] so the caller sees totalStrings>0 with hits=0
-    // and can detect the misuse.
+    // plausible-looking but wrong scores. Fail closed instead — emit
+    // an all-miss result set so the renderer sees score=0 / isHit=false
+    // with the expected per-note entries.
     const auto* basePtr = standardMidiFor(req.arrangement, req.stringCount);
-    if (basePtr == nullptr) return out;
+    if (basePtr == nullptr) { fillMissResults(); return out; }
     const auto& base = *basePtr;
-    if ((int) req.tuningOffsets.size() != req.stringCount) return out;
+    if ((int) req.tuningOffsets.size() != req.stringCount)
+    {
+        fillMissResults();
+        return out;
+    }
     for (const auto& n : req.notes)
-        if (n.string < 0 || n.string >= req.stringCount) return out;
+    {
+        if (n.string < 0 || n.string >= req.stringCount)
+        {
+            fillMissResults();
+            return out;
+        }
+    }
 
     // Size the FFT exactly the way JS does: at least nextPow2(numSamples),
     // but never finer than the bin-width floor derived from sampleRate so
