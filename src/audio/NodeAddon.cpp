@@ -423,16 +423,25 @@ static Napi::Value GetPitchDetection(const Napi::CallbackInfo& info)
 // whole reason for moving the math here: constitution II says audio
 // analysis lives in JUCE, and this is the missing piece.
 //
-// Request shape (any field omitted falls back to a documented default):
+// Request shape. Fields marked `required` must be present and
+// internally consistent — the C++ scorer fails closed (all-miss
+// result with one entry per requested note) when the validation
+// invariants don't hold, rather than silently substituting defaults.
 // {
-//   numSamples?: number,            // analysis window (default 4096)
-//   arrangement?: 'guitar'|'bass',  // default 'guitar'
-//   stringCount?: number,           // default 6
-//   offsets?: number[],             // tuning semitone offsets per string
+//   notes: [{ s, f, ho?, po?, b?, sl?, hm? }, ...],
+//                                   // required, each `s` must be in [0, stringCount)
+//   arrangement?: 'guitar'|'bass',  // default 'guitar' — must be one of these two strings
+//   stringCount?: number,           // default 6 — must match the (arrangement, stringCount)
+//                                   //  table: bass{4,5} or guitar{6,7,8}
+//   offsets: number[],              // required, length must equal stringCount.
+//                                   //  Pass an array of zeros for standard tuning;
+//                                   //  the default of `stringCount = 6` only works
+//                                   //  if you supply 6 offsets.
+//   numSamples?: number,            // analysis window (default 4096, capped at the
+//                                   //  engine input-ring capacity, currently 8192)
 //   capo?: number,                  // default 0
-//   pitchCheckCents?: number,       // 0 = energy-only chord check
+//   pitchCheckCents?: number,       // 0 = energy-only chord check (default 0)
 //   minHitRatio?: number,           // default 0.6
-//   notes: [{ s, f, ho?, po?, b?, sl?, hm? }, ...]
 // }
 static Napi::Value ScoreChord(const Napi::CallbackInfo& info)
 {
