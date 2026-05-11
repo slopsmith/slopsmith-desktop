@@ -230,30 +230,28 @@ const DENY_PERMISSIONS = new Set([
     'idle-detection',
 ]);
 
-// Predicate factory: did a permission request originate from the specific
-// renderer URL we loaded? Captures the *exact* port resolved by the
-// Python supervisor at startup, so a stray navigation to another local
-// service (e.g. http://127.0.0.1:3000) cannot inherit the renderer's
-// permission policy.
+// Predicate factory: did a permission request originate from the exact
+// origin we load the renderer from? The window's `loadURL` target is
+// `http://127.0.0.1:${port}` (see createWindow), so the trusted origin
+// is precisely that protocol + hostname + port triple — no wider
+// hostname allow-list. `http://localhost:${port}` could resolve to a
+// different listener on a dual-stack host and must NOT inherit the
+// grant.
 //
-// Parses via WHATWG URL so query strings, fragments, IPv6 brackets, and
-// other valid-but-uncommon URL shapes don't trip the check (a regex like
-// /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/.*)?$/ would reject
-// `http://127.0.0.1:18000?x=1` because there's no `/` before the query
-// string). URL parsing also gives strong host-matching, so
-// `http://localhost.evil.com/` cannot impersonate the renderer.
+// Parses via WHATWG URL so query strings, fragments, and other
+// valid-but-uncommon URL shapes don't trip the check. URL.origin
+// canonicalises to `scheme://host:port`, which is exactly the equality
+// we want — anything else (different port, different scheme, different
+// hostname, malformed URL) compares unequal.
 function makeRendererOriginPredicate(rendererPort: number): (url: string) => boolean {
-    const portStr = String(rendererPort);
+    const expectedOrigin = `http://127.0.0.1:${rendererPort}`;
     return (url: string): boolean => {
         if (!url) return false;
-        let parsed: URL;
-        try { parsed = new URL(url); } catch { return false; }
-        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
-        if (parsed.hostname !== '127.0.0.1' && parsed.hostname !== 'localhost') return false;
-        // URL.port is empty for the protocol's default port (80/443); the
-        // renderer always loads with an explicit non-default port, so a
-        // missing port can only come from an attacker-shaped URL.
-        return parsed.port === portStr;
+        try {
+            return new URL(url).origin === expectedOrigin;
+        } catch {
+            return false;
+        }
     };
 }
 
