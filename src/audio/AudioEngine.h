@@ -154,11 +154,19 @@ private:
     // so the audio-thread store can mask instead of modulo. The write
     // index is monotonically increasing in samples-since-start and never
     // wraps in practice (uint64 covers >12 million years at 48 kHz).
-    // Reader tolerates a small amount of tearing on the very oldest
-    // samples when the writer laps mid-snapshot — at 4096 samples vs the
-    // 256-sample audio block, worst case is ~6% of the buffer, and the
-    // YIN/HPS chord-scoring math is well below that sensitivity.
-    std::array<float, kInputFrameRingCapacity> inputFrameRing{};
+    //
+    // Each slot is std::atomic<float> with relaxed loads/stores: plain
+    // float concurrent access would be a data race (undefined behavior)
+    // when the writer laps mid-snapshot, even though we're prepared to
+    // tolerate stale data mathematically. Relaxed-ordered access on a
+    // 4-byte type compiles to a plain MOV on x86 and a non-fenced load/
+    // store on AArch64, so the audio-thread cost is the same as the
+    // unsynchronised version while the C++ memory model now permits the
+    // race. Reader still tolerates seeing a few of the oldest samples
+    // from a newer write (worst case ~6% of a 4096-sample snapshot at
+    // 256-sample blocks); the YIN/HPS chord-scoring math is well below
+    // that sensitivity.
+    std::array<std::atomic<float>, kInputFrameRingCapacity> inputFrameRing{};
     std::atomic<uint64_t> inputFrameRingWriteIndex{0};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioEngine)

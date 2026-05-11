@@ -183,17 +183,32 @@ export function initAudioBridge(mainWindow: BrowserWindow | null): void {
     });
 
     function dispatchInputFrames(): void {
-        if (!audio || inputFrameSubscribers.size === 0) return;
+        // If the audio engine has gone away (init failure or shutdown),
+        // there's nothing to stream — drop every subscriber so we don't
+        // accumulate stale WebContents references waiting for an engine
+        // that won't come back, and stop the timer immediately.
+        if (!audio) {
+            inputFrameSubscribers.clear();
+            stopInputFrameTimer();
+            return;
+        }
+        if (inputFrameSubscribers.size === 0) return;
         const samples: Float32Array | undefined = audio.getInputFrame(INPUT_FRAME_SAMPLES);
         if (!samples || samples.length === 0) return;
         const seq = ++inputFrameSequence;
         for (const wc of inputFrameSubscribers) {
-            if (wc.isDestroyed()) continue;
+            if (wc.isDestroyed()) {
+                inputFrameSubscribers.delete(wc);
+                continue;
+            }
             // Electron's structured-clone IPC copies the typed array per
             // recipient, so each subscriber gets its own buffer — no
             // shared-state worries.
             wc.send('audio:inputFrame', { samples, seq });
         }
+        // Cleared destroyed subscribers above may have emptied the set;
+        // collapse the timer if so.
+        if (inputFrameSubscribers.size === 0) stopInputFrameTimer();
     }
 
     function ensureInputFrameTimer(): void {
@@ -216,6 +231,12 @@ export function initAudioBridge(mainWindow: BrowserWindow | null): void {
 
     ipcMain.on('audio:subscribeInputFrames', (event) => {
         const wc = event.sender;
+        // Refuse the subscription if the engine isn't available — better
+        // to leave the renderer to retry on next session start than to
+        // keep an indefinitely-stalled subscriber. The plugin's
+        // feature-detect can also probe `audio:isAvailable` first to
+        // avoid this path entirely.
+        if (!audio) return;
         if (inputFrameSubscribers.has(wc)) return;
         inputFrameSubscribers.add(wc);
         // Drop the subscription if the renderer goes away. `destroyed`

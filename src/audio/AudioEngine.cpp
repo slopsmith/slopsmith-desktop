@@ -576,11 +576,15 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
         // this on the bridge path to run polyphonic chord scoring. Keep
         // the writer allocation-free and store the new write index with
         // release ordering so the main-thread reader's matching acquire
-        // load sees every sample written before the index update.
+        // load sees every sample written before the index update. Per-
+        // sample stores are atomic-relaxed so the concurrent read by
+        // getInputFrame() isn't a data race (UB) when the writer laps
+        // mid-snapshot.
         const uint64_t w = inputFrameRingWriteIndex.load(std::memory_order_relaxed);
         constexpr int kMask = kInputFrameRingCapacity - 1;
         for (int i = 0; i < numSamples; ++i)
-            inputFrameRing[(w + (uint64_t) i) & (uint64_t) kMask] = monoIn[i];
+            inputFrameRing[(w + (uint64_t) i) & (uint64_t) kMask]
+                .store(monoIn[i], std::memory_order_relaxed);
         inputFrameRingWriteIndex.store(w + (uint64_t) numSamples, std::memory_order_release);
     }
 
@@ -659,13 +663,15 @@ std::vector<float> AudioEngine::getInputFrame(int numSamples) const
     {
         const size_t available = (size_t) w;
         for (size_t i = 0; i < available; ++i)
-            out[(size_t) numSamples - available + i] = inputFrameRing[i];
+            out[(size_t) numSamples - available + i]
+                = inputFrameRing[i].load(std::memory_order_relaxed);
         return out;
     }
 
     constexpr uint64_t kMask = (uint64_t) kInputFrameRingCapacity - 1;
     const uint64_t start = w - (uint64_t) numSamples;
     for (int i = 0; i < numSamples; ++i)
-        out[(size_t) i] = inputFrameRing[(start + (uint64_t) i) & kMask];
+        out[(size_t) i]
+            = inputFrameRing[(start + (uint64_t) i) & kMask].load(std::memory_order_relaxed);
     return out;
 }
