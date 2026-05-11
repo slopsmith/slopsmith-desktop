@@ -275,7 +275,11 @@ function openWebUrlExternally(url: string): void {
         console.warn(`[main] Refusing to openExternal non-web scheme: ${parsed.protocol}`);
         return;
     }
-    shell.openExternal(url).catch(() => { /* user dismissed / system error */ });
+    // Pass the canonicalised href, not the raw input — page-controlled
+    // strings can carry whitespace / control characters that the URL
+    // parser strips, and openExternal should see exactly the bytes we
+    // validated.
+    shell.openExternal(parsed.href).catch(() => { /* user dismissed / system error */ });
 }
 
 // Permissions we always deny, regardless of origin. These are
