@@ -490,7 +490,13 @@ static Napi::Value ScoreChord(const Napi::CallbackInfo& info)
         for (uint32_t i = 0; i < arr.Length(); ++i)
         {
             auto v = arr.Get(i);
-            req.tuningOffsets.push_back(v.IsNumber() ? v.As<Napi::Number>().Int32Value() : 0);
+            // Tuning offsets materially shift expected pitch — silently
+            // substituting 0 for a missing/non-numeric entry would
+            // produce confidently wrong scores. Reject the whole
+            // request instead (totalStrings=0 / empty results), same
+            // as if the offsets array were the wrong length.
+            if (!v.IsNumber()) return failure;
+            req.tuningOffsets.push_back(v.As<Napi::Number>().Int32Value());
         }
     }
     if (reqObj.Has("notes") && reqObj.Get("notes").IsArray())
@@ -501,23 +507,32 @@ static Napi::Value ScoreChord(const Napi::CallbackInfo& info)
         for (uint32_t i = 0; i < arr.Length(); ++i)
         {
             auto v = arr.Get(i);
-            // Push a default-constructed Note for non-object entries
-            // so results.length stays in lockstep with notes.length.
-            // ChordScorer's validation pass will then trip on the
-            // default string=0/fret=0 if the request's stringCount > 0
-            // is mis-sized — same all-miss fail-closed result the
-            // shape contract advertises.
+            // For malformed entries (non-object, or missing/non-numeric
+            // s/f) push a sentinel Note with string = -1. This keeps
+            // req.notes.size() in lockstep with the incoming notes[]
+            // length AND guarantees ChordScorer's range check
+            // (`n.string < 0 || n.string >= stringCount`) trips on the
+            // sentinel — yielding the same all-miss fail-closed result
+            // the shape contract advertises, never a false hit on the
+            // default low-string position.
+            ChordScorer::Note n{};
+            n.string = -1;
+            n.fret = -1;
             if (!v.IsObject())
             {
-                req.notes.push_back({});
+                req.notes.push_back(n);
                 continue;
             }
             auto noteObj = v.As<Napi::Object>();
-            ChordScorer::Note n{};
-            if (noteObj.Has("s") && noteObj.Get("s").IsNumber())
-                n.string = noteObj.Get("s").As<Napi::Number>().Int32Value();
-            if (noteObj.Has("f") && noteObj.Get("f").IsNumber())
-                n.fret = noteObj.Get("f").As<Napi::Number>().Int32Value();
+            const bool hasS = noteObj.Has("s") && noteObj.Get("s").IsNumber();
+            const bool hasF = noteObj.Has("f") && noteObj.Get("f").IsNumber();
+            if (!hasS || !hasF)
+            {
+                req.notes.push_back(n);
+                continue;
+            }
+            n.string = noteObj.Get("s").As<Napi::Number>().Int32Value();
+            n.fret = noteObj.Get("f").As<Napi::Number>().Int32Value();
             // Technique flags are truthy/falsy in JS; coerce to bool
             // here so an unset value cleanly becomes false.
             auto truthy = [&noteObj](const char* key) {
