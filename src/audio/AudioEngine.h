@@ -45,7 +45,7 @@ public:
     juce::String getCurrentInputDevice();
     juce::String getCurrentOutputDevice();
     double getCurrentSampleRate() const { return currentSampleRate.load(std::memory_order_relaxed); }
-    int getCurrentBlockSize() const { return currentBlockSize; }
+    int getCurrentBlockSize() const { return currentBlockSize.load(std::memory_order_relaxed); }
 
     // Device selection
     bool setDeviceType(const juce::String& typeName);
@@ -160,7 +160,10 @@ private:
     // hot reads use relaxed since the consumer just wants the latest
     // observable value, not a synchronization point.
     std::atomic<double> currentSampleRate{48000.0};
-    int currentBlockSize = 256;
+    // Block size has the same race shape as sample rate — written from
+    // device callbacks, read from getLatencyMs() / loadBackingTrack()
+    // on the JS/management thread. Atomic for the same reason.
+    std::atomic<int> currentBlockSize{256};
 
     // Lock-free SPSC ring buffer for raw mono input. Single producer is
     // the audio thread (audioDeviceIOCallbackWithContext); single consumer

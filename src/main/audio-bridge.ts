@@ -189,8 +189,15 @@ export function initAudioBridge(mainWindow: BrowserWindow | null): void {
         // typeof guard covers the version-skew case where the JS/TS was
         // updated but the native addon predates getSampleRate — without
         // it, `audio.getSampleRate()` would throw rather than fall back.
+        // The native side already substitutes 48000 for non-finite / <=0
+        // values, but we double-check here so a malformed return value
+        // from a stub or test harness can't leak through to the renderer
+        // and feed a zero into the chord scorer's bin→Hz math.
         if (audio && typeof audio.getSampleRate === 'function') {
-            try { return audio.getSampleRate(); } catch { /* fall through */ }
+            try {
+                const sr = audio.getSampleRate();
+                if (typeof sr === 'number' && Number.isFinite(sr) && sr > 0) return sr;
+            } catch { /* fall through */ }
         }
         return 48000;
     });
@@ -207,6 +214,17 @@ export function initAudioBridge(mainWindow: BrowserWindow | null): void {
             return;
         }
         if (inputFrameSubscribers.size === 0) return;
+        // Skip the IPC fan-out when the device isn't running — every
+        // tick would otherwise allocate + copy + send a 16 KB zero-
+        // filled buffer to every subscriber. Renderers see a pause
+        // in the stream rather than a flood of silence, which is what
+        // the bridge consumer (notedetect on the bridge path) expects
+        // — its chord-scoring branch is a no-op on silence anyway.
+        if (typeof audio.isAudioRunning === 'function') {
+            try {
+                if (!audio.isAudioRunning()) return;
+            } catch { /* if the probe throws, fall through and try the frame fetch */ }
+        }
         let samples: Float32Array | undefined;
         try {
             samples = audio.getInputFrame(INPUT_FRAME_SAMPLES);

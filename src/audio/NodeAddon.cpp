@@ -6,6 +6,7 @@
 #include <thread>
 #include <atomic>
 #include <cstring>
+#include <cmath>
 
 #include "AudioEngine.h"
 #include "VSTHost.h"
@@ -438,13 +439,20 @@ static Napi::Value GetInputFrame(const Napi::CallbackInfo& info)
 // Sample rate the audio device is running at. Notedetect's chord scorer
 // needs this to map FFT bins to Hz; on the bridge path there's no
 // AudioContext to read it from. Falls back to 48000 if the engine isn't
-// ready (matches the historical fallback in screen.js).
+// ready (matches the historical fallback in screen.js) — and also if
+// the engine is initialized but no device is currently active, which
+// pins currentSampleRate to 0 internally and would otherwise propagate
+// a divide-by-zero into the renderer's FFT-bin→Hz math.
 static Napi::Value GetSampleRate(const Napi::CallbackInfo& info)
 {
     auto env = info.Env();
+    constexpr double kFallbackSampleRate = 48000.0;
     if (!engine)
-        return Napi::Number::New(env, 48000.0);
-    return Napi::Number::New(env, engine->getCurrentSampleRate());
+        return Napi::Number::New(env, kFallbackSampleRate);
+    const double sr = engine->getCurrentSampleRate();
+    if (!std::isfinite(sr) || sr <= 0.0)
+        return Napi::Number::New(env, kFallbackSampleRate);
+    return Napi::Number::New(env, sr);
 }
 
 // ── VST Plugin Scanning ──────────────────────────────────────────────────────
