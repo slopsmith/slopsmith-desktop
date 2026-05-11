@@ -156,15 +156,14 @@ ChordScorer::Result ChordScorer::scoreChord(const float* buffer, int numSamples,
 {
     Result out{};
     out.totalStrings = (int) req.notes.size();
-    if (numSamples <= 0 || sampleRate <= 0.0 || buffer == nullptr || out.totalStrings == 0)
-        return out;
 
-    // Build the all-miss shape the validation-failure path returns. The
-    // caller's contract is one result entry per requested note (matches
-    // AudioEngine::scoreChord's audio-not-running fast path) — without
-    // this, an out-of-range or mismatched request would yield
-    // totalStrings > 0 with results.length == 0 and break renderers
-    // that iterate results[] one-to-one with the chord-note list.
+    // Build the all-miss shape every validation-failure path returns.
+    // The caller's contract is one result entry per requested note
+    // (matches AudioEngine::scoreChord's audio-not-running fast path)
+    // — without this, an out-of-range or mismatched request would
+    // yield totalStrings > 0 with results.length == 0 and break
+    // renderers that iterate results[] one-to-one with the chord-note
+    // list.
     auto fillMissResults = [&out, &req]() {
         out.results.clear();
         out.results.reserve(req.notes.size());
@@ -176,6 +175,18 @@ ChordScorer::Result ChordScorer::scoreChord(const float* buffer, int numSamples,
             out.results.push_back(r);
         }
     };
+
+    // Bail with the per-note all-miss shape when the audio inputs are
+    // unusable (zero/negative samples, zero sample rate, or a null
+    // buffer the caller forgot to populate). Setting totalStrings = 0
+    // here would diverge from the other failure paths; instead emit
+    // the same shape every other early-exit produces.
+    if (numSamples <= 0 || sampleRate <= 0.0 || buffer == nullptr)
+    {
+        fillMissResults();
+        return out;
+    }
+    if (out.totalStrings == 0) return out;
 
     // Validate request shape. Unsupported (arrangement, stringCount)
     // pairs and undersized/mismatched tuningOffsets used to silently
