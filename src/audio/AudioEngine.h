@@ -2,6 +2,7 @@
 #include "NoiseGate.h"
 #include "SignalChain.h"
 #include "PitchDetector.h"
+#include "ChordScorer.h"
 #include <juce_audio_devices/juce_audio_devices.h>
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <array>
@@ -115,6 +116,13 @@ public:
     // request fewer; anything larger than the ring capacity gets clamped.
     std::vector<float> getInputFrame(int numSamples = 4096) const;
 
+    // Score a chord against the latest input-ring samples. The chord
+    // context (notes, arrangement, thresholds) comes from the renderer
+    // over IPC; audio data stays inside the engine so no buffers cross
+    // the N-API boundary. Returns the same `{score, hitStrings,
+    // totalStrings, isHit, results[]}` shape as the JS implementation.
+    ChordScorer::Result scoreChord(const ChordScorer::Request& req);
+
 private:
     void audioDeviceIOCallbackWithContext(const float* const* inputData,
                                           int numInputChannels,
@@ -130,6 +138,7 @@ private:
     SignalChain signalChain;
     PitchDetector pitchDetector;
     NoiseGate noiseGate;
+    ChordScorer chordScorer;
     juce::AudioFormatManager formatManager;
 
     std::atomic<float> inputGain{1.0f};

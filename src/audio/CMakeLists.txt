@@ -10,6 +10,7 @@ set(AUDIO_SOURCES
     NAMProcessor.cpp
     IRLoader.cpp
     PitchDetector.cpp
+    ChordScorer.cpp
 )
 
 # Build as shared library (.node)

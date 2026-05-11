@@ -1,0 +1,107 @@
+#pragma once
+
+// ChordScorer — native port of the notedetect plugin's polyphonic
+// chord-scoring math (slopsmith-plugin-notedetect/screen.js). Constitution
+// II requires audio analysis to live in JUCE, not renderer JS; the
+// renderer calls in over IPC (`audio:scoreChord`) and consumes the
+// returned result object.
+//
+// The math is a direct C++ translation of the JS originals
+// (`_ndFftMagnitude`, `_ndStringBandHz`, `_ndBandEnergy`, `_ndTotalEnergy`,
+// `_ndConstraintCheckString`, `_ndScoreChord`). The custom radix-2
+// Cooley-Tukey in JS is replaced with `juce::dsp::FFT`; all other helpers
+// are line-for-line translations so the algorithm stays bit-for-bit
+// comparable to the browser path that still runs the JS implementation.
+
+#include <juce_dsp/juce_dsp.h>
+#include <memory>
+#include <string>
+#include <vector>
+
+class ChordScorer
+{
+public:
+    // Standard-tuning MIDI base for the supported (arrangement, stringCount)
+    // pairs. Lifted from screen.js `_ND_TUNING_*` constants verbatim so the
+    // open-string MIDI values match between the native and JS paths.
+    static const std::vector<int>& standardMidiFor(const std::string& arrangement, int stringCount);
+
+    // One chord-note in the request payload. Mirrors the chart-note shape
+    // the JS chord scorer consumes from `matchNotes()`: `s` = string
+    // index, `f` = fret, plus optional technique flags that adjust
+    // per-string thresholds.
+    struct Note
+    {
+        int string = 0;
+        int fret = 0;
+        bool hammerOn = false;     // ho — no pick attack, lower energy threshold
+        bool pullOff = false;      // po — same
+        bool bend = false;         // b  — pitch moving, widen pitch window
+        bool slide = false;        // sl — same
+        bool harmonic = false;     // hm — energy-only check, skip pitch
+    };
+
+    // Per-note scoring result. Same field names as the JS shape so the
+    // N-API wrapper can map straight through and the renderer-side
+    // consumer is identical to the browser path.
+    struct NoteResult
+    {
+        int string = 0;
+        int fret = 0;
+        bool hit = false;
+        float bandEnergy = 0.0f;
+        // centsDiff is the absolute pitch deviation; centsError is signed
+        // (positive = sharp). Both are valid only when the band-energy
+        // threshold passed AND pitch-check was requested; otherwise
+        // hasCents is false and the renderer treats them as null.
+        bool hasCents = false;
+        float centsDiff = 0.0f;
+        float centsError = 0.0f;
+    };
+
+    struct Request
+    {
+        int numSamples = 4096;          // window read out of the engine's input ring
+        std::string arrangement = "guitar"; // "guitar" | "bass"
+        int stringCount = 6;
+        std::vector<int> tuningOffsets; // size == stringCount, semitones per string
+        int capo = 0;
+        float pitchCheckCents = 0.0f;   // 0 = energy-only chord check
+        float minHitRatio = 0.6f;
+        std::vector<Note> notes;
+    };
+
+    struct Result
+    {
+        float score = 0.0f;             // hitStrings / totalStrings
+        int hitStrings = 0;
+        int totalStrings = 0;
+        bool isHit = false;
+        std::vector<NoteResult> results;
+    };
+
+    ChordScorer() = default;
+
+    // Score a chord against `buffer` (numSamples mono floats). Audio is
+    // not stored; the caller (AudioEngine) snapshots its input ring and
+    // passes the pointer in. Re-uses internal FFT scratch across calls
+    // so steady-state scoring is allocation-free.
+    Result scoreChord(const float* buffer, int numSamples, double sampleRate, const Request& req);
+
+private:
+    // Lazily-built FFT for whatever size the current sampleRate dictates.
+    // The JS version targets ~3 Hz bin width, so the size depends on
+    // sampleRate; we rebuild only when that derived size changes.
+    void ensureFft(int fftSize);
+    void computeMagnitudes(const float* buffer, int numSamples);
+
+    int currentFftSize = 0;
+    int currentFftOrder = 0;
+    std::unique_ptr<juce::dsp::FFT> fft;
+    // Interleaved {re, im} scratch, length 2 * fftSize. Hann-windowed
+    // input goes in the real slots; imag stays zero.
+    std::vector<float> interleavedScratch;
+    // Magnitude spectrum, length fftSize/2 + 1 (Nyquist-inclusive).
+    std::vector<float> magnitudes;
+    double lastBinHz = 0.0;
+};

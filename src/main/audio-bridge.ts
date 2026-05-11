@@ -2,30 +2,13 @@
 // The native addon is loaded via require() and its methods are
 // exposed to the renderer process via ipcMain.handle().
 
-import { ipcMain, BrowserWindow, WebContents } from 'electron';
+import { ipcMain, BrowserWindow } from 'electron';
 import * as path from 'path';
 import { app } from 'electron';
 
 type AudioModule = Record<string, (...args: any[]) => any>;
 
 let audio: AudioModule | null = null;
-
-// Renderers that have called `audio:subscribeInputFrames`. We push raw
-// input frames to each one on a shared 50 ms timer that's only running
-// while this set is non-empty, so unsubscribed/closed windows don't pay
-// the IPC cost.
-const inputFrameSubscribers = new Set<WebContents>();
-// WebContents we've already attached a `destroyed` cleanup listener to.
-// A renderer may subscribe and unsubscribe many times across its
-// lifetime; registering a fresh `once('destroyed', ...)` per subscribe
-// would accumulate one-shot listeners that never fire until window
-// close, slowly growing the listener registry. A WeakSet drops the
-// reference automatically once the WebContents is GC'd.
-const inputFrameDestroyHooked = new WeakSet<WebContents>();
-let inputFrameTimer: NodeJS.Timeout | null = null;
-let inputFrameSequence = 0;
-const INPUT_FRAME_INTERVAL_MS = 50;
-const INPUT_FRAME_SAMPLES = 4096;
 
 function loadNativeAddon(): AudioModule | null {
     const addonPaths = [
@@ -52,7 +35,7 @@ function loadNativeAddon(): AudioModule | null {
     return null;
 }
 
-export function initAudioBridge(getMainWindow: () => BrowserWindow | null): void {
+export function initAudioBridge(_getMainWindow: () => BrowserWindow | null): void {
     audio = loadNativeAddon();
 
     if (audio) {
@@ -177,13 +160,12 @@ export function initAudioBridge(getMainWindow: () => BrowserWindow | null): void
         return audio?.getPitchDetection() ?? { frequency: -1, confidence: 0, midiNote: -1, cents: 0, noteName: '' };
     });
 
-    // ── Input Frame Streaming ──────────────────────────────────────────────
-    // Used by the notedetect plugin's polyphonic chord scorer, which needs
-    // raw audio frames (not just monophonic pitch). The renderer subscribes
-    // via `audio:subscribeInputFrames`; we drive a single 50ms timer that
-    // polls the JUCE engine's ring buffer and dispatches to every active
-    // subscriber. Timer stops the moment the subscriber set goes empty so
-    // we don't burn IPC bandwidth when no one is listening.
+    // ── Chord Scoring (polyphonic) ─────────────────────────────────────────
+    // The notedetect plugin's chord-scoring branch hands us a chord
+    // context — notes, arrangement, tuning offsets, thresholds — and
+    // we score it against the engine's most recent input-ring samples
+    // entirely inside the native scorer. No audio buffers cross the
+    // N-API boundary; only the small result object travels over IPC.
 
     ipcMain.handle('audio:getSampleRate', () => {
         // typeof guard covers the version-skew case where the JS/TS was
@@ -192,7 +174,7 @@ export function initAudioBridge(getMainWindow: () => BrowserWindow | null): void
         // The native side already substitutes 48000 for non-finite / <=0
         // values, but we double-check here so a malformed return value
         // from a stub or test harness can't leak through to the renderer
-        // and feed a zero into the chord scorer's bin→Hz math.
+        // and feed a zero into downstream tolerance math.
         if (audio && typeof audio.getSampleRate === 'function') {
             try {
                 const sr = audio.getSampleRate();
@@ -202,136 +184,18 @@ export function initAudioBridge(getMainWindow: () => BrowserWindow | null): void
         return 48000;
     });
 
-    function dispatchInputFrames(): void {
-        // If the audio engine has gone away (init failure, shutdown, or
-        // a downlevel addon missing getInputFrame), there's nothing to
-        // stream — drop every subscriber so we don't accumulate stale
-        // WebContents references waiting for an engine that won't come
-        // back, and stop the timer immediately.
-        if (!audio || typeof audio.getInputFrame !== 'function') {
-            inputFrameSubscribers.clear();
-            stopInputFrameTimer();
-            return;
-        }
-        if (inputFrameSubscribers.size === 0) return;
-        // Skip the IPC fan-out when the device isn't running — every
-        // tick would otherwise allocate + copy + send a 16 KB zero-
-        // filled buffer to every subscriber. Renderers see a pause
-        // in the stream rather than a flood of silence, which is what
-        // the bridge consumer (notedetect on the bridge path) expects
-        // — its chord-scoring branch is a no-op on silence anyway.
-        if (typeof audio.isAudioRunning === 'function') {
-            try {
-                if (!audio.isAudioRunning()) return;
-            } catch { /* if the probe throws, fall through and try the frame fetch */ }
-        }
-        let samples: Float32Array | undefined;
+    ipcMain.handle('audio:scoreChord', (_event, ctx: unknown) => {
+        // Feature-detect the native method the same way getSampleRate
+        // above does — a downlevel addon (pre-ChordScorer build) should
+        // return null so the renderer can fall back to skipping chord
+        // scoring instead of throwing on every call.
+        if (!audio || typeof audio.scoreChord !== 'function') return null;
         try {
-            samples = audio.getInputFrame(INPUT_FRAME_SAMPLES);
+            return audio.scoreChord(ctx);
         } catch (e: unknown) {
-            // A throw from the native side means the addon is in a bad
-            // state (engine torn down underneath us, OOM, etc.). Bail
-            // out of dispatch the same way as the missing-method case
-            // rather than retrying every 50ms and re-throwing in the
-            // interval callback (which would unhandled-reject and crash
-            // the main process on some Electron versions).
-            console.warn(`[audio] input-frame dispatch failed: ${e instanceof Error ? e.message : String(e)}`);
-            inputFrameSubscribers.clear();
-            stopInputFrameTimer();
-            return;
+            console.warn(`[audio] scoreChord failed: ${e instanceof Error ? e.message : String(e)}`);
+            return null;
         }
-        if (!samples || samples.length === 0) return;
-        const seq = ++inputFrameSequence;
-        for (const wc of inputFrameSubscribers) {
-            if (wc.isDestroyed()) {
-                inputFrameSubscribers.delete(wc);
-                continue;
-            }
-            try {
-                // Electron's structured-clone IPC copies the typed array
-                // per recipient, so each subscriber gets its own buffer
-                // — no shared-state worries. The try/catch covers the
-                // race window between isDestroyed() and send(): a
-                // WebContents can transition to destroyed concurrently,
-                // and send() throws on a torn-down target.
-                wc.send('audio:inputFrame', { samples, seq });
-            } catch {
-                inputFrameSubscribers.delete(wc);
-            }
-        }
-        // Cleared destroyed subscribers above may have emptied the set;
-        // collapse the timer if so.
-        if (inputFrameSubscribers.size === 0) stopInputFrameTimer();
-    }
-
-    function ensureInputFrameTimer(): void {
-        if (inputFrameTimer || inputFrameSubscribers.size === 0) return;
-        inputFrameTimer = setInterval(dispatchInputFrames, INPUT_FRAME_INTERVAL_MS);
-    }
-
-    function stopInputFrameTimer(): void {
-        if (inputFrameTimer && inputFrameSubscribers.size === 0) {
-            clearInterval(inputFrameTimer);
-            inputFrameTimer = null;
-        }
-    }
-
-    function removeInputFrameSubscriber(wc: WebContents): void {
-        if (inputFrameSubscribers.delete(wc)) {
-            stopInputFrameTimer();
-        }
-    }
-
-    ipcMain.on('audio:subscribeInputFrames', (event) => {
-        const wc = event.sender;
-        // Restrict to the trusted main-window renderer. Raw input
-        // samples are substantially more sensitive than the existing
-        // derived pitch data, so a stray webview / dev-tools panel /
-        // future BrowserWindow shouldn't be able to opt itself into
-        // the stream just by sending the IPC. The existing permission
-        // policy on session.defaultSession only gates web APIs like
-        // getUserMedia, not custom IPC channels, so we enforce here.
-        const mw = getMainWindow();
-        if (!mw || mw.isDestroyed() || wc.id !== mw.webContents.id) return;
-        // Refuse the subscription if the engine isn't available or
-        // doesn't expose getInputFrame (version-skew case: native
-        // addon was built against an older slopsmith-desktop). Either
-        // would lead to a silently-never-delivers subscription, with
-        // the preload's ref-count pinned so it'd never re-attempt.
-        // Refusing here lets the renderer's feature-detect on
-        // `audio:isAvailable` (or a future addon-rebuild) act as the
-        // recovery path.
-        if (!audio || typeof audio.getInputFrame !== 'function') return;
-        if (inputFrameSubscribers.has(wc)) return;
-        inputFrameSubscribers.add(wc);
-        // Attach lifecycle cleanup listeners at most once per
-        // WebContents lifetime. `destroyed` covers window close /
-        // crash. `did-start-navigation` (main frame) covers page
-        // reload and SPA route changes that don't tear down the
-        // WebContents — without it, a renderer that subscribed,
-        // reloaded, and never re-subscribed would leave the timer
-        // running forever streaming to a dead listener. WeakSet
-        // guards against accumulating multiple listeners across
-        // subscribe/unsubscribe cycles within the same page load.
-        if (!inputFrameDestroyHooked.has(wc)) {
-            inputFrameDestroyHooked.add(wc);
-            wc.once('destroyed', () => removeInputFrameSubscriber(wc));
-            wc.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
-                // Drop subscribers on real main-frame navigations only.
-                // In-page hash/history navigations don't re-init the
-                // renderer's preload context, so the existing
-                // ref-counted listener is still live and we shouldn't
-                // tear down the subscription out from under it.
-                if (!isMainFrame || isInPlace) return;
-                removeInputFrameSubscriber(wc);
-            });
-            wc.on('render-process-gone', () => removeInputFrameSubscriber(wc));
-        }
-        ensureInputFrameTimer();
-    });
-
-    ipcMain.on('audio:unsubscribeInputFrames', (event) => {
-        removeInputFrameSubscriber(event.sender);
     });
 
     // ── VST Scanning ───────────────────────────────────────────────────────
@@ -442,27 +306,11 @@ export function initAudioBridge(getMainWindow: () => BrowserWindow | null): void
 }
 
 export function shutdownAudio(): void {
-    // Drop input-frame subscribers and stop the dispatch timer before
-    // tearing down the engine — once `audio` is null the dispatch
-    // callback would clear them itself, but stopping the timer here is
-    // an unconditional one-shot (we're never re-init'ing in the same
-    // process, so the stop-timer helper's empty-set guard doesn't add
-    // value here).
-    inputFrameSubscribers.clear();
-    if (inputFrameTimer) {
-        clearInterval(inputFrameTimer);
-        inputFrameTimer = null;
-    }
     if (audio) {
         try {
             audio.shutdown();
             try { console.log('[audio] Engine shut down'); } catch { /* console may be gone */ }
         } catch { /* silent fail during shutdown */ }
-        // Null the module so any subsequent IPC handlers reflect
-        // post-shutdown state (audio:isAvailable → false, the
-        // dispatchInputFrames null-check kicks in if a stray timer
-        // tick fires after teardown, etc.) instead of calling into a
-        // torn-down addon.
         audio = null;
     }
 }

@@ -414,26 +414,127 @@ static Napi::Value GetPitchDetection(const Napi::CallbackInfo& info)
     return obj;
 }
 
-// Returns the most recent `numSamples` (default 4096) of mono input audio
-// from the engine's lock-free ring buffer as a Float32Array. Renderer uses
-// this to feed notedetect's polyphonic chord scorer (_ndScoreChord), which
-// runs on raw audio frames rather than the monophonic pitch detector output.
-// The buffer is owned by the JS realm post-return, so no lifetime gymnastics.
-static Napi::Value GetInputFrame(const Napi::CallbackInfo& info)
+// Score a polyphonic chord against the engine's most recent input
+// samples. Renderer (notedetect plugin's matchNotes chord branch)
+// supplies the chord context — chart notes plus tuning/arrangement
+// metadata — and gets back a `{score, hitStrings, totalStrings, isHit,
+// results[]}` object identical in shape to what the JS implementation
+// produced. Audio never crosses the N-API boundary, which is the
+// whole reason for moving the math here: constitution II says audio
+// analysis lives in JUCE, and this is the missing piece.
+//
+// Request shape (any field omitted falls back to a documented default):
+// {
+//   numSamples?: number,            // analysis window (default 4096)
+//   arrangement?: 'guitar'|'bass',  // default 'guitar'
+//   stringCount?: number,           // default 6
+//   offsets?: number[],             // tuning semitone offsets per string
+//   capo?: number,                  // default 0
+//   pitchCheckCents?: number,       // 0 = energy-only chord check
+//   minHitRatio?: number,           // default 0.6
+//   notes: [{ s, f, ho?, po?, b?, sl?, hm? }, ...]
+// }
+static Napi::Value ScoreChord(const Napi::CallbackInfo& info)
 {
     auto env = info.Env();
-    int numSamples = 4096;
-    if (info.Length() > 0 && info[0].IsNumber())
-        numSamples = info[0].As<Napi::Number>().Int32Value();
-    if (!engine)
-        return Napi::Float32Array::New(env, 0);
+    auto failure = Napi::Object::New(env);
+    failure.Set("score", 0.0);
+    failure.Set("hitStrings", 0);
+    failure.Set("totalStrings", 0);
+    failure.Set("isHit", false);
+    failure.Set("results", Napi::Array::New(env, 0));
 
-    auto frame = engine->getInputFrame(numSamples);
-    const size_t byteLength = frame.size() * sizeof(float);
-    auto ab = Napi::ArrayBuffer::New(env, byteLength);
-    if (byteLength > 0)
-        std::memcpy(ab.Data(), frame.data(), byteLength);
-    return Napi::Float32Array::New(env, frame.size(), ab, 0);
+    if (!engine || info.Length() < 1 || !info[0].IsObject())
+        return failure;
+
+    auto reqObj = info[0].As<Napi::Object>();
+
+    ChordScorer::Request req;
+    if (reqObj.Has("numSamples") && reqObj.Get("numSamples").IsNumber())
+        req.numSamples = reqObj.Get("numSamples").As<Napi::Number>().Int32Value();
+    if (reqObj.Has("arrangement") && reqObj.Get("arrangement").IsString())
+        req.arrangement = reqObj.Get("arrangement").As<Napi::String>().Utf8Value();
+    if (reqObj.Has("stringCount") && reqObj.Get("stringCount").IsNumber())
+        req.stringCount = reqObj.Get("stringCount").As<Napi::Number>().Int32Value();
+    if (reqObj.Has("capo") && reqObj.Get("capo").IsNumber())
+        req.capo = reqObj.Get("capo").As<Napi::Number>().Int32Value();
+    if (reqObj.Has("pitchCheckCents") && reqObj.Get("pitchCheckCents").IsNumber())
+        req.pitchCheckCents = reqObj.Get("pitchCheckCents").As<Napi::Number>().FloatValue();
+    if (reqObj.Has("minHitRatio") && reqObj.Get("minHitRatio").IsNumber())
+        req.minHitRatio = reqObj.Get("minHitRatio").As<Napi::Number>().FloatValue();
+    if (reqObj.Has("offsets") && reqObj.Get("offsets").IsArray())
+    {
+        auto arr = reqObj.Get("offsets").As<Napi::Array>();
+        req.tuningOffsets.reserve(arr.Length());
+        for (uint32_t i = 0; i < arr.Length(); ++i)
+        {
+            auto v = arr.Get(i);
+            req.tuningOffsets.push_back(v.IsNumber() ? v.As<Napi::Number>().Int32Value() : 0);
+        }
+    }
+    if (reqObj.Has("notes") && reqObj.Get("notes").IsArray())
+    {
+        auto arr = reqObj.Get("notes").As<Napi::Array>();
+        req.notes.reserve(arr.Length());
+        for (uint32_t i = 0; i < arr.Length(); ++i)
+        {
+            auto v = arr.Get(i);
+            if (!v.IsObject()) continue;
+            auto noteObj = v.As<Napi::Object>();
+            ChordScorer::Note n{};
+            if (noteObj.Has("s") && noteObj.Get("s").IsNumber())
+                n.string = noteObj.Get("s").As<Napi::Number>().Int32Value();
+            if (noteObj.Has("f") && noteObj.Get("f").IsNumber())
+                n.fret = noteObj.Get("f").As<Napi::Number>().Int32Value();
+            // Technique flags are truthy/falsy in JS; coerce to bool
+            // here so an unset value cleanly becomes false.
+            auto truthy = [&noteObj](const char* key) {
+                if (!noteObj.Has(key)) return false;
+                auto val = noteObj.Get(key);
+                return val.ToBoolean().Value();
+            };
+            n.hammerOn = truthy("ho");
+            n.pullOff = truthy("po");
+            n.bend = truthy("b");
+            n.slide = truthy("sl");
+            n.harmonic = truthy("hm");
+            req.notes.push_back(n);
+        }
+    }
+
+    auto result = engine->scoreChord(req);
+
+    auto out = Napi::Object::New(env);
+    out.Set("score", result.score);
+    out.Set("hitStrings", result.hitStrings);
+    out.Set("totalStrings", result.totalStrings);
+    out.Set("isHit", result.isHit);
+    auto resultsArr = Napi::Array::New(env, result.results.size());
+    for (size_t i = 0; i < result.results.size(); ++i)
+    {
+        const auto& r = result.results[i];
+        auto entry = Napi::Object::New(env);
+        entry.Set("s", r.string);
+        entry.Set("f", r.fret);
+        entry.Set("hit", r.hit);
+        entry.Set("bandEnergy", r.bandEnergy);
+        // Mirror the JS result shape: when cents weren't measured the
+        // fields show up as null (not present) so the renderer can
+        // distinguish "no pitch check ran" from "pitch check said 0".
+        if (r.hasCents)
+        {
+            entry.Set("centsDiff", r.centsDiff);
+            entry.Set("centsError", r.centsError);
+        }
+        else
+        {
+            entry.Set("centsDiff", env.Null());
+            entry.Set("centsError", env.Null());
+        }
+        resultsArr.Set(i, entry);
+    }
+    out.Set("results", resultsArr);
+    return out;
 }
 
 // Sample rate the audio device is running at. Notedetect's chord scorer
@@ -1182,7 +1283,7 @@ static Napi::Object InitModule(Napi::Env env, Napi::Object exports)
 
     // Pitch detection
     exports.Set("getPitchDetection", Napi::Function::New(env, GetPitchDetection));
-    exports.Set("getInputFrame", Napi::Function::New(env, GetInputFrame));
+    exports.Set("scoreChord", Napi::Function::New(env, ScoreChord));
     exports.Set("getSampleRate", Napi::Function::New(env, GetSampleRate));
 
     // VST scanning

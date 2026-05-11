@@ -754,6 +754,19 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
     }
 }
 
+ChordScorer::Result AudioEngine::scoreChord(const ChordScorer::Request& req)
+{
+    // Snapshot the input ring at the requested window size and forward
+    // to the scorer. The renderer never sees audio data — only the
+    // result object — which is the whole point of running the scoring
+    // here rather than over an audio-frame IPC.
+    const int numSamples = (req.numSamples > 0) ? req.numSamples : 4096;
+    auto frame = getInputFrame(numSamples);
+    return chordScorer.scoreChord(frame.data(), (int) frame.size(),
+                                  currentSampleRate.load(std::memory_order_relaxed),
+                                  req);
+}
+
 std::vector<float> AudioEngine::getInputFrame(int numSamples) const
 {
     if (numSamples <= 0) return {};
