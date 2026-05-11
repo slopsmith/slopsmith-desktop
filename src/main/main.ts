@@ -215,17 +215,29 @@ function createWindow(port: number): void {
     // via shell.openExternal. Re-derive the predicate locally — the
     // permission handler captured it in a closure that isn't exposed.
     const isRendererOrigin = makeRendererOriginPredicate(port);
-    mainWindow.webContents.on('will-navigate', (event, navUrl) => {
-        if (isRendererOrigin(navUrl)) return;
-        event.preventDefault();
-        console.warn(`[main] Blocked in-window navigation to non-renderer origin: ${navUrl}`);
-        // Only forward web URLs to the system browser. `file:`,
-        // `javascript:`, `mailto:`, or custom schemes would otherwise
-        // trigger the user's registered protocol handler from a
-        // page-controlled string — that's an obvious foot-gun even for
-        // a navigation we're already blocking.
-        openWebUrlExternally(navUrl);
-    });
+    // Block both initial in-window navigation and 30x redirects that
+    // resolve off the renderer origin. `will-navigate` covers
+    // user/script-initiated navigations (link clicks, location =);
+    // `will-redirect` covers server-side redirects during an
+    // in-progress navigation (the local proxy returning a 302 to a
+    // remote URL is the typical worry here). Both call into the same
+    // handler so the policy and external-routing behaviour stay in
+    // lock-step.
+    function blockOffOriginNavigation(reason: string) {
+        return (event: Electron.Event, navUrl: string) => {
+            if (isRendererOrigin(navUrl)) return;
+            event.preventDefault();
+            console.warn(`[main] Blocked ${reason} to non-renderer origin: ${navUrl}`);
+            // Only forward web URLs to the system browser. `file:`,
+            // `javascript:`, `mailto:`, or custom schemes would otherwise
+            // trigger the user's registered protocol handler from a
+            // page-controlled string — that's an obvious foot-gun even
+            // for a navigation we're already blocking.
+            openWebUrlExternally(navUrl);
+        };
+    }
+    mainWindow.webContents.on('will-navigate', blockOffOriginNavigation('in-window navigation'));
+    mainWindow.webContents.on('will-redirect', blockOffOriginNavigation('cross-origin redirect'));
 
     // Open external links in system browser. Same scheme gate as
     // will-navigate above — a `target=_blank` or `window.open` from the
@@ -351,13 +363,16 @@ function installRendererPermissions(rendererPort: number): void {
         }
         if (permission === 'media') {
             // Electron passes mediaTypes (`'audio'` / `'video'`) for the
-            // request-handler path. Refuse the request the moment video
-            // is in there, even from the trusted origin.
+            // request-handler path. Allow only when the request is
+            // explicitly audio-only — Slopsmith doesn't use the camera,
+            // so we want both "video requested" AND "mediaTypes
+            // missing/empty" to deny (the latter would otherwise let an
+            // older / synthetic request slip through).
             const mediaTypes = (details as { mediaTypes?: string[] }).mediaTypes;
-            if (mediaTypes && mediaTypes.includes('video')) {
-                callback(false);
-                return;
-            }
+            const types = new Set(mediaTypes ?? []);
+            const audioOnly = types.has('audio') && !types.has('video');
+            callback(audioOnly);
+            return;
         }
         callback(true);
     });
