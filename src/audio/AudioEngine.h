@@ -195,5 +195,15 @@ private:
     std::array<std::atomic<float>, kInputFrameRingCapacity> inputFrameRing{};
     std::atomic<uint64_t> inputFrameRingWriteIndex{0};
 
+    // Audio-thread scratch buffer used only on zero-output device
+    // configurations (input-only ASIO, certain JACK setups). In the
+    // common case where numOutputChannels > 0, the post-copy buffer's
+    // channel 0 already holds the right mono signal and we read it
+    // directly. With zero outputs the buffer is empty, so we need
+    // somewhere to materialize the post-gain mono source for the
+    // pitch detector and ring. Pre-sized in audioDeviceAboutToStart()
+    // so the hot loop never allocates.
+    std::vector<float> inputCaptureScratch;
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioEngine)
 };

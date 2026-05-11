@@ -528,6 +528,12 @@ void AudioEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
     for (auto& slot : inputFrameRing)
         slot.store(0.0f, std::memory_order_relaxed);
 
+    // Pre-size the zero-output capture scratch to this device's block
+    // size so the audio thread doesn't allocate when we hit that path.
+    // For the common output > 0 case this storage stays unused.
+    if ((int) inputCaptureScratch.size() < bs)
+        inputCaptureScratch.assign((size_t) bs, 0.0f);
+
     signalChain.prepare(sr, bs);
     pitchDetector.prepare(sr, bs);
     noiseGate.prepare(sr, bs);
@@ -540,11 +546,18 @@ void AudioEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
 void AudioEngine::audioDeviceStopped()
 {
     signalChain.releaseResources();
-    // Also flatten the input ring index on stop so a getInputFrame()
-    // call made between stopAudio() and the next startAudio() returns
-    // the cold-start zero-padded frame rather than stale samples from
-    // the just-finished session.
+    // Flatten the input ring index on stop so a getInputFrame() call
+    // made between stopAudio() and the next startAudio() returns the
+    // cold-start zero-padded frame rather than stale samples from the
+    // just-finished session.
     inputFrameRingWriteIndex.store(0, std::memory_order_relaxed);
+    // Track the actual device lifecycle, not just our intent. JUCE
+    // can stop the device externally (hot-unplug, format change, OS
+    // sleep), which fires this callback without going through our
+    // stopAudio() path — leaving audioRunning stuck at true would
+    // keep the audio-bridge's idle gate burning IPC on a dead engine
+    // until the user actually clicked Stop.
+    audioRunning.store(false, std::memory_order_relaxed);
 }
 
 void AudioEngine::audioDeviceIOCallbackWithContext(
@@ -612,18 +625,52 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
         if (peak > prevPeak) inputPeak.store(peak);
     }
 
-    // Feed pitch detector and the input-frame ring from the buffer's
-    // channel 0 (before signal-chain processing, so we detect the dry
-    // guitar). The channel-copy block above guarantees channel 0
-    // already holds the right post-gain mono signal for every
-    // selection mode: explicit channel select broadcasts the chosen
-    // input across all output channels, "Both (Mono Mix)" writes the
-    // averaged mix across all output channels, and the pass-through
-    // case maps input channel 0 directly. Both consumers see exactly
-    // what the signal chain and output deliver to the user.
+    // Feed pitch detector and the input-frame ring (before signal-
+    // chain processing, so we detect the dry guitar). In the common
+    // case (numOutputChannels > 0) the channel-copy block above
+    // guarantees buffer channel 0 holds the right post-gain mono
+    // signal for every selection mode, and we read it directly. For
+    // input-only configurations (numOutputChannels == 0, rare but
+    // legal on some ASIO/JACK setups) the output buffer is empty, so
+    // we materialize the same post-gain mono signal from `inputData`
+    // into a pre-sized scratch vector and feed both consumers from
+    // there.
+    const float* monoSource = nullptr;
     if (numOutputChannels > 0)
     {
-        const float* monoSource = buffer.getReadPointer(0);
+        monoSource = buffer.getReadPointer(0);
+    }
+    else if (numInputChannels > 0 && (int) inputCaptureScratch.size() >= numSamples)
+    {
+        // Build the mono source mirroring the channel-copy semantics:
+        // explicit channel select picks one input; -1 with multi-input
+        // averages; otherwise input channel 0.
+        if (selectedCh >= 0 && selectedCh < numInputChannels)
+        {
+            for (int i = 0; i < numSamples; ++i)
+                inputCaptureScratch[(size_t) i] = inputData[selectedCh][i] * inGain;
+        }
+        else if (selectedCh < 0 && numInputChannels > 1)
+        {
+            const float invCh = 1.0f / (float) numInputChannels;
+            for (int i = 0; i < numSamples; ++i)
+            {
+                float mix = 0.0f;
+                for (int ch = 0; ch < numInputChannels; ++ch)
+                    mix += inputData[ch][i];
+                inputCaptureScratch[(size_t) i] = mix * invCh * inGain;
+            }
+        }
+        else
+        {
+            for (int i = 0; i < numSamples; ++i)
+                inputCaptureScratch[(size_t) i] = inputData[0][i] * inGain;
+        }
+        monoSource = inputCaptureScratch.data();
+    }
+
+    if (monoSource != nullptr)
+    {
         pitchDetector.pushSamples(monoSource, numSamples);
 
         // Mirror the same signal into the lock-free ring buffer that
