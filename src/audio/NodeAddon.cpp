@@ -471,9 +471,21 @@ static Napi::Value ScoreChord(const Napi::CallbackInfo& info)
         req.pitchCheckCents = reqObj.Get("pitchCheckCents").As<Napi::Number>().FloatValue();
     if (reqObj.Has("minHitRatio") && reqObj.Get("minHitRatio").IsNumber())
         req.minHitRatio = reqObj.Get("minHitRatio").As<Napi::Number>().FloatValue();
+    // Hard caps on caller-controlled array lengths. The scorer's
+    // (arrangement, stringCount) validation only accepts up to 8
+    // strings; chord-notes have a natural ceiling at the same value
+    // (one per string). 32 is a generous headroom that still bounds
+    // worst-case allocations the renderer could trigger over IPC —
+    // without these limits, a malformed/malicious payload claiming a
+    // gigantic JS array length would force a multi-GB reserve before
+    // the scorer's own validation rejected the request.
+    static constexpr uint32_t kMaxOffsets = 32;
+    static constexpr uint32_t kMaxNotes = 32;
+
     if (reqObj.Has("offsets") && reqObj.Get("offsets").IsArray())
     {
         auto arr = reqObj.Get("offsets").As<Napi::Array>();
+        if (arr.Length() > kMaxOffsets) return failure;
         req.tuningOffsets.reserve(arr.Length());
         for (uint32_t i = 0; i < arr.Length(); ++i)
         {
@@ -484,11 +496,22 @@ static Napi::Value ScoreChord(const Napi::CallbackInfo& info)
     if (reqObj.Has("notes") && reqObj.Get("notes").IsArray())
     {
         auto arr = reqObj.Get("notes").As<Napi::Array>();
+        if (arr.Length() > kMaxNotes) return failure;
         req.notes.reserve(arr.Length());
         for (uint32_t i = 0; i < arr.Length(); ++i)
         {
             auto v = arr.Get(i);
-            if (!v.IsObject()) continue;
+            // Push a default-constructed Note for non-object entries
+            // so results.length stays in lockstep with notes.length.
+            // ChordScorer's validation pass will then trip on the
+            // default string=0/fret=0 if the request's stringCount > 0
+            // is mis-sized — same all-miss fail-closed result the
+            // shape contract advertises.
+            if (!v.IsObject())
+            {
+                req.notes.push_back({});
+                continue;
+            }
             auto noteObj = v.As<Napi::Object>();
             ChordScorer::Note n{};
             if (noteObj.Has("s") && noteObj.Get("s").IsNumber())

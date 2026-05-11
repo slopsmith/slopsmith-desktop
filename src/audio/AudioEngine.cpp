@@ -1,5 +1,7 @@
 #include "AudioEngine.h"
 
+#include <cmath>
+
 // On Windows, ASIO drivers can crash with access violations.
 // We catch C++ exceptions but can't easily catch SEH in functions with dtors.
 // The try/catch blocks around device operations are the best we can do
