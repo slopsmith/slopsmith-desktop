@@ -406,9 +406,21 @@ function installRendererPermissions(rendererPort: number): void {
         }
         callback(true);
     });
-    def.setPermissionCheckHandler((_wc, permission, requestingOrigin) => {
+    def.setPermissionCheckHandler((_wc, permission, requestingOrigin, details) => {
         if (DENY_PERMISSIONS.has(permission)) return false;
-        return isRendererOrigin(requestingOrigin || '');
+        if (!isRendererOrigin(requestingOrigin || '')) return false;
+        if (permission === 'media') {
+            // Mirror the request-handler's audio-only policy in the
+            // synchronous check path so navigator.permissions.query()
+            // reports the same state we'll actually grant. Electron's
+            // check-handler `details` exposes `mediaType` (singular),
+            // unlike the request-handler's `mediaTypes` (plural array).
+            // Treat `'video'` and `'unknown'` as denied, only explicit
+            // `'audio'` as granted.
+            const mediaType = (details as { mediaType?: string }).mediaType;
+            return mediaType === 'audio';
+        }
+        return true;
     });
 }
 
