@@ -446,17 +446,85 @@ static Napi::Value GetPitchDetection(const Napi::CallbackInfo& info)
 static Napi::Value ScoreChord(const Napi::CallbackInfo& info)
 {
     auto env = info.Env();
-    auto failure = Napi::Object::New(env);
-    failure.Set("score", 0.0);
-    failure.Set("hitStrings", 0);
-    failure.Set("totalStrings", 0);
-    failure.Set("isHit", false);
-    failure.Set("results", Napi::Array::New(env, 0));
+
+    // Hard caps on caller-controlled array lengths. The scorer's
+    // (arrangement, stringCount) validation only accepts up to 8
+    // strings; chord-notes have a natural ceiling at the same value
+    // (one per string). 32 is a generous headroom that still bounds
+    // worst-case allocations the renderer could trigger over IPC —
+    // without these limits, a malformed/malicious payload claiming a
+    // gigantic JS array length would force a multi-GB reserve before
+    // the scorer's own validation rejected the request. A request
+    // that exceeds either cap is treated as outright malformed and
+    // returns the "no chord requested" failure shape (totalStrings=0);
+    // every other validation failure goes through the all-miss path
+    // below so results[] stays in lockstep with notes[].
+    static constexpr uint32_t kMaxOffsets = 32;
+    static constexpr uint32_t kMaxNotes = 32;
+
+    auto noRequestFailure = [&env]() {
+        auto failure = Napi::Object::New(env);
+        failure.Set("score", 0.0);
+        failure.Set("hitStrings", 0);
+        failure.Set("totalStrings", 0);
+        failure.Set("isHit", false);
+        failure.Set("results", Napi::Array::New(env, 0));
+        return failure;
+    };
 
     if (!engine || info.Length() < 1 || !info[0].IsObject())
-        return failure;
+        return noRequestFailure();
 
     auto reqObj = info[0].As<Napi::Object>();
+
+    // Capture the notes array up front so every downstream failure
+    // path can build a per-note all-miss result aligned 1:1 with the
+    // caller's notes[]. Pre-cap check happens before we even read the
+    // length into the helper to prevent a payload claiming an enormous
+    // length from forcing the helper to allocate a huge results array.
+    Napi::Value notesVal = reqObj.Has("notes") ? reqObj.Get("notes") : env.Null();
+    if (!notesVal.IsArray()) return noRequestFailure();
+    auto notesArr = notesVal.As<Napi::Array>();
+    if (notesArr.Length() > kMaxNotes) return noRequestFailure();
+    const uint32_t noteCount = notesArr.Length();
+
+    // All-miss result aligned with the caller's notes[]. Walks the
+    // original JS array so the per-note `s` / `f` echo back in the
+    // result even when the request fails validation (lets the renderer
+    // distinguish "this string missed" from "this string wasn't sent").
+    // Used by every failure path below except the cap/no-notes case
+    // above, which doesn't have a coherent notes[] to mirror.
+    auto buildAllMiss = [&]() {
+        auto resultsArr = Napi::Array::New(env, noteCount);
+        for (uint32_t i = 0; i < noteCount; ++i)
+        {
+            int s = -1, f = -1;
+            auto v = notesArr.Get(i);
+            if (v.IsObject())
+            {
+                auto o = v.As<Napi::Object>();
+                if (o.Has("s") && o.Get("s").IsNumber())
+                    s = o.Get("s").As<Napi::Number>().Int32Value();
+                if (o.Has("f") && o.Get("f").IsNumber())
+                    f = o.Get("f").As<Napi::Number>().Int32Value();
+            }
+            auto entry = Napi::Object::New(env);
+            entry.Set("s", s);
+            entry.Set("f", f);
+            entry.Set("hit", false);
+            entry.Set("bandEnergy", 0.0);
+            entry.Set("centsDiff", env.Null());
+            entry.Set("centsError", env.Null());
+            resultsArr.Set(i, entry);
+        }
+        auto out = Napi::Object::New(env);
+        out.Set("score", 0.0);
+        out.Set("hitStrings", 0);
+        out.Set("totalStrings", (int) noteCount);
+        out.Set("isHit", false);
+        out.Set("results", resultsArr);
+        return out;
+    };
 
     ChordScorer::Request req;
     if (reqObj.Has("numSamples") && reqObj.Get("numSamples").IsNumber())
@@ -471,82 +539,68 @@ static Napi::Value ScoreChord(const Napi::CallbackInfo& info)
         req.pitchCheckCents = reqObj.Get("pitchCheckCents").As<Napi::Number>().FloatValue();
     if (reqObj.Has("minHitRatio") && reqObj.Get("minHitRatio").IsNumber())
         req.minHitRatio = reqObj.Get("minHitRatio").As<Napi::Number>().FloatValue();
-    // Hard caps on caller-controlled array lengths. The scorer's
-    // (arrangement, stringCount) validation only accepts up to 8
-    // strings; chord-notes have a natural ceiling at the same value
-    // (one per string). 32 is a generous headroom that still bounds
-    // worst-case allocations the renderer could trigger over IPC —
-    // without these limits, a malformed/malicious payload claiming a
-    // gigantic JS array length would force a multi-GB reserve before
-    // the scorer's own validation rejected the request.
-    static constexpr uint32_t kMaxOffsets = 32;
-    static constexpr uint32_t kMaxNotes = 32;
 
     if (reqObj.Has("offsets") && reqObj.Get("offsets").IsArray())
     {
         auto arr = reqObj.Get("offsets").As<Napi::Array>();
-        if (arr.Length() > kMaxOffsets) return failure;
+        if (arr.Length() > kMaxOffsets) return noRequestFailure();
         req.tuningOffsets.reserve(arr.Length());
         for (uint32_t i = 0; i < arr.Length(); ++i)
         {
             auto v = arr.Get(i);
             // Tuning offsets materially shift expected pitch — silently
             // substituting 0 for a missing/non-numeric entry would
-            // produce confidently wrong scores. Reject the whole
-            // request instead (totalStrings=0 / empty results), same
-            // as if the offsets array were the wrong length.
-            if (!v.IsNumber()) return failure;
+            // produce confidently wrong scores. Fail closed with the
+            // per-note all-miss shape so the renderer sees the right
+            // results[] length even when the request is malformed.
+            if (!v.IsNumber()) return buildAllMiss();
             req.tuningOffsets.push_back(v.As<Napi::Number>().Int32Value());
         }
     }
-    if (reqObj.Has("notes") && reqObj.Get("notes").IsArray())
+
+    req.notes.reserve(noteCount);
+    for (uint32_t i = 0; i < noteCount; ++i)
     {
-        auto arr = reqObj.Get("notes").As<Napi::Array>();
-        if (arr.Length() > kMaxNotes) return failure;
-        req.notes.reserve(arr.Length());
-        for (uint32_t i = 0; i < arr.Length(); ++i)
+        auto v = notesArr.Get(i);
+        // For malformed entries (non-object, or missing/non-numeric
+        // s/f) push a sentinel Note with string = -1. This keeps
+        // req.notes.size() in lockstep with the incoming notes[]
+        // length AND guarantees ChordScorer's range check
+        // (`n.string < 0 || n.string >= stringCount`) trips on the
+        // sentinel — yielding the same all-miss fail-closed result
+        // the shape contract advertises, never a false hit on the
+        // default low-string position.
+        ChordScorer::Note n{};
+        n.string = -1;
+        n.fret = -1;
+        if (!v.IsObject())
         {
-            auto v = arr.Get(i);
-            // For malformed entries (non-object, or missing/non-numeric
-            // s/f) push a sentinel Note with string = -1. This keeps
-            // req.notes.size() in lockstep with the incoming notes[]
-            // length AND guarantees ChordScorer's range check
-            // (`n.string < 0 || n.string >= stringCount`) trips on the
-            // sentinel — yielding the same all-miss fail-closed result
-            // the shape contract advertises, never a false hit on the
-            // default low-string position.
-            ChordScorer::Note n{};
-            n.string = -1;
-            n.fret = -1;
-            if (!v.IsObject())
-            {
-                req.notes.push_back(n);
-                continue;
-            }
-            auto noteObj = v.As<Napi::Object>();
-            const bool hasS = noteObj.Has("s") && noteObj.Get("s").IsNumber();
-            const bool hasF = noteObj.Has("f") && noteObj.Get("f").IsNumber();
-            if (!hasS || !hasF)
-            {
-                req.notes.push_back(n);
-                continue;
-            }
-            n.string = noteObj.Get("s").As<Napi::Number>().Int32Value();
-            n.fret = noteObj.Get("f").As<Napi::Number>().Int32Value();
-            // Technique flags are truthy/falsy in JS; coerce to bool
-            // here so an unset value cleanly becomes false.
-            auto truthy = [&noteObj](const char* key) {
-                if (!noteObj.Has(key)) return false;
-                auto val = noteObj.Get(key);
-                return val.ToBoolean().Value();
-            };
-            n.hammerOn = truthy("ho");
-            n.pullOff = truthy("po");
-            n.bend = truthy("b");
-            n.slide = truthy("sl");
-            n.harmonic = truthy("hm");
             req.notes.push_back(n);
+            continue;
         }
+        auto noteObj = v.As<Napi::Object>();
+        const bool hasS = noteObj.Has("s") && noteObj.Get("s").IsNumber();
+        const bool hasF = noteObj.Has("f") && noteObj.Get("f").IsNumber();
+        if (!hasS || !hasF)
+        {
+            req.notes.push_back(n);
+            continue;
+        }
+        n.string = noteObj.Get("s").As<Napi::Number>().Int32Value();
+        n.fret = noteObj.Get("f").As<Napi::Number>().Int32Value();
+        // Technique flags are truthy/falsy in JS; coerce to bool
+        // here so an unset value cleanly becomes false.
+        auto truthy = [&noteObj](const char* key) {
+            if (!noteObj.Has(key)) return false;
+            auto val = noteObj.Get(key);
+            return val.ToBoolean().Value();
+        };
+        n.hammerOn = truthy("ho");
+        n.pullOff = truthy("po");
+        n.bend = truthy("b");
+        n.slide = truthy("sl");
+        n.harmonic = truthy("hm");
+        req.notes.push_back(n);
     }
 
     auto result = engine->scoreChord(req);
