@@ -528,13 +528,6 @@ void AudioEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
     for (auto& slot : inputFrameRing)
         slot.store(0.0f, std::memory_order_relaxed);
 
-    // Size the mono-mix scratch buffer to fit this device's block
-    // size so the audio thread never has to allocate. The buffer is
-    // only read/written on the audio thread, so a plain vector is
-    // fine — we just need its storage prepared up front.
-    if ((int) monoMixScratch.size() < bs)
-        monoMixScratch.assign((size_t) bs, 0.0f);
-
     signalChain.prepare(sr, bs);
     pitchDetector.prepare(sr, bs);
     noiseGate.prepare(sr, bs);
@@ -565,17 +558,41 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
     float inGain = inputGain.load();
     int selectedCh = selectedInputChannel.load();
 
-    // Copy input with gain, handling channel selection
+    // Copy input with gain, handling channel selection.
     if (numInputChannels >= 2 && selectedCh >= 0 && selectedCh < numInputChannels)
     {
-        // Single channel mode (e.g., dry from Valeton GP-5 left channel)
+        // Single-channel mode (e.g. dry from Valeton GP-5 left channel).
+        // Broadcast the selected input across all output channels.
         for (int outCh = 0; outCh < numOutputChannels; ++outCh)
             for (int i = 0; i < numSamples; ++i)
                 buffer.setSample(outCh, i, inputData[selectedCh][i] * inGain);
     }
+    else if (selectedCh < 0 && numInputChannels > 1)
+    {
+        // "Both (Mono Mix)": average all input channels and broadcast
+        // the result to every output channel, so the signal chain,
+        // pitch detector, input-frame ring, and the user's monitoring
+        // all see the same mono signal. Previously the else-branch
+        // copied channels through 1:1, which delivered stereo to the
+        // signal chain and to the user even though the UI label
+        // promised a mix; that mismatch surfaced as the renderer's
+        // chord scorer and the engine pitch detector seeing different
+        // audio from what the signal chain/output produced.
+        const float invCh = 1.0f / (float) numInputChannels;
+        for (int i = 0; i < numSamples; ++i)
+        {
+            float mix = 0.0f;
+            for (int ch = 0; ch < numInputChannels; ++ch)
+                mix += inputData[ch][i];
+            const float gained = mix * invCh * inGain;
+            for (int outCh = 0; outCh < numOutputChannels; ++outCh)
+                buffer.setSample(outCh, i, gained);
+        }
+    }
     else
     {
-        // Normal stereo or mono mix
+        // Pass-through: single-input device, or stereo in/out with no
+        // explicit channel selection and no need to mix.
         for (int ch = 0; ch < juce::jmin(numInputChannels, numOutputChannels); ++ch)
             for (int i = 0; i < numSamples; ++i)
                 buffer.setSample(ch, i, inputData[ch][i] * inGain);
@@ -595,41 +612,18 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
         if (peak > prevPeak) inputPeak.store(peak);
     }
 
-    // Feed pitch detector and the input-frame ring (before processing
-    // so we detect the dry guitar signal). Build a single mono source
-    // and route it to both consumers so they always see the same
-    // signal — important when selectedInputChannel is -1 ("mono mix")
-    // on a stereo input, where channel 0 alone wouldn't reflect what
-    // the user asked for. For explicit single-channel selection
-    // (0/1) and single-input devices, the output buffer's channel 0
-    // already holds the right signal post-gain, so we skip the mix
-    // and read it directly.
+    // Feed pitch detector and the input-frame ring from the buffer's
+    // channel 0 (before signal-chain processing, so we detect the dry
+    // guitar). The channel-copy block above guarantees channel 0
+    // already holds the right post-gain mono signal for every
+    // selection mode: explicit channel select broadcasts the chosen
+    // input across all output channels, "Both (Mono Mix)" writes the
+    // averaged mix across all output channels, and the pass-through
+    // case maps input channel 0 directly. Both consumers see exactly
+    // what the signal chain and output deliver to the user.
     if (numOutputChannels > 0)
     {
-        const float* monoSource = nullptr;
-        const bool mixMono = (selectedCh < 0) && (numInputChannels > 1);
-        if (mixMono && (int) monoMixScratch.size() >= numSamples)
-        {
-            const float invCh = 1.0f / (float) numInputChannels;
-            for (int i = 0; i < numSamples; ++i)
-            {
-                float mix = 0.0f;
-                for (int ch = 0; ch < numInputChannels; ++ch)
-                    mix += inputData[ch][i];
-                monoMixScratch[(size_t) i] = mix * invCh * inGain;
-            }
-            monoSource = monoMixScratch.data();
-        }
-        else
-        {
-            // Either no mix wanted (explicit channel select / single
-            // input) or scratch buffer not yet sized (a block came in
-            // before audioDeviceAboutToStart finished — shouldn't
-            // happen but stay safe). Channel 0 of the post-copy buffer
-            // is the right answer in both cases.
-            monoSource = buffer.getReadPointer(0);
-        }
-
+        const float* monoSource = buffer.getReadPointer(0);
         pitchDetector.pushSamples(monoSource, numSamples);
 
         // Mirror the same signal into the lock-free ring buffer that

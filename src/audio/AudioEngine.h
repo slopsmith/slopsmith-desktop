@@ -195,15 +195,5 @@ private:
     std::array<std::atomic<float>, kInputFrameRingCapacity> inputFrameRing{};
     std::atomic<uint64_t> inputFrameRingWriteIndex{0};
 
-    // Audio-thread scratch buffer for the mono-mix path. Sized once in
-    // audioDeviceAboutToStart() so the hot loop never allocates. Holds
-    // the per-block mono-mix samples that get fed to BOTH the pitch
-    // detector and the input-frame ring, so both consumers see the
-    // same signal (the alternative — channel 0 to pitch, mix to ring
-    // — would leave the renderer's chord scorer and the engine's
-    // pitch detector looking at different audio when -1 is selected
-    // on a stereo input).
-    std::vector<float> monoMixScratch;
-
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioEngine)
 };
