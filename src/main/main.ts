@@ -216,59 +216,90 @@ function createWindow(port: number): void {
     }
 }
 
-// Predicate: did a permission request originate from the localhost-served
-// Slopsmith renderer? Parses via WHATWG URL so that query strings,
-// fragments, IPv6 brackets and other valid-but-uncommon shapes don't trip
-// the check (a bare regex like /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/.*)?$/
-// would reject `http://127.0.0.1?x=1` because there's no `/` before the
-// query string). URL parsing also gives strong host-matching, so
-// `http://localhost.evil.com/` cannot impersonate localhost. Used by
-// `installLocalhostPermissions` below to gate every permission request.
-function isLocalRendererOrigin(url: string): boolean {
-    if (!url) return false;
-    let parsed: URL;
-    try { parsed = new URL(url); } catch { return false; }
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
-    return parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost';
+// Permissions we always deny, regardless of origin. These are
+// high-impact device APIs Slopsmith has no use for — refusing them up
+// front shrinks the attack surface even on the trusted renderer
+// origin, so a malicious or compromised plugin can't reach for them.
+// Add to this list if a real Slopsmith feature ever needs one.
+const DENY_PERMISSIONS = new Set([
+    'serial',
+    'hid',
+    'usb',
+    'bluetooth',
+    'geolocation',
+    'idle-detection',
+]);
+
+// Predicate factory: did a permission request originate from the specific
+// renderer URL we loaded? Captures the *exact* port resolved by the
+// Python supervisor at startup, so a stray navigation to another local
+// service (e.g. http://127.0.0.1:3000) cannot inherit the renderer's
+// permission policy.
+//
+// Parses via WHATWG URL so query strings, fragments, IPv6 brackets, and
+// other valid-but-uncommon URL shapes don't trip the check (a regex like
+// /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/.*)?$/ would reject
+// `http://127.0.0.1:18000?x=1` because there's no `/` before the query
+// string). URL parsing also gives strong host-matching, so
+// `http://localhost.evil.com/` cannot impersonate the renderer.
+function makeRendererOriginPredicate(rendererPort: number): (url: string) => boolean {
+    const portStr = String(rendererPort);
+    return (url: string): boolean => {
+        if (!url) return false;
+        let parsed: URL;
+        try { parsed = new URL(url); } catch { return false; }
+        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+        if (parsed.hostname !== '127.0.0.1' && parsed.hostname !== 'localhost') return false;
+        // URL.port is empty for the protocol's default port (80/443); the
+        // renderer always loads with an explicit non-default port, so a
+        // missing port can only come from an attacker-shaped URL.
+        return parsed.port === portStr;
+    };
 }
 
-// Origin-scoped permission policy for the default session.
+// Origin- AND port-scoped permission policy for the default session.
 //
 // Why this exists: clicking Detect in the bundled note_detect plugin on
 // Linux used to show "Could not access audio input" (#52) because Chromium
 // in Electron silently denies `media` for the localhost-served renderer
 // when no permission handler is installed. The plugin itself now routes
-// pitch detection through the JUCE bridge instead of getUserMedia, but
-// we still want a defensive handler so future renderer code / third-party
-// plugins don't hit the same wall.
+// pitch detection through the JUCE bridge, but we still want a defensive
+// handler so future renderer code / third-party plugins don't hit the
+// same wall.
 //
-// Policy: gate EVERY permission (not just `media`) on origin.
-// - Localhost origins (where the Slopsmith app actually runs): grant.
-//   This matches Electron's prior default-allow for that origin, so
+// Policy:
+// - Block DENY_PERMISSIONS (serial / hid / usb / bluetooth / geolocation /
+//   idle-detection) for *every* origin, including the renderer. Slopsmith
+//   has no use for these; pre-denying them keeps a compromised plugin
+//   from reaching for them.
+// - For every other permission, grant when the request comes from the
+//   exact rendererPort we resolved at startup. This matches Electron's
+//   prior default-allow for the only origin we actually load, so
 //   unrelated renderer/plugin features (clipboard, notifications,
-//   fullscreen, …) keep working unchanged.
-// - Any other origin: deny. The main window runs with webSecurity: false
-//   and there's no will-navigate enforcement, so without this, a stray
-//   redirect or pasted URL would silently inherit clipboard / geolocation /
-//   notifications etc. Denying non-local origins is strictly safer than
-//   the pre-handler default for that case.
-function installLocalhostPermissions(): void {
+//   fullscreen, midi, …) keep working unchanged.
+// - For any other origin (including other ports on 127.0.0.1, redirects
+//   to external URLs, etc.), deny. The main window runs with
+//   `webSecurity: false` and no `will-navigate` enforcement, so this
+//   stops a stray redirect from inheriting clipboard / notifications /
+//   etc. that would have been default-allowed without a handler.
+function installRendererPermissions(rendererPort: number): void {
+    const isRendererOrigin = makeRendererOriginPredicate(rendererPort);
     const def = session.defaultSession;
-    def.setPermissionRequestHandler((_wc, _permission, callback, details) => {
-        callback(isLocalRendererOrigin(details.requestingUrl || ''));
+    def.setPermissionRequestHandler((_wc, permission, callback, details) => {
+        if (DENY_PERMISSIONS.has(permission)) {
+            callback(false);
+            return;
+        }
+        callback(isRendererOrigin(details.requestingUrl || ''));
     });
-    def.setPermissionCheckHandler((_wc, _permission, requestingOrigin) => {
-        return isLocalRendererOrigin(requestingOrigin || '');
+    def.setPermissionCheckHandler((_wc, permission, requestingOrigin) => {
+        if (DENY_PERMISSIONS.has(permission)) return false;
+        return isRendererOrigin(requestingOrigin || '');
     });
 }
 
 async function startup(): Promise<void> {
     console.log('[main] Starting Slopsmith Desktop...');
-
-    // Install permission handlers first so any preload script / plugin that
-    // probes getUserMedia during early renderer startup sees the localhost
-    // grant rather than the default-deny.
-    installLocalhostPermissions();
 
     // Register startup status IPC handlers before creating the splash window
     // so the splash preload's immediate startup:requestStatus is handled.
@@ -309,6 +340,13 @@ async function startup(): Promise<void> {
 
     console.log(`[main] Python server ready on port ${port}`);
     publishStartupStatus({ message: 'Backend ready. Opening app window...', phase: 'core-ready', running: true });
+
+    // Permission handlers must be installed before the renderer loads so
+    // its first permission request hits our policy, not Chromium's
+    // default. We deferred until now because the policy is scoped to the
+    // exact renderer port — a stray navigation to another local service
+    // on a different port must not inherit the trusted-renderer grant.
+    installRendererPermissions(port);
 
     // Create the main window
     createWindow(port);
