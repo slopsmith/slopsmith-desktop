@@ -293,12 +293,15 @@ export function initAudioBridge(getMainWindow: () => BrowserWindow | null): void
         // getUserMedia, not custom IPC channels, so we enforce here.
         const mw = getMainWindow();
         if (!mw || mw.isDestroyed() || wc.id !== mw.webContents.id) return;
-        // Refuse the subscription if the engine isn't available — better
-        // to leave the renderer to retry on next session start than to
-        // keep an indefinitely-stalled subscriber. The plugin's
-        // feature-detect can also probe `audio:isAvailable` first to
-        // avoid this path entirely.
-        if (!audio) return;
+        // Refuse the subscription if the engine isn't available or
+        // doesn't expose getInputFrame (version-skew case: native
+        // addon was built against an older slopsmith-desktop). Either
+        // would lead to a silently-never-delivers subscription, with
+        // the preload's ref-count pinned so it'd never re-attempt.
+        // Refusing here lets the renderer's feature-detect on
+        // `audio:isAvailable` (or a future addon-rebuild) act as the
+        // recovery path.
+        if (!audio || typeof audio.getInputFrame !== 'function') return;
         if (inputFrameSubscribers.has(wc)) return;
         inputFrameSubscribers.add(wc);
         // Attach lifecycle cleanup listeners at most once per
