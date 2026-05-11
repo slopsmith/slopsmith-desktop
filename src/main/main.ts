@@ -219,12 +219,20 @@ function createWindow(port: number): void {
         if (isRendererOrigin(navUrl)) return;
         event.preventDefault();
         console.warn(`[main] Blocked in-window navigation to non-renderer origin: ${navUrl}`);
-        shell.openExternal(navUrl).catch(() => { /* user said no thanks */ });
+        // Only forward web URLs to the system browser. `file:`,
+        // `javascript:`, `mailto:`, or custom schemes would otherwise
+        // trigger the user's registered protocol handler from a
+        // page-controlled string — that's an obvious foot-gun even for
+        // a navigation we're already blocking.
+        openWebUrlExternally(navUrl);
     });
 
-    // Open external links in system browser
+    // Open external links in system browser. Same scheme gate as
+    // will-navigate above — a `target=_blank` or `window.open` from the
+    // renderer page can supply any string, so don't pass it to
+    // shell.openExternal blindly.
     mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-        shell.openExternal(url);
+        openWebUrlExternally(url);
         return { action: 'deny' };
     });
 
@@ -236,6 +244,26 @@ function createWindow(port: number): void {
     if (!app.isPackaged) {
         mainWindow.webContents.openDevTools({ mode: 'detach' });
     }
+}
+
+// Forward a URL to the OS default browser only if it's a web URL.
+// `shell.openExternal` will gladly hand any string to the user's
+// registered protocol handlers (file:, javascript:, mailto:, custom
+// schemes), and the strings we pass through come from page-controlled
+// places (will-navigate, window.open). Restrict to http(s) so a
+// malformed link, plugin bug, or attacker-shaped string can't reach
+// for arbitrary scheme handlers.
+function openWebUrlExternally(url: string): void {
+    let parsed: URL;
+    try { parsed = new URL(url); } catch {
+        console.warn(`[main] Refusing to openExternal malformed URL: ${url}`);
+        return;
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        console.warn(`[main] Refusing to openExternal non-web scheme: ${parsed.protocol}`);
+        return;
+    }
+    shell.openExternal(url).catch(() => { /* user dismissed / system error */ });
 }
 
 // Permissions we always deny, regardless of origin. These are
@@ -285,23 +313,30 @@ function makeRendererOriginPredicate(rendererPort: number): (url: string) => boo
 // when no permission handler is installed. The plugin itself now routes
 // pitch detection through the JUCE bridge, but we still want a defensive
 // handler so future renderer code / third-party plugins don't hit the
-// same wall.
+// same wall. createWindow() also installs a `will-navigate` listener that
+// cancels any same-window navigation off the renderer origin, so the
+// scenarios this handler defends against are mostly belt-and-braces;
+// `webSecurity: false` is still on, so a defense-in-depth permission
+// policy is worth keeping anyway.
 //
 // Policy:
 // - Block DENY_PERMISSIONS (serial / hid / usb / bluetooth / geolocation /
 //   idle-detection) for *every* origin, including the renderer. Slopsmith
 //   has no use for these; pre-denying them keeps a compromised plugin
 //   from reaching for them.
+// - For `media` from the renderer origin, allow audio-only requests
+//   (Slopsmith uses the microphone for pitch detection) but deny when
+//   `details.mediaTypes` includes `video` — we have no camera feature,
+//   so a getUserMedia({video:true}) call must be a plugin bug or worse.
 // - For every other permission, grant when the request comes from the
 //   exact rendererPort we resolved at startup. This matches Electron's
 //   prior default-allow for the only origin we actually load, so
 //   unrelated renderer/plugin features (clipboard, notifications,
 //   fullscreen, midi, …) keep working unchanged.
 // - For any other origin (including other ports on 127.0.0.1, redirects
-//   to external URLs, etc.), deny. The main window runs with
-//   `webSecurity: false` and no `will-navigate` enforcement, so this
-//   stops a stray redirect from inheriting clipboard / notifications /
-//   etc. that would have been default-allowed without a handler.
+//   to external URLs, etc.), deny. Stops a stray redirect from
+//   inheriting clipboard / notifications / etc. that would have been
+//   default-allowed without a handler.
 function installRendererPermissions(rendererPort: number): void {
     const isRendererOrigin = makeRendererOriginPredicate(rendererPort);
     const def = session.defaultSession;
@@ -310,7 +345,21 @@ function installRendererPermissions(rendererPort: number): void {
             callback(false);
             return;
         }
-        callback(isRendererOrigin(details.requestingUrl || ''));
+        if (!isRendererOrigin(details.requestingUrl || '')) {
+            callback(false);
+            return;
+        }
+        if (permission === 'media') {
+            // Electron passes mediaTypes (`'audio'` / `'video'`) for the
+            // request-handler path. Refuse the request the moment video
+            // is in there, even from the trusted origin.
+            const mediaTypes = (details as { mediaTypes?: string[] }).mediaTypes;
+            if (mediaTypes && mediaTypes.includes('video')) {
+                callback(false);
+                return;
+            }
+        }
+        callback(true);
     });
     def.setPermissionCheckHandler((_wc, permission, requestingOrigin) => {
         if (DENY_PERMISSIONS.has(permission)) return false;
