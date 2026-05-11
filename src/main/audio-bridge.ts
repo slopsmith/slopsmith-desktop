@@ -201,10 +201,17 @@ export function initAudioBridge(mainWindow: BrowserWindow | null): void {
                 inputFrameSubscribers.delete(wc);
                 continue;
             }
-            // Electron's structured-clone IPC copies the typed array per
-            // recipient, so each subscriber gets its own buffer — no
-            // shared-state worries.
-            wc.send('audio:inputFrame', { samples, seq });
+            try {
+                // Electron's structured-clone IPC copies the typed array
+                // per recipient, so each subscriber gets its own buffer
+                // — no shared-state worries. The try/catch covers the
+                // race window between isDestroyed() and send(): a
+                // WebContents can transition to destroyed concurrently,
+                // and send() throws on a torn-down target.
+                wc.send('audio:inputFrame', { samples, seq });
+            } catch {
+                inputFrameSubscribers.delete(wc);
+            }
         }
         // Cleared destroyed subscribers above may have emptied the set;
         // collapse the timer if so.
