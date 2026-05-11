@@ -440,11 +440,8 @@ async function startup(): Promise<void> {
     // Start Python server (Slopsmith backend)
     startPython();
 
-    // Initialize audio engine (JUCE native addon). Pass a getter rather
-    // than the (currently-null) mainWindow reference so the bridge can
-    // check the live value when IPCs arrive — the renderer doesn't
-    // exist yet at this point in startup.
-    initAudioBridge(() => mainWindow);
+    // Initialize audio engine (JUCE native addon).
+    initAudioBridge();
 
     // Initialize plugin manager IPC handlers
     initPluginManager();

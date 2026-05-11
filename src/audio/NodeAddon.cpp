@@ -519,8 +519,9 @@ static Napi::Value ScoreChord(const Napi::CallbackInfo& info)
         entry.Set("hit", r.hit);
         entry.Set("bandEnergy", r.bandEnergy);
         // Mirror the JS result shape: when cents weren't measured the
-        // fields show up as null (not present) so the renderer can
-        // distinguish "no pitch check ran" from "pitch check said 0".
+        // fields are present-but-null so the renderer can distinguish
+        // "no pitch check ran" (null) from "pitch check said 0"
+        // (numeric 0).
         if (r.hasCents)
         {
             entry.Set("centsDiff", r.centsDiff);

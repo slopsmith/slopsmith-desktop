@@ -762,9 +762,16 @@ ChordScorer::Result AudioEngine::scoreChord(const ChordScorer::Request& req)
     // here rather than over an audio-frame IPC.
     const int numSamples = (req.numSamples > 0) ? req.numSamples : 4096;
     auto frame = getInputFrame(numSamples);
-    return chordScorer.scoreChord(frame.data(), (int) frame.size(),
-                                  currentSampleRate.load(std::memory_order_relaxed),
-                                  req);
+    // currentSampleRate is 0 between init() and the first
+    // audioDeviceAboutToStart, and can also drop to 0 after a device
+    // teardown. Without this fallback ChordScorer would early-exit
+    // with totalStrings > 0 but an empty results[] array, producing a
+    // result shape the renderer never sees from any other code path.
+    // Mirror NodeAddon::GetSampleRate's 48 kHz floor so the renderer
+    // always gets one result entry per requested note.
+    double sr = currentSampleRate.load(std::memory_order_relaxed);
+    if (! std::isfinite(sr) || sr <= 0.0) sr = 48000.0;
+    return chordScorer.scoreChord(frame.data(), (int) frame.size(), sr, req);
 }
 
 std::vector<float> AudioEngine::getInputFrame(int numSamples) const

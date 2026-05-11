@@ -2,7 +2,7 @@
 // The native addon is loaded via require() and its methods are
 // exposed to the renderer process via ipcMain.handle().
 
-import { ipcMain, BrowserWindow } from 'electron';
+import { ipcMain } from 'electron';
 import * as path from 'path';
 import { app } from 'electron';
 
@@ -35,7 +35,7 @@ function loadNativeAddon(): AudioModule | null {
     return null;
 }
 
-export function initAudioBridge(_getMainWindow: () => BrowserWindow | null): void {
+export function initAudioBridge(): void {
     audio = loadNativeAddon();
 
     if (audio) {
