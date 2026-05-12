@@ -1,8 +1,20 @@
 // Slopsmith Desktop — Electron Main Process
 // Manages: window lifecycle, Python subprocess, audio engine bridge, plugin management
 
-import { app, BrowserWindow, ipcMain, dialog, shell, session } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, session, crashReporter } from 'electron';
 import * as path from 'path';
+
+// Enable Electron's Crashpad to capture native crashes (incl. VST/JUCE C++
+// access violations) into <userData>/Crashpad/reports/ as .dmp files. Must
+// run before app.whenReady(). uploadToServer:false keeps dumps local — they
+// can be inspected with WinDbg / minidump-stackwalk.
+crashReporter.start({
+    productName: 'slopsmith-desktop',
+    companyName: 'slopsmith',
+    submitURL: '',
+    uploadToServer: false,
+    compress: false,
+});
 import { startPython, stopPython, waitForPython, getPythonPort, getStartupStatus, StartupStatus } from './python';
 import { IPC_STARTUP_STATUS, IPC_STARTUP_GET_STATUS, IPC_STARTUP_REQUEST_STATUS } from './ipc-channels';
 import { initAudioBridge, shutdownAudio } from './audio-bridge';

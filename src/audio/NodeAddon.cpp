@@ -780,11 +780,16 @@ static Napi::Value LoadVST(const Napi::CallbackInfo& info)
     int slotId = -1;
 
     juce::String error;
-    auto instance = vstHost->loadPlugin(
-        juce::String(pluginPath),
-        engine->getCurrentSampleRate(),
-        engine->getCurrentBlockSize(),
-        error);
+    std::unique_ptr<juce::AudioPluginInstance> instance;
+    auto sr = engine->getCurrentSampleRate();
+    auto bs = engine->getCurrentBlockSize();
+    // Instantiate on the JUCE message thread so the plugin's GUI/COM state is
+    // bound to the same thread that will later call createEditor(). On Windows
+    // a mismatch causes an access violation inside the plugin's editor code
+    // (COM apartment-threaded objects accessed from the wrong apartment).
+    dispatchOnMessageThread([&]() {
+        instance = vstHost->loadPlugin(juce::String(pluginPath), sr, bs, error);
+    });
 
     if (instance)
     {
@@ -1235,13 +1240,18 @@ public:
             if (type == (int)ProcessorSlot::Type::VST && vstHost)
             {
                 juce::String err;
-                processor = vstHost->loadPlugin(path, sr, bs, err);
-                if (!processor)
+                std::unique_ptr<juce::AudioPluginInstance> instance;
+                // See LoadVST for why this must run on the JUCE message thread.
+                dispatchOnMessageThread([&]() {
+                    instance = vstHost->loadPlugin(path, sr, bs, err);
+                });
+                if (!instance)
                 {
                     fprintf(stderr, "[LoadPreset] VST load failed: %s (%s)\n",
                             name.toRawUTF8(), err.toRawUTF8());
                     continue;
                 }
+                processor = std::move(instance);
             }
             else if (type == (int)ProcessorSlot::Type::NAM)
             {
