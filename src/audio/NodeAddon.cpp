@@ -10,6 +10,7 @@
 
 #include "AudioEngine.h"
 #include "VSTHost.h"
+#include "VSTTrace.h"
 #include "NAMProcessor.h"
 #include "IRLoader.h"
 
