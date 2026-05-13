@@ -79,12 +79,16 @@ static void dispatchOnMessageThread(Func&& func)
     // the one capability we give up until a proper libuv-based pump lands.
     func();
 #else
-    juce::WaitableEvent done;
-    juce::MessageManager::callAsync([&]() {
+    // Heap-allocate the WaitableEvent and capture by value so the queued
+    // callAsync closure can outlive this stack frame. Without this, a 15 s
+    // timeout (rare, but possible during shutdown when the message thread is
+    // busy) leaves the lambda running on freed `done` storage — a real UAF.
+    auto done = std::make_shared<juce::WaitableEvent>();
+    juce::MessageManager::callAsync([func = std::forward<Func>(func), done]() mutable {
         func();
-        done.signal();
+        done->signal();
     });
-    done.wait(15000);
+    done->wait(15000);
 #endif
 }
 

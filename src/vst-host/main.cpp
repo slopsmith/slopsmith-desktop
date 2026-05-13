@@ -17,6 +17,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <atomic>
+#include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -231,17 +232,37 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
     {
         auto b64 = args.getProperty("stateBase64", "").toString();
         juce::MemoryOutputStream mo;
-        juce::Base64::convertFromBase64(mo, b64);
-        if (st.plugin)
-            st.plugin->setStateInformation(mo.getData(), (int)mo.getDataSize());
+        if (!juce::Base64::convertFromBase64(mo, b64))
+        {
+            reply(false, {}, "invalid base64 state payload");
+            return;
+        }
+        if (!st.plugin)
+        {
+            reply(false, {}, "no plugin loaded");
+            return;
+        }
+        st.plugin->setStateInformation(mo.getData(), (int)mo.getDataSize());
         reply(true, {});
     }
     else if (op == op::kSetParameter)
     {
-        int idx = (int)args.getProperty("index", -1);
-        float val = (float)(double)args.getProperty("value", 0.0);
-        if (st.plugin && idx >= 0 && idx < st.plugin->getParameters().size())
-            st.plugin->getParameters()[idx]->setValue(val);
+        if (!st.plugin)
+        {
+            reply(false, {}, "no plugin loaded");
+            return;
+        }
+        const int idx = (int)args.getProperty("index", -1);
+        const float val = (float)(double)args.getProperty("value", 0.0);
+        auto params = st.plugin->getParameters();
+        if (idx < 0 || idx >= params.size() || !std::isfinite(val))
+        {
+            reply(false, {}, "invalid parameter index/value");
+            return;
+        }
+        // JUCE parameters expect [0, 1] — clamp rather than reject so a
+        // slightly-out-of-range automation curve doesn't fail the request.
+        params[idx]->setValue(juce::jlimit(0.0f, 1.0f, val));
         reply(true, {});
     }
     else if (op == op::kShutdown)

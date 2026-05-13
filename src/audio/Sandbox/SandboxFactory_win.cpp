@@ -96,7 +96,11 @@ std::unique_ptr<juce::AudioProcessor> tryLoadSandboxed(
     cfg.pluginName = desc.name.isNotEmpty() ? desc.name : "plugin";
     cfg.sandboxExePath = exe.getFullPathName();
     cfg.audio.sampleRate = (uint32_t)sampleRate;
-    cfg.audio.maxBlockSamples = (uint32_t)juce::jmax(blockSize, 64);
+    // Clamp to the protocol cap: vst-host's kPrepare rejects blockSize
+    // > kAudioMaxBlockSamples, so spawning a larger shm layout would later
+    // fail the prepare round-trip rather than silently misbehave.
+    cfg.audio.maxBlockSamples = (uint32_t)juce::jlimit(
+        64, (int)kAudioMaxBlockSamples, blockSize);
     cfg.audio.maxChannels = 2;
     cfg.audio.maxBlocks = kAudioMaxBlocks;
 

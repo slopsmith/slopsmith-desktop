@@ -440,6 +440,15 @@ juce::var ControlChannel::request(const char* op, const juce::var& args,
     }
 
     auto reply = fut.get();
+    // stop() / failWith() resolve in-flight requests with an undefined `var`
+    // so callers don't hang. Detect that case explicitly — otherwise
+    // getProperty(...) returns defaults and the caller sees an empty
+    // errorOut even though the real cause was disconnect/cancellation.
+    if (!reply.isObject())
+    {
+        if (errorOut) *errorOut = "control channel disconnected";
+        return {};
+    }
     if (!(bool)reply.getProperty("ok", false))
     {
         if (errorOut) *errorOut = reply.getProperty("error", "").toString();
