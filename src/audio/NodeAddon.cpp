@@ -13,6 +13,7 @@
 #include "VSTTrace.h"
 #include "NAMProcessor.h"
 #include "IRLoader.h"
+#include "Sandbox/SandboxedProcessor.h"
 
 #include <juce_events/juce_events.h>
 
@@ -781,23 +782,47 @@ static Napi::Value LoadVST(const Napi::CallbackInfo& info)
     int slotId = -1;
 
     juce::String error;
-    std::unique_ptr<juce::AudioPluginInstance> instance;
+    std::unique_ptr<juce::AudioProcessor> processor;
     auto sr = engine->getCurrentSampleRate();
     auto bs = engine->getCurrentBlockSize();
     VST_TRACE("LoadVST: path='%s' sr=%.0f bs=%d", pluginPath.c_str(), sr, bs);
-    // Instantiate on the JUCE message thread so the plugin's GUI/COM state is
-    // bound to the same thread that will later call createEditor(). On Windows
-    // a mismatch causes an access violation inside the plugin's editor code
-    // (COM apartment-threaded objects accessed from the wrong apartment).
-    dispatchOnMessageThread([&]() {
-        instance = vstHost->loadPlugin(juce::String(pluginPath), sr, bs, error);
-    });
 
-    if (instance)
+    // 1) Try the out-of-process sandbox path for plugins on the denylist.
+    //    This is a no-op on macOS/Linux until those sandbox PRs land — the
+    //    stub factory returns nullptr and we fall through.
     {
-        auto name = instance->getName();
+        juce::PluginDescription probeDesc;
+        probeDesc.fileOrIdentifier = juce::String(pluginPath);
+        // We don't have the manufacturer name without scanning first, so we
+        // also scan inside tryLoadSandboxed; for now match on path heuristics.
+        probeDesc.name = juce::File(juce::String(pluginPath)).getFileNameWithoutExtension();
+        if (slopsmith::sandbox::shouldSandbox(probeDesc))
+        {
+            juce::String sandboxErr;
+            processor = slopsmith::sandbox::tryLoadSandboxed(
+                probeDesc, sr, bs, sandboxErr);
+            if (!processor)
+                VST_TRACE("LoadVST: sandbox path declined/failed: %s",
+                          sandboxErr.toRawUTF8());
+        }
+    }
+
+    // 2) Fallback: in-process JUCE load (today's path). Instantiate on the
+    //    JUCE message thread for the COM-apartment reason documented above.
+    if (!processor)
+    {
+        std::unique_ptr<juce::AudioPluginInstance> instance;
+        dispatchOnMessageThread([&]() {
+            instance = vstHost->loadPlugin(juce::String(pluginPath), sr, bs, error);
+        });
+        processor = std::move(instance);
+    }
+
+    if (processor)
+    {
+        auto name = processor->getName();
         slotId = engine->getSignalChain().addProcessor(
-            std::move(instance),
+            std::move(processor),
             ProcessorSlot::Type::VST,
             name,
             juce::String(pluginPath));

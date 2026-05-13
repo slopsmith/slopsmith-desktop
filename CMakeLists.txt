@@ -43,3 +43,8 @@ else()
 endif()
 
 add_subdirectory(src/audio)
+
+# Sandbox subprocess (Windows only for now).
+if(WIN32)
+    add_subdirectory(src/vst-host)
+endif()
