@@ -40,9 +40,9 @@ public:
         int spawnTimeoutMs = kReadyTimeoutMs;
     };
 
-    // Construct + spawn. Throws std::runtime_error if the subprocess fails to
-    // reach `ready` within the timeout — the factory translates this into a
-    // nullptr return.
+    // Construct + spawn. Returns nullptr on any failure (subprocess start
+    // error, control-pipe disconnect, no `ready` within timeout) and writes
+    // a descriptive reason into `errorOut`. No exceptions are thrown.
     static std::unique_ptr<SandboxedProcessor> spawn(const SpawnConfig& cfg,
                                                      juce::String& errorOut);
 

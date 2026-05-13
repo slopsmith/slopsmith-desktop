@@ -137,9 +137,13 @@ void ControlChannel::stop()
     pending.clear();
 }
 
-// Helper for synchronous overlapped I/O — issues the operation, waits for it.
-// Returns true if `bytesPerOp` were transferred successfully.
-static bool overlappedTransfer(HANDLE pipe, bool isWrite, void* buf, DWORD bytesPerOp)
+// Helper for synchronous overlapped I/O — issues the operation, waits for it
+// up to `timeoutMs`, and on timeout cancels the pending I/O so the caller
+// reliably returns. INFINITE is the default for reads, which must wait for
+// the peer; writes pass a finite timeout so a stalled reader can't pin the
+// caller indefinitely.
+static bool overlappedTransfer(HANDLE pipe, bool isWrite, void* buf,
+                               DWORD bytesPerOp, DWORD timeoutMs = INFINITE)
 {
     OVERLAPPED ov{};
     ov.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
@@ -159,6 +163,23 @@ static bool overlappedTransfer(HANDLE pipe, bool isWrite, void* buf, DWORD bytes
         SetLastError(lastErr);
         return false;
     }
+    if (timeoutMs != INFINITE)
+    {
+        // WaitForSingleObject + bounded timeout, then either complete or
+        // cancel. CancelIoEx + a final GetOverlappedResult(TRUE) is the
+        // documented pattern that lets us safely CloseHandle the event
+        // without leaving the kernel mid-operation.
+        const DWORD wait = WaitForSingleObject(ov.hEvent, timeoutMs);
+        if (wait != WAIT_OBJECT_0)
+        {
+            CancelIoEx(pipe, &ov);
+            DWORD drained = 0;
+            GetOverlappedResult(pipe, &ov, &drained, TRUE);
+            CloseHandle(ov.hEvent);
+            SetLastError(WAIT_TIMEOUT);
+            return false;
+        }
+    }
     DWORD transferred = 0;
     if (!GetOverlappedResult(pipe, &ov, &transferred, TRUE))
     {
@@ -177,14 +198,19 @@ bool ControlChannel::writeFrame(const juce::MemoryBlock& body)
     if (impl->pipe == INVALID_HANDLE_VALUE) return false;
     if (body.getSize() > kMaxControlMessageBytes) return false;
 
+    // 5 s is comfortably longer than any normal protocol turn (frames are
+    // small JSON over a local pipe) but short enough that a stalled reader
+    // doesn't pin the calling thread until the higher-level request timeout.
+    constexpr DWORD kWriteTimeoutMs = 5000;
     uint32_t lenLE = (uint32_t)body.getSize();
-    if (!overlappedTransfer(impl->pipe, true, &lenLE, sizeof(lenLE)))
+    if (!overlappedTransfer(impl->pipe, true, &lenLE, sizeof(lenLE),
+                            kWriteTimeoutMs))
         return false;
     if (body.getSize() > 0)
     {
         if (!overlappedTransfer(impl->pipe, true,
                                 const_cast<void*>(body.getData()),
-                                (DWORD)body.getSize()))
+                                (DWORD)body.getSize(), kWriteTimeoutMs))
             return false;
     }
     return true;
@@ -230,6 +256,13 @@ void ControlChannel::ioLoop()
     {
         OVERLAPPED ov{};
         ov.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        if (ov.hEvent == nullptr)
+        {
+            CTL_TRACE("ConnectNamedPipe: CreateEventW failed err=%lu",
+                      (unsigned long)GetLastError());
+            failWith(kReasonReadError + " (event)");
+            return;
+        }
         BOOL ok = ConnectNamedPipe(impl->pipe, &ov);
         DWORD err = ok ? 0 : GetLastError();
         if (!ok && err == ERROR_IO_PENDING)
@@ -270,6 +303,20 @@ void ControlChannel::ioLoop()
             CTL_TRACE("decode failed: %s; first bytes: %.32s",
                       parseError.toRawUTF8(), (const char*)frame.getData());
             failWith(kReasonProtocolError + ": " + parseError);
+            return;
+        }
+
+        // Reject frames missing or mismatching the protocol version — better
+        // to fail fast on host/sandbox skew than to keep going and misparse a
+        // payload that doesn't match the schema we expect.
+        const int incomingVersion = (int)msg.getProperty("v", -1);
+        if (incomingVersion != (int)kProtocolVersion)
+        {
+            CTL_TRACE("protocol version mismatch: got=%d expected=%d",
+                      incomingVersion, (int)kProtocolVersion);
+            failWith(kReasonProtocolError + ": version mismatch (got "
+                     + juce::String(incomingVersion) + ", expected "
+                     + juce::String((int)kProtocolVersion) + ")");
             return;
         }
 
