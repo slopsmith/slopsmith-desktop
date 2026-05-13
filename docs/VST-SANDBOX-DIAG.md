@@ -114,7 +114,7 @@ without the Qt link.** Concretely:
 
 ## Reproduce
 
-```
+```bat
 # Baseline (still crashes today, confirmed 2026-05-13):
 cd C:\Users\byron\slopsmith-desktop
 node load-gr6.js

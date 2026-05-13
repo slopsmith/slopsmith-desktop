@@ -5,7 +5,7 @@ can see exactly what a misbehaving plugin (currently: Guitar Rig 6 v6.x on
 Windows 11 24H2) asks the host for right before it `__fastfail`s. Every
 host callback the plugin invokes is appended to:
 
-```
+```text
 %TEMP%\slopsmith-vst-trace.log
 ```
 

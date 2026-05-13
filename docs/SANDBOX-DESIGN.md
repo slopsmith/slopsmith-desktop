@@ -6,7 +6,7 @@ Status: design sketch (not yet implemented)
 
 ## 1. Topology
 
-```
+```text
 ┌────────────────────────────────────┐         ┌──────────────────────────────┐
 │ Slopsmith Desktop (Electron main)  │         │  slopsmith-vst-host.exe      │
 │                                    │         │  (one per sandboxed plugin)  │
@@ -35,7 +35,7 @@ matches a denylist (see §5).
 
 ## 2. Process spawn + handshake
 
-```
+```text
 slopsmith-vst-host.exe
     --plugin-path "<absolute vst3 path>"
     --control-pipe "\\.\pipe\slopsmith-vst-<uuid>-ctl"
@@ -98,7 +98,7 @@ Audio is too latency-sensitive for JSON-on-pipes. One block at 48 k / 256 sample
 
 Layout in `audio-shm` (single mapping):
 
-```
+```text
 offset  size                                 contents
 0       sizeof(Header)                       Header (atomics, indices)
 H       maxBlocks × maxBlock × maxCh × 4 B   Ring A (host → sandbox, input audio)
@@ -126,7 +126,7 @@ Float32, planar (channel0 then channel1 — matches JUCE's `AudioBuffer<float>`)
 ### Per-block protocol
 
 Host audio thread:
-```
+```text
 1. Wait until (writeIdx - readIdx) < maxBlocks  (drop block + bump xruns if not)
 2. Copy input PCM + any MIDI to Ring A[writeIdx % maxBlocks]
 3. ++writeIdx (release)
@@ -137,7 +137,7 @@ Host audio thread:
 ```
 
 Sandbox audio thread (or sandbox main thread's audio callback):
-```
+```text
 1. WaitForSingleObject(audio-event-in, INFINITE)
 2. Read input from Ring A[(readIdx) % maxBlocks]
 3. processBlock(in, out) on the plugin
@@ -221,7 +221,7 @@ require a manual restart from the UI.
 
 ## 8. Build / repo layout
 
-```
+```text
 slopsmith-desktop/
 ├── src/
 │   ├── audio/
