@@ -119,4 +119,10 @@ inline const char* tuidHex(const void* tuid)
 
 } // namespace slopsmith_vst_trace
 
-#define VST_TRACE(...) ::slopsmith_vst_trace::writef(__VA_ARGS__)
+// Check the enabled flag at the call site so disabled builds don't pay for
+// formatting arg evaluation (e.g. `tuidHex(...)`, `cmd.toRawUTF8()`).
+#define VST_TRACE(...)                                                       \
+    do {                                                                     \
+        if (::slopsmith_vst_trace::isEnabled())                              \
+            ::slopsmith_vst_trace::writef(__VA_ARGS__);                      \
+    } while (0)
