@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstdarg>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <mutex>
 
@@ -24,9 +25,21 @@
 
 namespace slopsmith_vst_trace {
 
+// Gate on SLOPSMITH_SANDBOX_DEBUG=1 so release builds don't litter %TEMP%
+// with the trace file or burn stderr cycles on every host callback.
+inline bool isEnabled()
+{
+    static const bool v = [] {
+        const char* s = std::getenv("SLOPSMITH_SANDBOX_DEBUG");
+        return s && *s && std::strcmp(s, "0") != 0;
+    }();
+    return v;
+}
+
 inline std::FILE* logFile()
 {
     static std::FILE* f = []() -> std::FILE* {
+        if (!isEnabled()) return nullptr;
         char path[1024] = {0};
 #if defined(_WIN32)
         DWORD n = GetEnvironmentVariableA("TEMP", path, sizeof(path));
@@ -63,6 +76,7 @@ inline std::mutex& logMutex()
 
 inline void writef(const char* fmt, ...)
 {
+    if (!isEnabled()) return;
     std::lock_guard<std::mutex> lock(logMutex());
 
     char buf[2048];
@@ -84,11 +98,16 @@ inline void writef(const char* fmt, ...)
 }
 
 // Format 16 hex bytes of a TUID. The Steinberg TUID type is `char[16]`.
+// Rotates through a 4-slot ring of thread-local buffers so multiple tuidHex
+// arguments in a single VST_TRACE call don't clobber each other before the
+// formatter consumes them.
 inline const char* tuidHex(const void* tuid)
 {
-    static thread_local char out[40];
+    static thread_local char ring[4][40];
+    static thread_local unsigned idx = 0;
+    char* out = ring[idx++ & 3u];
     const unsigned char* b = static_cast<const unsigned char*>(tuid);
-    std::snprintf(out, sizeof(out),
+    std::snprintf(out, sizeof(ring[0]),
                   "%02x%02x%02x%02x-%02x%02x%02x%02x-%02x%02x%02x%02x-%02x%02x%02x%02x",
                   b[0], b[1], b[2], b[3],   b[4], b[5], b[6], b[7],
                   b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]);
