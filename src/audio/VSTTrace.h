@@ -7,9 +7,9 @@
 // crashy plugin) doesn't lose the last few lines.
 //
 // Compiled into all builds, but no-op at runtime unless
-// SLOPSMITH_SANDBOX_DEBUG=1 is set when the addon loads. The first
-// `writef()` call caches the env var, so flipping it mid-process has
-// no effect.
+// SLOPSMITH_SANDBOX_DEBUG is set to any non-empty value other than "0"
+// when the addon loads. The first call caches the env var, so flipping
+// it mid-process has no effect.
 
 #pragma once
 

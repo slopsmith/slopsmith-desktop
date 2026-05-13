@@ -62,11 +62,15 @@ bool parseArgs(int argc, wchar_t** argv, Args& out)
         else if (key == "--sample-rate")     out.sampleRate = val.getIntValue();
         else if (key == "--max-block")       out.maxBlock = val.getIntValue();
         else if (key == "--channels")        out.channels = val.getIntValue();
+        else                                 return false; // unknown flag — fail fast
     }
     return out.pluginPath.isNotEmpty() && out.controlPipe.isNotEmpty()
         && out.audio.shm.isNotEmpty()
         && out.audio.evtToHost.isNotEmpty()
-        && out.audio.evtToSandbox.isNotEmpty();
+        && out.audio.evtToSandbox.isNotEmpty()
+        && out.sampleRate > 0
+        && out.maxBlock   > 0
+        && out.channels   > 0;
 }
 
 class EditorWindow : public juce::DocumentWindow
@@ -338,13 +342,22 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         {
             dispatchRequest(st, id, op, args);
         });
-    st.control.start({}, [&st](const juce::String&)
+    if (!st.control.start({}, [&st](const juce::String&)
     {
         st.running.store(false, std::memory_order_release);
-    });
+    }))
+    {
+        hostLogf("control channel start failed");
+        return 6;
+    }
 
     hostLogf("sending ready event");
-    st.control.sendEvent(event::kReady, pluginMetadata(*st.plugin));
+    if (!st.control.sendEvent(event::kReady, pluginMetadata(*st.plugin)))
+    {
+        hostLogf("failed to send ready event — host won't see us as ready");
+        st.control.stop();
+        return 7;
+    }
     hostLogf("ready event sent");
 
     st.audioThread = std::thread([&st] { runAudioThread(st); });

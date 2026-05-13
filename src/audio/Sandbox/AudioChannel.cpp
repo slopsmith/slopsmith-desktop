@@ -117,6 +117,14 @@ bool AudioChannel::openSandboxSide(const Names& names, juce::String& errorOut)
         close();
         return false;
     }
+    if (impl->header->protocolVersion != kProtocolVersion)
+    {
+        errorOut = "audio shm protocol mismatch: expected "
+                 + juce::String((int)kProtocolVersion) + ", got "
+                 + juce::String((int)impl->header->protocolVersion);
+        close();
+        return false;
+    }
     cachedDims.maxBlocks = impl->header->maxBlocks;
     cachedDims.maxBlockSamples = impl->header->maxBlockSamples;
     cachedDims.maxChannels = impl->header->maxChannels;

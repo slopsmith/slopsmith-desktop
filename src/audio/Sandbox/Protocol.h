@@ -104,8 +104,12 @@ struct AudioShmHeader
     // std::atomic<uint64_t>* — that's not layout-guaranteed.
     alignas(8) uint64_t writeIdx = 0;   // host increments
     alignas(8) uint64_t readIdx  = 0;   // sandbox increments
-    alignas(8) uint64_t xruns    = 0;   // host could not fit a block
-    alignas(8) uint64_t dropouts = 0;   // sandbox missed a deadline
+    // Both counters are direction-agnostic: either side bumps the same field.
+    // xruns covers any pushBlock where the destination ring was full;
+    // dropouts covers any popBlock that timed out waiting for the partner.
+    // Splitting per direction is on the audio-shm-MIDI follow-up checklist.
+    alignas(8) uint64_t xruns    = 0;
+    alignas(8) uint64_t dropouts = 0;
 
     // Byte offsets of the two rings inside the mapping. Convenient for tools
     // and asserts; computed at spawn time.

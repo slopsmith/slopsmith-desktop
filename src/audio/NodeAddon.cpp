@@ -834,6 +834,9 @@ static Napi::Value LoadVST(const Napi::CallbackInfo& info)
     {
         error = "sandbox load failed: "
               + (sandboxErr.isEmpty() ? juce::String("unknown error") : sandboxErr);
+        // Mirror the in-process load's stderr format so a JS test harness or
+        // Electron renderer sees the same diagnostics regardless of path.
+        fprintf(stderr, "[LoadVST] Failed: %s\n", error.toRawUTF8());
         return Napi::Number::New(env, -1);
     }
 

@@ -218,6 +218,7 @@ bool ControlChannel::writeFrame(const juce::MemoryBlock& body)
 
 bool ControlChannel::readFrame(juce::MemoryBlock& out)
 {
+    lastReadError = 0;
     if (impl->pipe == INVALID_HANDLE_VALUE)
     {
         CTL_TRACE("readFrame: pipe is INVALID_HANDLE_VALUE");
@@ -226,8 +227,9 @@ bool ControlChannel::readFrame(juce::MemoryBlock& out)
     uint32_t lenLE = 0;
     if (!overlappedTransfer(impl->pipe, false, &lenLE, sizeof(lenLE)))
     {
-        CTL_TRACE("readFrame: ReadFile(len) failed err=%lu",
-                  (unsigned long)GetLastError());
+        // Capture before CTL_TRACE — formatting/IO can clobber GetLastError.
+        lastReadError = GetLastError();
+        CTL_TRACE("readFrame: ReadFile(len) failed err=%lu", lastReadError);
         return false;
     }
     if (lenLE > kMaxControlMessageBytes)
@@ -239,8 +241,9 @@ bool ControlChannel::readFrame(juce::MemoryBlock& out)
     if (lenLE == 0) return true;
     if (!overlappedTransfer(impl->pipe, false, out.getData(), (DWORD)lenLE))
     {
+        lastReadError = GetLastError();
         CTL_TRACE("readFrame: ReadFile(body len=%lu) failed err=%lu",
-                  (unsigned long)lenLE, (unsigned long)GetLastError());
+                  (unsigned long)lenLE, lastReadError);
         return false;
     }
     return true;
@@ -291,7 +294,13 @@ void ControlChannel::ioLoop()
         if (!readFrame(frame))
         {
             CTL_TRACE("readFrame failed; exiting loop");
-            failWith(kReasonReadError);
+            // Distinguish a clean peer-side shutdown from an actual I/O fault
+            // so the disconnect callback's caller can decide between
+            // "expected" and "should restart".
+            const bool peerClosed = (lastReadError == ERROR_BROKEN_PIPE
+                                  || lastReadError == ERROR_PIPE_NOT_CONNECTED
+                                  || lastReadError == ERROR_NO_DATA);
+            failWith(peerClosed ? kReasonPeerClosed : kReasonReadError);
             return;
         }
         CTL_TRACE("readFrame got %d bytes", (int)frame.getSize());

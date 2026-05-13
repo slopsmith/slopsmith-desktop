@@ -13,7 +13,7 @@ Status: partially implemented (Windows v1, WIP); macOS/Linux pending
 │  Node main process                 │         │                              │
 │  └── slopsmith_audio.node          │         │  WinMain → main thread       │
 │      └── SignalChain               │         │  └── JUCE MessageManager     │
-│          └── SandboxedSlot ◀────┐  │         │      └── one AudioPlugin     │
+│          └── SandboxedProcessor ◀┐ │         │      └── one AudioPlugin     │
 │              ▲                   │  │         │          └── editor (HWND)  │
 │              │                   │  │         │                              │
 │              │ control:          │  │  pipe   │                              │
@@ -71,17 +71,22 @@ carry `requestId: null`.
 
 | `op` | Payload | Reply |
 |---|---|---|
-| `prepare` | `{ sampleRate, blockSize }` | `{ ok, latencySamples, numInputs, numOutputs }` |
-| `setBlockSize` | `{ blockSize }` | `{ ok }` |
-| `setParameter` | `{ index, value }` | `{ ok }` (omit reply if `fireAndForget: true`) |
-| `getState` | `{}` | `{ stateBase64 }` |
-| `setState` | `{ stateBase64 }` | `{ ok }` |
-| `midiEvent` | `{ frame, bytes: [..] }` | `{ ok }` (fire-and-forget by default) |
-| `openEditor` | `{}` | `{ hwnd: "0x...", w, h }` |
-| `resizeEditor` | `{ w, h }` | `{ ok }` |
-| `closeEditor` | `{}` | `{ ok }` |
-| `listParameters` | `{}` | `{ params: [{index,name,defaultValue,...}] }` |
-| `shutdown` | `{}` | `{ ok }` then sandbox exits 0 |
+| `op` | Status | Payload | Reply |
+|---|---|---|---|
+| `prepare` | v1 | `{ sampleRate, blockSize }` | `{ ok, latencySamples, numInputs, numOutputs }` |
+| `setParameter` | v1 | `{ index, value }` | `{ ok }` (omit reply if `fireAndForget: true`) |
+| `getState` | v1 | `{}` | `{ stateBase64 }` |
+| `setState` | v1 | `{ stateBase64 }` | `{ ok }` |
+| `midiEvent` | v1 | `{ frame, bytes: [..] }` | `{ ok }` (fire-and-forget by default) |
+| `openEditor` | v1 | `{}` | `{ hwnd: "0x...", w, h }` |
+| `closeEditor` | v1 | `{}` | `{ ok }` |
+| `shutdown` | v1 | `{}` | `{ ok }` then sandbox exits 0 |
+| `setBlockSize` | planned | `{ blockSize }` | `{ ok }` |
+| `resizeEditor` | planned | `{ w, h }` | `{ ok }` |
+| `listParameters` | planned | `{}` | `{ params: [{index,name,defaultValue,...}] }` |
+
+Status reflects the current dispatcher in `src/vst-host/main.cpp`. "Planned"
+ops are on the PR-body follow-up checklist.
 
 ### Sandbox → main (events, `requestId: null`)
 
@@ -283,7 +288,7 @@ Wall clock for a single engineer, assuming the PoC's foundations:
 | `slopsmith-vst-host.exe` skeleton (extend the PoC) | 1–2 d |
 | Control channel (pipe + JSON + 12 message types) | 2–3 d |
 | Audio channel (shm + events + ring) | 2–3 d |
-| `SandboxedSlot` glue inside the addon | 2 d |
+| `SandboxedProcessor` glue inside the addon | 2 d |
 | Detection list + denylist promotion | 1 d |
 | Editor reparenting into Electron | 2–4 d (focus + DPI is fiddly) |
 | Crash detection + restart + state cache | 2 d |

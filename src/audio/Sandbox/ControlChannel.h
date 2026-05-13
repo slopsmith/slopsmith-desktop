@@ -95,6 +95,12 @@ private:
     void ioLoop();
     void failWith(const juce::String& reason);
 
+    // Set by readFrame() before it returns false so ioLoop can classify the
+    // disconnect (ERROR_BROKEN_PIPE / ERROR_PIPE_NOT_CONNECTED / ERROR_NO_DATA
+    // → kReasonPeerClosed, anything else → kReasonReadError). Only the I/O
+    // thread writes or reads this field.
+    unsigned long lastReadError = 0;
+
     struct Impl;
     std::unique_ptr<Impl> impl; // OS-specific handle wrapper
 
