@@ -18,6 +18,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <atomic>
 #include <cmath>
+#include <limits>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -77,6 +78,14 @@ bool parseArgs(int argc, wchar_t** argv, Args& out, juce::String& whyFailed)
         // (e.g. `--plugin-path --control-pipe foo`) so the diagnostic
         // points at the actual mistake rather than misparsing the next
         // flag as the value and erroring out later on an unknown key.
+        //
+        // Limitation: this heuristic also rejects any legitimate value
+        // whose first two chars are "--" (e.g. a VST3 path under a
+        // directory named "--something"). The binary is only spawned by
+        // SandboxedProcessor::initialise with host-built args, so the
+        // value side is controlled — if an external caller needs the
+        // restriction loosened, switch this to a strict allow-list of
+        // known flag names (kFlagNames) rather than a prefix check.
         if (val.startsWith("--"))
         {
             whyFailed = "missing value for " + key + " (next token '"
@@ -221,7 +230,15 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
     {
         double sr = (double)args.getProperty("sampleRate", 48000);
         int bs    = (int)args.getProperty("blockSize", 256);
-        if (sr <= 0.0 || bs <= 0 || bs > (int)kAudioMaxBlockSamples)
+        // (int)NaN and (int)<INT_MIN-or->INT_MAX double are UB — guard
+        // finiteness + the int range before the narrowing on the
+        // st.sampleRate = (int)sr line below. Mirrors the validation in
+        // SandboxFactory_win::createSandboxed at spawn time.
+        if (! std::isfinite(sr)
+            || sr <= 0.0
+            || sr > (double)std::numeric_limits<int>::max()
+            || bs <= 0
+            || bs > (int)kAudioMaxBlockSamples)
         {
             reply(false, {}, "invalid prepare args: sr=" + juce::String(sr)
                              + " bs=" + juce::String(bs));

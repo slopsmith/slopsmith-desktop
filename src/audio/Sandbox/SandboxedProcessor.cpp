@@ -48,7 +48,22 @@ namespace {
             if (!nativeHwnd) return;
             auto* peer = getPeer();
             HWND parent = peer ? (HWND)peer->getNativeHandle() : nullptr;
-            if (parent)
+            if (!parent)
+            {
+                // No top-level JUCE peer — the common case inside the
+                // Electron addon today (Electron-side HWND reparenting is
+                // the deferred follow-up). Trace once per editor so
+                // "plugin loaded but editor never appears" is at least
+                // diagnosable from logs rather than completely silent.
+                if (! peerlessLogged)
+                {
+                    VST_TRACE("[sandbox] SandboxedEditor: no JUCE peer for "
+                              "parent reparent (editor stays at -32000,-32000 "
+                              "until Electron-side HWND embedding lands)");
+                    peerlessLogged = true;
+                }
+                return;
+            }
             {
                 auto style = GetWindowLongPtrW((HWND)nativeHwnd, GWL_STYLE);
                 style = (style | WS_CHILD) & ~WS_POPUP;
@@ -85,6 +100,7 @@ namespace {
     private:
         SandboxedProcessor& proc;
         void* nativeHwnd = nullptr;
+        bool peerlessLogged = false;
     };
 } // anonymous
 
@@ -198,6 +214,13 @@ bool SandboxedProcessor::initialise(juce::String& errorOut)
                 descriptionCached.name = data.getProperty("pluginName", "").toString();
                 descriptionCached.manufacturerName =
                     data.getProperty("manufacturer", "").toString();
+                // Populate identifiers known at spawn time so the
+                // description survives a SignalChain round-trip — every
+                // other code path uses fileOrIdentifier to re-locate the
+                // plugin, and pluginFormatName == "VST3" is fixed for
+                // this sandbox binary.
+                descriptionCached.fileOrIdentifier = spawnConfig.pluginPath;
+                descriptionCached.pluginFormatName = "VST3";
                 hasEditorCached    = (bool)data.getProperty("hasEditor", false);
                 acceptsMidiCached  = (bool)data.getProperty("acceptsMidi", false);
                 producesMidiCached = (bool)data.getProperty("producesMidi", false);

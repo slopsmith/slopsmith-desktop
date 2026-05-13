@@ -54,6 +54,13 @@ setTimeout(() => {
     const candidates = process.env.GR6_PATH
         ? [process.env.GR6_PATH]
         : [
+            // NI's own installer drops into a vendor subdir; this is the
+            // most common default on a fresh GR6 install.
+            'C:\\Program Files\\Native Instruments\\VST3\\Guitar Rig 6.vst3',
+            'C:\\Program Files\\Native Instruments\\VST3\\Guitar Rig 6 FX.vst3',
+            // Some installs (and the existing CI fixture VM) drop into the
+            // shared Common Files VST3 dir; keep these as fallbacks so the
+            // existing smoke harness doesn't have to flip overnight.
             'C:\\Program Files\\Common Files\\VST3\\Guitar Rig 6.vst3',
             'C:\\Program Files\\Common Files\\VST3\\Guitar Rig 6 FX.vst3',
           ];
