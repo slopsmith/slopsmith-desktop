@@ -145,17 +145,38 @@ bool ControlChannel::writeFrame(const juce::MemoryBlock& body)
 
 bool ControlChannel::readFrame(juce::MemoryBlock& out)
 {
-    if (impl->pipe == INVALID_HANDLE_VALUE) return false;
+    if (impl->pipe == INVALID_HANDLE_VALUE)
+    {
+        CTL_TRACE("readFrame: pipe is INVALID_HANDLE_VALUE");
+        return false;
+    }
     uint32_t lenLE = 0;
     DWORD got = 0;
-    if (!ReadFile(impl->pipe, &lenLE, sizeof(lenLE), &got, nullptr)
-        || got != sizeof(lenLE))
+    if (!ReadFile(impl->pipe, &lenLE, sizeof(lenLE), &got, nullptr))
+    {
+        CTL_TRACE("readFrame: ReadFile(len) failed err=%lu got=%lu",
+                  (unsigned long)GetLastError(), (unsigned long)got);
         return false;
-    if (lenLE > kMaxControlMessageBytes) return false;
+    }
+    if (got != sizeof(lenLE))
+    {
+        CTL_TRACE("readFrame: short ReadFile(len) got=%lu", (unsigned long)got);
+        return false;
+    }
+    if (lenLE > kMaxControlMessageBytes)
+    {
+        CTL_TRACE("readFrame: oversized frame len=%lu", (unsigned long)lenLE);
+        return false;
+    }
     out.setSize(lenLE, false);
     if (lenLE == 0) return true;
     if (!ReadFile(impl->pipe, out.getData(), lenLE, &got, nullptr) || got != lenLE)
+    {
+        CTL_TRACE("readFrame: ReadFile(body len=%lu) failed err=%lu got=%lu",
+                  (unsigned long)lenLE, (unsigned long)GetLastError(),
+                  (unsigned long)got);
         return false;
+    }
     return true;
 }
 
