@@ -8,6 +8,11 @@
 
 #include <thread>
 
+// Reuse the existing VST trace logger for diagnostics. Cheap and survives
+// crashes thanks to its synchronous flush.
+#include "../VSTTrace.h"
+#define CTL_TRACE(...) VST_TRACE("[ctrl] " __VA_ARGS__)
+
 namespace slopsmith::sandbox {
 
 const juce::String ControlChannel::kReasonPeerClosed     = "peer-closed";
@@ -156,6 +161,7 @@ bool ControlChannel::readFrame(juce::MemoryBlock& out)
 
 void ControlChannel::ioLoop()
 {
+    CTL_TRACE("ioLoop entered (isServer=%d)", (int)impl->isServer);
     // Server side: wait for the sandbox to connect. ConnectNamedPipe is
     // synchronous (no overlapped) — it returns when either the client connects
     // or the pipe handle is closed via stop().
@@ -164,9 +170,12 @@ void ControlChannel::ioLoop()
         if (!ConnectNamedPipe(impl->pipe, nullptr)
             && GetLastError() != ERROR_PIPE_CONNECTED)
         {
+            DWORD err = GetLastError();
+            CTL_TRACE("ConnectNamedPipe failed err=%lu", (unsigned long)err);
             failWith(kReasonReadError + " (connect)");
             return;
         }
+        CTL_TRACE("ConnectNamedPipe returned (client connected)");
     }
 
     juce::MemoryBlock frame;
@@ -174,14 +183,18 @@ void ControlChannel::ioLoop()
     {
         if (!readFrame(frame))
         {
+            CTL_TRACE("readFrame failed; exiting loop");
             failWith(kReasonReadError);
             return;
         }
+        CTL_TRACE("readFrame got %d bytes", (int)frame.getSize());
 
         juce::String parseError;
         auto msg = wire::decode(frame.getData(), frame.getSize(), &parseError);
         if (!msg.isObject())
         {
+            CTL_TRACE("decode failed: %s; first bytes: %.32s",
+                      parseError.toRawUTF8(), (const char*)frame.getData());
             failWith(kReasonProtocolError + ": " + parseError);
             return;
         }
@@ -190,6 +203,7 @@ void ControlChannel::ioLoop()
         // ({id, op, args}). Dispatch by structure.
         if (msg.hasProperty("event"))
         {
+            CTL_TRACE("event: %s", msg["event"].toString().toRawUTF8());
             if (onEvent)
                 onEvent(msg["event"].toString(), msg["data"]);
             continue;
