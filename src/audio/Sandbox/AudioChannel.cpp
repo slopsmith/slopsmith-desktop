@@ -110,6 +110,25 @@ bool AudioChannel::openSandboxSide(const Names& names, juce::String& errorOut)
         close();
         return false;
     }
+    // Before the magic check (which reads header->magic), verify the mapping
+    // is at least sizeof(AudioShmHeader). `MapViewOfFile(...,0)` maps the
+    // whole object, but if a corrupted/malicious named-mapping pointed at a
+    // smaller object the magic check itself would be an OOB read. The
+    // expectedTotal bounds check below uses header-derived fields and so
+    // cannot detect an undersized real mapping — this is the only place we
+    // can close that gap.
+    {
+        MEMORY_BASIC_INFORMATION mbi{};
+        if (VirtualQuery(impl->view, &mbi, sizeof(mbi)) == 0
+            || mbi.RegionSize < sizeof(AudioShmHeader))
+        {
+            errorOut = "audio shm mapping too small for header ("
+                     + juce::String((int64_t)mbi.RegionSize) + " < "
+                     + juce::String((int64_t)sizeof(AudioShmHeader)) + ")";
+            close();
+            return false;
+        }
+    }
     impl->header = reinterpret_cast<AudioShmHeader*>(impl->view);
     if (impl->header->magic != kAudioShmMagic)
     {

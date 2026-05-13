@@ -45,7 +45,14 @@ inline std::FILE* logFile()
         if (!isEnabled()) return nullptr;
         char path[1024] = {0};
 #if defined(_WIN32)
+        // Prefer %TEMP%; fall back to %USERPROFILE% (per-PID log path in
+        // src/vst-host/main.cpp does the same — non-elevated users can't
+        // write to C:\ root, and "trace gated on env var but silently
+        // creates no file" is the worst-of-both-worlds failure mode).
         DWORD n = GetEnvironmentVariableA("TEMP", path, sizeof(path));
+        if (n == 0 || n >= sizeof(path)) {
+            n = GetEnvironmentVariableA("USERPROFILE", path, sizeof(path));
+        }
         if (n == 0 || n >= sizeof(path)) {
             std::snprintf(path, sizeof(path), "C:\\slopsmith-vst-trace.log");
         } else {

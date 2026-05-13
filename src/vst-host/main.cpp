@@ -244,6 +244,17 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
                 st.plugin->getName(), st.editor.get());
             st.editorWindow->setVisible(true);
             HWND hwnd = (HWND)st.editorWindow->getWindowHandle();
+            if (hwnd == nullptr)
+            {
+                // Native peer never came up (rare — class-registration
+                // failure or similar). Report the failure here so the host
+                // surfaces a single "could not open editor" instead of
+                // following up with a redundant kCloseEditor on hwnd==null.
+                st.editorWindow.reset();
+                st.editor.reset();
+                reply(false, {}, "failed to obtain native window handle");
+                return;
+            }
             juce::DynamicObject::Ptr res(new juce::DynamicObject());
             res->setProperty("hwnd", "0x" + juce::String::toHexString((juce::int64)(uintptr_t)hwnd));
             res->setProperty("w", st.editor->getWidth());
@@ -520,6 +531,11 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
            && !mm->hasStopMessageBeenSent())
         mm->runDispatchLoopUntil(20);
 
+    // The loop can exit because hasStopMessageBeenSent() is true while
+    // st.running is still true (host sent WM_QUIT but never kShutdown).
+    // The audio thread only watches st.running, so without this store the
+    // join() below would hang forever.
+    st.running.store(false, std::memory_order_release);
     st.audioThread.join();
     // Stop the control channel BEFORE destroying plugin/editor state.
     // Otherwise the ControlChannel I/O thread can dispatch a late

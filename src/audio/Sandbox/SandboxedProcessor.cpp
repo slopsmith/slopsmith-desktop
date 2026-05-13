@@ -78,9 +78,13 @@ namespace {
 
         void paint(juce::Graphics& g) override
         {
-            // Painted area is fully covered by the embedded HWND; the
-            // fill is just a fallback if the plugin window isn't attached yet.
-            g.fillAll(juce::Colours::black);
+            // Painted area is fully covered by the embedded HWND once the
+            // reparenting follow-up wires up the Electron-side embedding.
+            // Until then this fill is what users see if a host hasn't yet
+            // implemented the embedding — keep it a dim neutral grey so
+            // it reads as "loading placeholder" rather than the alarming
+            // opaque black rectangle a v1 host would otherwise show.
+            g.fillAll(juce::Colour::fromRGB(32, 32, 32));
         }
 
     private:
@@ -251,6 +255,12 @@ bool SandboxedProcessor::initialise(juce::String& errorOut)
                            }, err))
     {
         errorOut = "subprocess: " + err;
+        // Symmetry with the success path: control->start() already armed the
+        // I/O thread inside ConnectNamedPipe; stopping it explicitly here
+        // shortens the time we hold the pipe + the watchdog grace period
+        // (otherwise it'd sit blocked until the destructor's teardown picks
+        // it up at unique_ptr drop).
+        control->stop();
         return false;
     }
 
