@@ -237,20 +237,24 @@ require a manual restart from the UI.
 slopsmith-desktop/
 ├── src/
 │   ├── audio/
-│   │   ├── NodeAddon.cpp           (existing — adds SandboxedSlot path)
-│   │   ├── SandboxedSlot.{h,cpp}   (NEW — wraps a sandbox process from the host)
-│   │   ├── SandboxControl.{h,cpp}  (NEW — pipe protocol, request/response)
-│   │   ├── SandboxAudio.{h,cpp}    (NEW — shm ring + events)
-│   │   └── VSTHost.cpp             (existing — used both in-process and inside sandbox)
-│   └── vst-host/                   (NEW — sandbox subprocess)
-│       ├── main.cpp                (lifted/cleaned-up PoC main.cpp)
-│       ├── HostProtocol.cpp        (mirror of SandboxControl on the sandbox side)
-│       └── HostAudio.cpp           (mirror of SandboxAudio)
-└── CMakeLists.txt                  (adds slopsmith-vst-host.exe target)
+│   │   ├── NodeAddon.cpp                       (existing — selects sandbox vs in-process at LoadVST)
+│   │   ├── VSTHost.cpp                         (existing — used both in-process and inside the sandbox)
+│   │   └── Sandbox/
+│   │       ├── Protocol.{h,cpp}                (wire protocol — ops, events, encoding)
+│   │       ├── ControlChannel.{h,cpp}          (named-pipe request/response + sandbox-event dispatch)
+│   │       ├── AudioChannel.{h,cpp}            (shared-memory ring + Win32 events for the audio path)
+│   │       ├── SubprocessHandle.{h,cpp}        (sandbox process lifecycle: CreateProcessW, watcher, shutdown)
+│   │       ├── SandboxedProcessor.{h,cpp}      (juce::AudioProcessor that forwards into the sandbox)
+│   │       ├── SandboxFactory_win.cpp          (Windows: shouldSandbox() + tryLoadSandboxed())
+│   │       └── SandboxFactory_stub.cpp         (non-Windows fallback — always returns nullptr)
+│   └── vst-host/                               (sandbox subprocess)
+│       ├── main.cpp                            (WinMain + JUCE main-thread message pump)
+│       └── CMakeLists.txt                      (target: slopsmith-vst-host.exe)
+└── CMakeLists.txt                              (top-level — adds the addon + host targets)
 ```
 
-`slopsmith-vst-host.exe` ships in the Electron app's `resources/bin/` and is launched
-from `SandboxedSlot::spawn()` via `process.execPath` + relative lookup.
+`slopsmith-vst-host.exe` ships in the Electron app's `resources/` and is launched from
+`SandboxedProcessor::initialise()` via `SandboxFactory_win::resolveSandboxExe()`.
 
 ## 9. Out of scope for v1
 
