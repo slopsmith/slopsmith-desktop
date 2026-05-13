@@ -11,8 +11,10 @@ namespace slopsmith::sandbox {
 
 namespace {
     // Editor wrapper: an AudioProcessorEditor that hosts the plugin's native
-    // HWND (returned from the sandbox over the openEditor request). The
-    // editor's componentMovedOrResized() forwards size changes to the sandbox.
+    // HWND (returned from the sandbox over the openEditor request). v1 only
+    // reparents and resizes the embedded HWND locally; forwarding size
+    // changes back to the sandbox via op::kResizeEditor is on the follow-up
+    // checklist (see SANDBOX-DESIGN.md §3 "planned" ops).
     class SandboxedEditor : public juce::AudioProcessorEditor
     {
     public:

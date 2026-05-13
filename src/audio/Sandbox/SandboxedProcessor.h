@@ -131,7 +131,9 @@ std::unique_ptr<juce::AudioProcessor> tryLoadSandboxed(
     juce::String& errorOut);
 
 // Decision predicate: should this plugin be loaded through the sandbox?
-// Reads %APPDATA%/Slopsmith/sandbox-list.json plus hard-coded vendor rules.
+// Currently uses a hard-coded filename heuristic (NI Guitar Rig / Massive /
+// Kontakt / ...). The %APPDATA%/Slopsmith/sandbox-list.json override path
+// is on the PR-body follow-up checklist; see SandboxFactory_win.cpp.
 // Exposed for tests and for the UI to surface "this plugin needs the sandbox"
 // status.
 bool shouldSandbox(const juce::PluginDescription& desc);

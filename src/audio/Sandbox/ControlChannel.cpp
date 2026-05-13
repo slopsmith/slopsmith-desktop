@@ -247,6 +247,11 @@ bool ControlChannel::readFrame(juce::MemoryBlock& out)
     }
     if (lenLE > kMaxControlMessageBytes)
     {
+        // ERROR_INVALID_DATA is the closest Win32 sentinel; ioLoop maps
+        // anything that isn't a peer-closed code to kReasonReadError, but
+        // setting it explicitly avoids the default 0 (NO_ERROR), which
+        // would be confusing in logs.
+        lastReadError = ERROR_INVALID_DATA;
         CTL_TRACE("readFrame: oversized frame len=%lu", (unsigned long)lenLE);
         return false;
     }

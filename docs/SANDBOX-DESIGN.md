@@ -69,8 +69,6 @@ carry `requestId: null`.
 
 ### Main → sandbox
 
-| `op` | Payload | Reply |
-|---|---|---|
 | `op` | Status | Payload | Reply |
 |---|---|---|---|
 | `prepare` | v1 | `{ sampleRate, blockSize }` | `{ ok, latencySamples, numInputs, numOutputs }` |

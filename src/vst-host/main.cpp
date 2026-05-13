@@ -155,6 +155,12 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
     {
         double sr = (double)args.getProperty("sampleRate", 48000);
         int bs    = (int)args.getProperty("blockSize", 256);
+        if (sr <= 0.0 || bs <= 0 || bs > (int)kAudioMaxBlockSamples)
+        {
+            reply(false, {}, "invalid prepare args: sr=" + juce::String(sr)
+                             + " bs=" + juce::String(bs));
+            return;
+        }
         st.sampleRate = (int)sr;
         st.blockSize  = bs;
         if (st.plugin)
