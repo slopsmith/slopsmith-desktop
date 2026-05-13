@@ -26,6 +26,15 @@ bool SubprocessHandle::start(const juce::String& exePath,
                               std::function<void(int)> onExit,
                               juce::String& errorOut)
 {
+    // Refuse to re-spawn over a still-running process — overwriting impl->pi
+    // would leak the existing process/thread handles, and reassigning a
+    // joinable std::thread calls std::terminate.
+    if (running.load(std::memory_order_acquire) || watcher.joinable())
+    {
+        errorOut = "subprocess already running — call shutdown() first";
+        return false;
+    }
+
     // Build a properly-quoted command line: each arg quoted; the exe path also
     // quoted so spaces in install paths work.
     juce::String cmd;
