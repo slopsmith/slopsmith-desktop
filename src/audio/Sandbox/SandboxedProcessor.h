@@ -3,9 +3,20 @@
 // Protocol.h.
 //
 // SignalChain stores plugins as `std::unique_ptr<juce::AudioProcessor>`. This
-// class makes a sandboxed plugin indistinguishable from an in-process one
-// from SignalChain's point of view: SignalChain calls processBlock() and
+// class makes a sandboxed plugin *mostly* indistinguishable from an in-process
+// one from SignalChain's point of view: SignalChain calls processBlock() and
 // state methods normally; we marshal everything across the IPC boundary.
+//
+// Known v1 gaps (tracked as follow-up PRs, see PR-body checklist):
+//   * getParameters() returns no juce::AudioProcessorParameter proxies, so
+//     parameter automation / UI / preset save round-trip via JUCE's parameter
+//     API doesn't reach the sandboxed plugin. The control protocol carries
+//     kSetParameter/kListParameters; the proxy layer that maps them onto
+//     juce::AudioProcessorParameter is a dedicated follow-up PR.
+//   * BusesProperties is hard-coded stereo↔stereo at construction (the
+//     numInputs/numOutputs from the ready event are cached but not yet
+//     applied — JUCE wants the bus layout at construction time, so dynamic
+//     reconfiguration lands with the audio-thread-sync follow-up).
 //
 // One SandboxedProcessor owns exactly one sandbox subprocess. The subprocess
 // dies when the SandboxedProcessor is destroyed.

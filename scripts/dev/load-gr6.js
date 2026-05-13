@@ -15,6 +15,12 @@ console.log('[test] addon loaded; methods:', Object.keys(addon).slice(0, 10).joi
 console.log('[test] addon.init()');
 addon.init();
 
+function failExit(msg) {
+    if (msg) console.log('[test] FAIL:', msg);
+    try { addon.shutdown(); } catch (_) {}
+    process.exit(1);
+}
+
 setTimeout(() => {
     const gr6 = 'C:\\Program Files\\Common Files\\VST3\\Guitar Rig 6.vst3';
     console.log('[test] calling addon.loadVST(' + gr6 + ')');
@@ -23,24 +29,29 @@ setTimeout(() => {
         slot = addon.loadVST(gr6);
         console.log('[test] loadVST returned slot:', slot);
     } catch (e) {
-        console.log('[test] EXCEPTION on loadVST:', e.message);
-        process.exit(1);
+        failExit('EXCEPTION on loadVST: ' + e.message);
+        return;
     }
 
     if (slot < 0) {
-        console.log('[test] loadVST failed (negative slot); exiting');
-        process.exit(1);
+        failExit('loadVST returned negative slot');
+        return;
     }
 
     setTimeout(() => {
         console.log('[test] calling addon.openPluginEditor(' + slot + ')');
+        let ok = false;
         try {
-            const ok = addon.openPluginEditor(slot);
+            ok = addon.openPluginEditor(slot);
             console.log('[test] openPluginEditor returned:', ok);
         } catch (e) {
-            console.log('[test] EXCEPTION on openPluginEditor:', e.message);
-            try { addon.shutdown(); } catch (_) {}
-            process.exit(1);
+            failExit('EXCEPTION on openPluginEditor: ' + e.message);
+            return;
+        }
+        if (!ok) {
+            try { addon.closePluginEditor(slot); } catch (_) {}
+            failExit('openPluginEditor returned false');
+            return;
         }
         console.log('[test] sleeping 5s for editor creation + potential crash...');
         setTimeout(() => {

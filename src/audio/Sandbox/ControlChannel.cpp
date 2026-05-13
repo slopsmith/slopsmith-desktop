@@ -23,6 +23,12 @@ struct ControlChannel::Impl
 {
     HANDLE pipe = INVALID_HANDLE_VALUE;
     bool   isServer = false;
+    // Set by stop() before the join. The I/O thread's ConnectNamedPipe wait
+    // observes it via WaitForMultipleObjects so a stop() that races the
+    // start of ioLoop still tears down promptly — CancelIoEx alone is a
+    // no-op against I/O that hasn't been issued yet, which is exactly the
+    // race in the wait-after-create-but-before-connect window.
+    HANDLE stopEvent = nullptr;
 };
 
 ControlChannel::ControlChannel() : impl(std::make_unique<Impl>()) {}
@@ -96,6 +102,12 @@ bool ControlChannel::start(EventCallback evCb,
     if (!impl || impl->pipe == INVALID_HANDLE_VALUE)
         return false;
 
+    // Manual-reset so once stop() signals it, every subsequent wait inside
+    // ioLoop returns immediately.
+    impl->stopEvent = CreateEventW(nullptr, /*manualReset*/TRUE, FALSE, nullptr);
+    if (impl->stopEvent == nullptr)
+        return false;
+
     onEvent = std::move(evCb);
     onDisconnect = std::move(disconnectCb);
     alive.store(true, std::memory_order_release);
@@ -110,6 +122,14 @@ bool ControlChannel::start(EventCallback evCb,
 void ControlChannel::stop()
 {
     alive.store(false, std::memory_order_release);
+
+    // Signal stop BEFORE CancelIoEx. The race we're guarding against is
+    // stop() running between ioThread spawn and the I/O thread issuing
+    // ConnectNamedPipe — CancelIoEx would be a no-op there. With the
+    // stop event signalled, the I/O thread's WaitForMultipleObjects exits
+    // promptly regardless of whether the connect was ever started.
+    if (impl && impl->stopEvent != nullptr)
+        SetEvent(impl->stopEvent);
 
     // CancelIoEx unblocks the I/O thread's pending read so it can exit. The
     // handle must stay valid until the thread has returned — closing it
@@ -129,6 +149,11 @@ void ControlChannel::stop()
     {
         CloseHandle(impl->pipe);
         impl->pipe = INVALID_HANDLE_VALUE;
+    }
+    if (impl && impl->stopEvent != nullptr)
+    {
+        CloseHandle(impl->stopEvent);
+        impl->stopEvent = nullptr;
     }
 
     // Fail any in-flight requests so callers don't hang.
@@ -295,6 +320,24 @@ void ControlChannel::ioLoop()
         DWORD err = ok ? 0 : GetLastError();
         if (!ok && err == ERROR_IO_PENDING)
         {
+            // Wait on the connect event AND the stop event. The stop event
+            // is signalled by ControlChannel::stop() even if it ran during
+            // the brief window between ioThread spawn and this call —
+            // CancelIoEx alone is a no-op against not-yet-issued I/O.
+            HANDLE waits[2] = { ov.hEvent, impl->stopEvent };
+            const DWORD which = WaitForMultipleObjects(2, waits, FALSE, INFINITE);
+            if (which == WAIT_OBJECT_0 + 1)
+            {
+                // Stop requested — cancel the pending connect so the kernel
+                // releases the OVERLAPPED before we CloseHandle it.
+                CancelIoEx(impl->pipe, &ov);
+                DWORD drained = 0;
+                GetOverlappedResult(impl->pipe, &ov, &drained, TRUE);
+                CloseHandle(ov.hEvent);
+                CTL_TRACE("ConnectNamedPipe cancelled by stop()");
+                failWith(kReasonReadError + " (stopped)");
+                return;
+            }
             DWORD t = 0;
             ok = GetOverlappedResult(impl->pipe, &ov, &t, TRUE);
             if (!ok) err = GetLastError();

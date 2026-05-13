@@ -54,11 +54,15 @@ struct Args
     int channels   = 2;
 };
 
-bool parseArgs(int argc, wchar_t** argv, Args& out)
+bool parseArgs(int argc, wchar_t** argv, Args& out, juce::String& whyFailed)
 {
     for (int i = 1; i < argc; i += 2)
     {
-        if (i + 1 >= argc) return false;
+        if (i + 1 >= argc)
+        {
+            whyFailed = "unpaired key at position " + juce::String(i);
+            return false;
+        }
         juce::String key(argv[i]);
         juce::String val(argv[i + 1]);
         if      (key == "--plugin-path")     out.pluginPath = val;
@@ -69,15 +73,24 @@ bool parseArgs(int argc, wchar_t** argv, Args& out)
         else if (key == "--sample-rate")     out.sampleRate = val.getIntValue();
         else if (key == "--max-block")       out.maxBlock = val.getIntValue();
         else if (key == "--channels")        out.channels = val.getIntValue();
-        else                                 return false; // unknown flag — fail fast
+        else
+        {
+            whyFailed = "unknown flag '" + key + "'";
+            return false;
+        }
     }
-    return out.pluginPath.isNotEmpty() && out.controlPipe.isNotEmpty()
-        && out.audio.shm.isNotEmpty()
-        && out.audio.evtToHost.isNotEmpty()
-        && out.audio.evtToSandbox.isNotEmpty()
-        && out.sampleRate > 0
-        && out.maxBlock   > 0
-        && out.channels   > 0;
+    // Per-field validation with specific error reporting so a typo on the
+    // spawn command line surfaces immediately instead of as a generic
+    // "bad args" log line.
+    if (out.pluginPath.isEmpty())        { whyFailed = "missing --plugin-path"; return false; }
+    if (out.controlPipe.isEmpty())       { whyFailed = "missing --control-pipe"; return false; }
+    if (out.audio.shm.isEmpty())         { whyFailed = "missing --audio-shm"; return false; }
+    if (out.audio.evtToHost.isEmpty())   { whyFailed = "missing --audio-event-out"; return false; }
+    if (out.audio.evtToSandbox.isEmpty()){ whyFailed = "missing --audio-event-in"; return false; }
+    if (out.sampleRate <= 0) { whyFailed = "invalid --sample-rate=" + juce::String(out.sampleRate); return false; }
+    if (out.maxBlock   <= 0) { whyFailed = "invalid --max-block="   + juce::String(out.maxBlock);   return false; }
+    if (out.channels   <= 0) { whyFailed = "invalid --channels="    + juce::String(out.channels);   return false; }
+    return true;
 }
 
 class EditorWindow : public juce::DocumentWindow
@@ -332,9 +345,24 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         // long TEMP paths.
         if (n > 0 && suffixLen > 0
                   && (size_t)n + (size_t)suffixLen < sizeof(path))
+        {
             std::strncat(path, suffix, sizeof(path) - n - 1);
+        }
         else
-            std::snprintf(path, sizeof(path), "C:\\slopsmith-vst-host-%lu.log", pid);
+        {
+            // Fall back to USERPROFILE — writing into C:\ requires admin
+            // and a non-admin install just loses the diagnostic file. The
+            // user profile path is always writable by the calling user.
+            char userprofile[1024]{};
+            const DWORD up = GetEnvironmentVariableA("USERPROFILE",
+                                                     userprofile,
+                                                     sizeof(userprofile));
+            if (up > 0 && up < sizeof(userprofile) - sizeof(suffix))
+                std::snprintf(path, sizeof(path), "%s%s", userprofile, suffix);
+            else
+                std::snprintf(path, sizeof(path),
+                              "C:\\slopsmith-vst-host-%lu.log", pid);
+        }
         g_hostLog = std::fopen(path, "a");
         if (g_hostLog)
             hostLogf("\n==== slopsmith-vst-host pid=%lu starting ====", pid);
@@ -349,9 +377,10 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         return 1;
     }
     Args parsed;
-    if (!parseArgs(argc, argv, parsed))
+    juce::String parseFailReason;
+    if (!parseArgs(argc, argv, parsed, parseFailReason))
     {
-        hostLogf("bad args (argc=%d)", argc);
+        hostLogf("bad args (argc=%d): %s", argc, parseFailReason.toRawUTF8());
         for (int i = 0; i < argc; ++i)
         {
             char buf[512]; std::snprintf(buf, sizeof(buf), "  argv[%d]=%ls", i, argv[i]);
