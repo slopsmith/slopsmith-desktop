@@ -164,8 +164,19 @@ bool SandboxedProcessor::initialise(juce::String& errorOut)
         onControlEvent(evname, data);
     };
 
-    auto disconnectCb = [this](const juce::String& reason)
+    auto failHandshake = [readyState]()
     {
+        bool expected = false;
+        if (readyState->readySet.compare_exchange_strong(expected, true,
+                                                         std::memory_order_acq_rel))
+        {
+            try { readyState->readyP.set_value(false); } catch (...) {}
+        }
+    };
+
+    auto disconnectCb = [this, failHandshake](const juce::String& reason)
+    {
+        failHandshake();
         teardown(reason);
     };
 
@@ -175,8 +186,9 @@ bool SandboxedProcessor::initialise(juce::String& errorOut)
         return false;
     }
     if (!subprocess->start(spawnConfig.sandboxExePath, args,
-                           [this](int code)
+                           [this, failHandshake](int code)
                            {
+                               failHandshake();
                                teardown("sandbox exit code " + juce::String(code));
                            }, err))
     {
