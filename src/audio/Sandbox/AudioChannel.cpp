@@ -44,12 +44,14 @@ bool AudioChannel::createHostSide(const AudioDimensions& dims, Names& namesOut,
     if (impl->mapping == nullptr)
     {
         errorOut = "CreateFileMapping failed: " + juce::String((int)GetLastError());
+        close();
         return false;
     }
     impl->view = MapViewOfFile(impl->mapping, FILE_MAP_ALL_ACCESS, 0, 0, totalBytes);
     if (!impl->view)
     {
         errorOut = "MapViewOfFile failed";
+        close();
         return false;
     }
     impl->viewBytes = (size_t)totalBytes;
@@ -84,6 +86,7 @@ bool AudioChannel::createHostSide(const AudioDimensions& dims, Names& namesOut,
     if (!impl->evtToHost || !impl->evtToSandbox)
     {
         errorOut = "CreateEvent failed";
+        close();
         return false;
     }
     cachedDims = dims;
@@ -97,18 +100,21 @@ bool AudioChannel::openSandboxSide(const Names& names, juce::String& errorOut)
     if (!impl->mapping)
     {
         errorOut = "OpenFileMapping failed: " + juce::String((int)GetLastError());
+        close();
         return false;
     }
     impl->view = MapViewOfFile(impl->mapping, FILE_MAP_ALL_ACCESS, 0, 0, 0);
     if (!impl->view)
     {
         errorOut = "MapViewOfFile (sandbox) failed";
+        close();
         return false;
     }
     impl->header = reinterpret_cast<AudioShmHeader*>(impl->view);
     if (impl->header->magic != kAudioShmMagic)
     {
         errorOut = "audio shm magic mismatch";
+        close();
         return false;
     }
     cachedDims.maxBlocks = impl->header->maxBlocks;
@@ -142,17 +148,21 @@ void AudioChannel::close()
     impl->outputRing = nullptr;
 }
 
-static std::atomic<uint64_t>& atomicAt(uint64_t& slot)
+// Header indices are written by the host side and read by the sandbox side
+// over shared memory. std::atomic_ref gives us atomic access without UB from
+// reinterpret_casting the uint64_t storage to std::atomic<uint64_t>* (the
+// latter relies on layout-compatibility C++ doesn't promise).
+static std::atomic_ref<uint64_t> atomicAt(uint64_t& slot)
 {
-    return *reinterpret_cast<std::atomic<uint64_t>*>(&slot);
+    return std::atomic_ref<uint64_t>(slot);
 }
 
 bool AudioChannel::pushBlock(bool isOutputRing, const juce::AudioBuffer<float>& src,
                              int numSamples)
 {
     if (!impl->header) return false;
-    auto& writeIdx = atomicAt(impl->header->writeIdx);
-    auto& readIdx  = atomicAt(impl->header->readIdx);
+    auto writeIdx = atomicAt(impl->header->writeIdx);
+    auto readIdx  = atomicAt(impl->header->readIdx);
     uint64_t w = writeIdx.load(std::memory_order_relaxed);
     uint64_t r = readIdx.load(std::memory_order_acquire);
     if (w - r >= impl->header->maxBlocks)
@@ -165,15 +175,26 @@ bool AudioChannel::pushBlock(bool isOutputRing, const juce::AudioBuffer<float>& 
     auto* dst = (isOutputRing ? impl->outputRing : impl->inputRing)
               + slot * (bytesPerSlot / sizeof(float));
 
-    int channels = juce::jmin((int)impl->header->maxChannels,
-                              src.getNumChannels());
-    int samples  = juce::jmin((int)impl->header->maxBlockSamples, numSamples);
+    const int maxCh      = (int)impl->header->maxChannels;
+    const int maxSamples = (int)impl->header->maxBlockSamples;
+    const int channels   = juce::jmin(maxCh, src.getNumChannels());
+    const int samples    = juce::jmin(maxSamples, numSamples);
     for (int ch = 0; ch < channels; ++ch)
     {
-        std::memcpy(dst + ch * impl->header->maxBlockSamples,
-                    src.getReadPointer(ch),
+        auto* slotCh = dst + ch * maxSamples;
+        std::memcpy(slotCh, src.getReadPointer(ch),
                     sizeof(float) * (size_t)samples);
+        // Wipe tail samples so a shorter block doesn't leave audio from a
+        // previous slot-overwrite hanging around for the consumer.
+        if (samples < maxSamples)
+            std::memset(slotCh + samples, 0,
+                        sizeof(float) * (size_t)(maxSamples - samples));
     }
+    // Wipe channels the producer didn't write at all — same rationale.
+    for (int ch = channels; ch < maxCh; ++ch)
+        std::memset(dst + ch * maxSamples, 0,
+                    sizeof(float) * (size_t)maxSamples);
+
     writeIdx.store(w + 1, std::memory_order_release);
     SetEvent(isOutputRing ? impl->evtToHost : impl->evtToSandbox);
     return true;
@@ -189,8 +210,8 @@ bool AudioChannel::popBlock(bool isOutputRing, juce::AudioBuffer<float>& dst,
         atomicAt(impl->header->dropouts).fetch_add(1, std::memory_order_relaxed);
         return false;
     }
-    auto& writeIdx = atomicAt(impl->header->writeIdx);
-    auto& readIdx  = atomicAt(impl->header->readIdx);
+    auto writeIdx = atomicAt(impl->header->writeIdx);
+    auto readIdx  = atomicAt(impl->header->readIdx);
     uint64_t r = readIdx.load(std::memory_order_relaxed);
     uint64_t w = writeIdx.load(std::memory_order_acquire);
     if (w == r) return false; // spurious wakeup
@@ -200,15 +221,25 @@ bool AudioChannel::popBlock(bool isOutputRing, juce::AudioBuffer<float>& dst,
     auto* src = (isOutputRing ? impl->outputRing : impl->inputRing)
               + slot * (bytesPerSlot / sizeof(float));
 
-    int channels = juce::jmin((int)impl->header->maxChannels,
-                              dst.getNumChannels());
-    int samples  = juce::jmin((int)impl->header->maxBlockSamples, numSamples);
+    const int maxSamples = (int)impl->header->maxBlockSamples;
+    const int dstCh      = dst.getNumChannels();
+    const int channels   = juce::jmin((int)impl->header->maxChannels, dstCh);
+    const int samples    = juce::jmin(maxSamples, numSamples);
     for (int ch = 0; ch < channels; ++ch)
     {
         std::memcpy(dst.getWritePointer(ch),
-                    src + ch * impl->header->maxBlockSamples,
+                    src + ch * maxSamples,
                     sizeof(float) * (size_t)samples);
+        // Zero any portion of dst beyond what we copied (the caller's buffer
+        // may be longer than the producer's payload).
+        if (samples < numSamples)
+            std::memset(dst.getWritePointer(ch) + samples, 0,
+                        sizeof(float) * (size_t)(numSamples - samples));
     }
+    // Zero channels the producer didn't fill so dst doesn't carry stale audio.
+    for (int ch = channels; ch < dstCh; ++ch)
+        dst.clear(ch, 0, numSamples);
+
     readIdx.store(r + 1, std::memory_order_release);
     return true;
 }
