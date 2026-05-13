@@ -423,5 +423,6 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
     st.plugin.reset();
     st.control.sendEvent(event::kGoodbye, {});
     st.control.stop();
+    if (g_hostLog) { std::fclose(g_hostLog); g_hostLog = nullptr; }
     return 0;
 }
