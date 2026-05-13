@@ -100,29 +100,21 @@ without the Qt link.** Concretely:
 - **Crash isolation**: a plugin in the sandbox crashing only takes down its own process;
   Slopsmith Desktop can detect, log, restart. Bigger win than just fixing GR6.
 
-## Artifacts
+## Reproducing the baseline crash
 
-- PoC source: `/tmp/win11-srv/vst-poc/` on host, `C:\Users\byron\vst-poc\` on VM
-  - `main.cpp` — single-file PoC (~150 lines)
-  - `CMakeLists.txt` — pulls JUCE from slopsmith-desktop, optional Qt
-  - `build.bat`, `run.bat` — convenience wrappers
-- Build artefact: `C:\Users\byron\vst-poc\build\Release\vst_poc.exe`
-- Run logs: `C:\Users\byron\vst-poc\poc-run.log` (last run's stderr)
-- VST trace: `%TEMP%\slopsmith-vst-trace.log` on the VM
-- Qt 5.15.2 install (for the Qt-on leg): `C:\Qt\5.15.2\msvc2019_64\` — can be deleted
-  once the sandbox is implemented without Qt.
-
-## Reproduce
+The in-process load that motivated this work is reproduced via the
+existing smoke harness on a Windows host with GR6 installed:
 
 ```bat
-# Baseline (still crashes today, confirmed 2026-05-13):
-cd C:\Users\byron\slopsmith-desktop
-node load-gr6.js
-
-# PoC, with QApplication (clean):
-cd C:\Users\byron\vst-poc
-run.bat 1
-
-# PoC, no QApplication (also clean — load-bearing experiment):
-run.bat 0
+cd <slopsmith-desktop checkout>
+node scripts\dev\load-gr6.js
 ```
+
+Before this PR's sandbox patch, that command crashed with
+`STATUS_STACK_BUFFER_OVERRUN (0xC0000409)` from the Qt5 GR6 path. The
+single-file PoC that confirmed the QApplication-on-message-thread fix
+lived under a developer-local scratch tree during investigation; the
+findings are summarised above and the production fix is the
+out-of-process sandbox in this PR. There is no reproducible artefact to
+ship for the PoC — the experiment is fully captured by the diagnostic
+narrative above.

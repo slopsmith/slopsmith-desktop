@@ -22,7 +22,8 @@ namespace {
         SandboxedEditor(SandboxedProcessor& p, void* hwnd, int w, int h)
             : juce::AudioProcessorEditor(&p), proc(p), nativeHwnd(hwnd)
         {
-            setSize(w > 0 ? w : 800, h > 0 ? h : 600);
+            setSize(w > 0 ? w : kDefaultEditorWidth,
+                    h > 0 ? h : kDefaultEditorHeight);
             setOpaque(true);
             // Reparenting the plugin HWND happens in parentHierarchyChanged()
             // — we need a valid peer parent which doesn't exist until we're
@@ -398,20 +399,13 @@ void SandboxedProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     }
     const int n = buffer.getNumSamples();
 
-    // Forward MIDI via the control channel for now. Sample-accurate timing
-    // requires bundling MIDI inline with the audio block (see Protocol.h
-    // notes); follow-up PR.
-    for (const auto meta : midiMessages)
-    {
-        const auto& msg = meta.getMessage();
-        juce::DynamicObject::Ptr midiObj(new juce::DynamicObject());
-        midiObj->setProperty("frame", meta.samplePosition);
-        // Encode raw bytes as base64 so JSON survives binary content.
-        juce::MemoryBlock bytes(msg.getRawData(), (size_t)msg.getRawDataSize());
-        midiObj->setProperty("bytes", juce::Base64::toBase64(bytes.getData(),
-                                                              bytes.getSize()));
-        control->postNoReply(op::kMidiEvent, juce::var(midiObj.get()));
-    }
+    // Drop MIDI entirely until the audio-shm inline-MIDI follow-up lands.
+    // vst-host's op::kMidiEvent dispatcher is a no-op stub today, so
+    // serializing every event from the realtime audio thread through
+    // base64 + JSON + the control pipe was pure heap pressure with no
+    // observable effect at the sandbox. The inline-per-block shm queue
+    // covered by the audio-shm follow-up is the right shape (lock-free,
+    // bounded ring); this branch is a deliberate v1 silence.
     midiMessages.clear();
 
     if (!audio->pushBlock(/*isOutputRing=*/false, buffer, n))

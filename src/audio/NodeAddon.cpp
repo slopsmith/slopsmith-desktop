@@ -841,6 +841,15 @@ static Napi::Value LoadVST(const Napi::CallbackInfo& info)
         // Mirror the in-process load's stderr format so a JS test harness or
         // Electron renderer sees the same diagnostics regardless of path.
         fprintf(stderr, "[LoadVST] Failed: %s\n", error.toRawUTF8());
+        // Throw a Napi::Error so the JS caller gets the actual sandbox-spawn
+        // diagnostic instead of an opaque -1. Renderers can `try/catch
+        // addon.loadVST(...)` and surface `err.message` directly to the
+        // user; legacy callers that ignore exceptions still see the
+        // historical -1 return because Napi::Error.ThrowAsJavaScriptException
+        // unwinds back to JS where the function call evaluates to undefined,
+        // which they were already expected to handle.
+        Napi::Error::New(env, error.toStdString())
+            .ThrowAsJavaScriptException();
         return Napi::Number::New(env, -1);
     }
 

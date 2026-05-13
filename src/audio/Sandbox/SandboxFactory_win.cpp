@@ -9,6 +9,7 @@
 #include <juce_core/juce_core.h>
 #include <cmath>      // std::isfinite, std::lround
 #include <limits>     // std::numeric_limits
+#include <vector>     // dynamic buffer for SLOPSMITH_DEV_SANDBOX_PATH
 #include <windows.h> // GetModuleHandleExW / GetModuleFileNameW
 
 namespace slopsmith::sandbox {
@@ -71,26 +72,30 @@ juce::File resolveSandboxExe()
     // `build/Release/slopsmith-vst-host.exe` happening to be in the
     // launch directory, which is a search-path attack vector. Fail
     // closed in production; require the env var for dev workflows.
-    char devOverride[1024]{};
-    const DWORD dn = GetEnvironmentVariableA("SLOPSMITH_DEV_SANDBOX_PATH",
-                                             devOverride, sizeof(devOverride));
-    if (dn >= sizeof(devOverride))
+    // Use the W variant + dynamic buffer so long-paths-enabled installs
+    // and deep dev trees beyond MAX_PATH still work. First call probes
+    // for the required size; second call reads into the right-sized
+    // buffer. The first-call return semantics are: required-size-incl-NUL
+    // if buffer too small, actual-length-excl-NUL otherwise, 0 if missing.
+    const wchar_t* kVar = L"SLOPSMITH_DEV_SANDBOX_PATH";
+    const DWORD probe = GetEnvironmentVariableW(kVar, nullptr, 0);
+    if (probe > 0)
     {
-        // GetEnvironmentVariableA returns required-size-including-NUL when
-        // the buffer is too small. The user opted into this path explicitly
-        // via env var, so a silent fall-through to "no override" makes
-        // misconfigurations look like missing-env-var bugs. Trace it.
-        VST_TRACE("SandboxFactory: SLOPSMITH_DEV_SANDBOX_PATH truncated "
-                  "(required=%lu, buffer=%lu) — ignoring override",
-                  (unsigned long)dn, (unsigned long)sizeof(devOverride));
-    }
-    else if (dn > 0)
-    {
-        // Use brace-init to avoid the most-vexing-parse on
-        // `File explicitPath(juce::String(devOverride));`, which MSVC
-        // reads as a function declaration.
-        const juce::File explicitPath{ juce::String(devOverride) };
-        if (explicitPath.existsAsFile()) return explicitPath;
+        std::vector<wchar_t> buf(probe);
+        const DWORD got = GetEnvironmentVariableW(kVar, buf.data(), probe);
+        if (got > 0 && got < probe)
+        {
+            // Brace-init avoids the most-vexing-parse on
+            // `File explicitPath(juce::String(buf.data()));`.
+            const juce::File explicitPath{ juce::String(buf.data()) };
+            if (explicitPath.existsAsFile()) return explicitPath;
+        }
+        else
+        {
+            VST_TRACE("SandboxFactory: SLOPSMITH_DEV_SANDBOX_PATH read race "
+                      "(probe=%lu, got=%lu)",
+                      (unsigned long)probe, (unsigned long)got);
+        }
     }
 
     return {};

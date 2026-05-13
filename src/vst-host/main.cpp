@@ -333,7 +333,8 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
                 return;
             }
             if (st.editor->getWidth() < 16 || st.editor->getHeight() < 16)
-                st.editor->setSize(1000, 600);
+                st.editor->setSize(slopsmith::sandbox::kDefaultEditorWidth,
+                                   slopsmith::sandbox::kDefaultEditorHeight);
             st.editorWindow = std::make_unique<EditorWindow>(
                 st.plugin->getName(), st.editor.get());
             st.editorWindow->setVisible(true);
@@ -522,7 +523,15 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
             // makes fopen return NULL, which the call below handles cleanly
             // (g_hostLog stays null, hostLogf becomes a no-op).
         }
-        g_hostLog = path[0] ? std::fopen(path, "a") : nullptr;
+        // Open the per-PID host log with "w" (truncate) rather than "a"
+        // (append). The filename includes the PID and is single-writer,
+        // so append-vs-truncate doesn't change correlation, but truncate
+        // means a long-lived install isn't accumulating thousands of
+        // stale slopsmith-vst-host-<pid>.log files indefinitely (the
+        // file is recreated fresh on every spawn). Long-term cleanup of
+        // *historical* per-PID logs from prior installs is a separate
+        // janitor pass not in scope here.
+        g_hostLog = path[0] ? std::fopen(path, "w") : nullptr;
         if (g_hostLog)
             hostLogf("\n==== slopsmith-vst-host pid=%lu starting ====", pid);
     }

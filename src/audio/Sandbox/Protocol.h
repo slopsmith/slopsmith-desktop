@@ -43,6 +43,23 @@ inline constexpr uint32_t kAudioMaxChannels = 8;
 // state-restore can legitimately take a while, so this is generous.
 inline constexpr int kDefaultReplyTimeoutMs = 10000;
 
+// Named-object suffixes used by the audio shm + event pair. Names are
+// generated host-side and passed to the sandbox via command-line args, so
+// only the host's AudioChannel::createHostSide actually uses these — but
+// centralising them prevents future drift if the sandbox ever needs to
+// reconstruct a name (e.g. for diagnostic logging that surfaces the names
+// in stable form rather than via argv echo).
+inline constexpr const char* kShmNameSuffix       = "audio";
+inline constexpr const char* kEvtToHostSuffix     = "evt-out";
+inline constexpr const char* kEvtToSandboxSuffix  = "evt-in";
+
+// Editor size default applied when the plugin reports an invalid (< 16 in
+// either axis) editor size. Used by both the sandbox host (kOpenEditor
+// reply) and the host-side SandboxedEditor fallback so the two sides
+// don't drift.
+inline constexpr int kDefaultEditorWidth  = 1000;
+inline constexpr int kDefaultEditorHeight = 600;
+
 // Watchdog: a sandbox that doesn't send `ready` this fast is presumed broken.
 // Generous because some plugins (NI Guitar Rig 6 in particular) spin up an
 // embedded Qt5/QML engine on first load, which can take 8-12 seconds on a
