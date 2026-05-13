@@ -17,6 +17,8 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <atomic>
+#include <cstdarg>
+#include <cstring>
 #include <thread>
 
 #if !JUCE_WINDOWS
@@ -232,17 +234,55 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
 
 } // anonymous
 
+// Debug-log path: %TEMP%\slopsmith-vst-host-<pid>.log. Plain text, line-buffered
+// so a fast-fail still leaves a useful tail. This is essential because the
+// subprocess runs hidden (no console) so fprintf(stderr) goes nowhere; without
+// the file we can't see why it died.
+static FILE* g_hostLog = nullptr;
+static void hostLogf(const char* fmt, ...)
+{
+    if (!g_hostLog) return;
+    va_list ap; va_start(ap, fmt);
+    std::vfprintf(g_hostLog, fmt, ap);
+    va_end(ap);
+    std::fputc('\n', g_hostLog);
+    std::fflush(g_hostLog);
+}
+
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
 {
+    {
+        char path[1024]{};
+        DWORD n = GetEnvironmentVariableA("TEMP", path, sizeof(path));
+        if (n > 0 && n < sizeof(path))
+            std::strncat(path, "\\slopsmith-vst-host.log", sizeof(path) - n - 1);
+        else
+            std::strncpy(path, "C:\\slopsmith-vst-host.log", sizeof(path) - 1);
+        g_hostLog = std::fopen(path, "a");
+        if (g_hostLog)
+            hostLogf("\n==== slopsmith-vst-host pid=%lu starting ====",
+                     (unsigned long)GetCurrentProcessId());
+    }
+
     int argc = 0;
     wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     Args parsed;
     if (!parseArgs(argc, argv, parsed))
     {
-        std::fprintf(stderr, "[vst-host] bad args\n");
+        hostLogf("bad args (argc=%d)", argc);
+        for (int i = 0; i < argc; ++i)
+        {
+            char buf[512]; std::snprintf(buf, sizeof(buf), "  argv[%d]=%ls", i, argv[i]);
+            hostLogf("%s", buf);
+        }
         return 2;
     }
     LocalFree(argv);
+    hostLogf("args ok: plugin=%s pipe=%s shm=%s sr=%d bs=%d ch=%d",
+             parsed.pluginPath.toRawUTF8(),
+             parsed.controlPipe.toRawUTF8(),
+             parsed.audio.shm.toRawUTF8(),
+             parsed.sampleRate, parsed.maxBlock, parsed.channels);
 
     HostState st;
     st.sampleRate = parsed.sampleRate;
@@ -252,25 +292,29 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
     juce::String err;
     if (!st.audio.openSandboxSide(parsed.audio, err))
     {
-        std::fprintf(stderr, "[vst-host] audio shm: %s\n", err.toRawUTF8());
+        hostLogf("audio shm open failed: %s", err.toRawUTF8());
         return 3;
     }
+    hostLogf("audio shm opened");
     if (!st.control.connectClientSide(parsed.controlPipe, err))
     {
-        std::fprintf(stderr, "[vst-host] control pipe: %s\n", err.toRawUTF8());
+        hostLogf("control pipe connect failed: %s", err.toRawUTF8());
         return 4;
     }
+    hostLogf("control pipe connected");
 
     // Load the plugin BEFORE starting the control loop so we can return a
     // populated `ready` event.
+    hostLogf("calling host.loadPlugin");
     st.plugin = st.host.loadPlugin(parsed.pluginPath,
                                     (double)parsed.sampleRate,
                                     parsed.maxBlock, err);
     if (!st.plugin)
     {
-        std::fprintf(stderr, "[vst-host] loadPlugin failed: %s\n", err.toRawUTF8());
+        hostLogf("loadPlugin failed: %s", err.toRawUTF8());
         return 5;
     }
+    hostLogf("plugin loaded: %s", st.plugin->getName().toRawUTF8());
     st.plugin->prepareToPlay((double)parsed.sampleRate, parsed.maxBlock);
 
     st.control.setRequestHandler(
@@ -283,7 +327,9 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         st.running.store(false, std::memory_order_release);
     });
 
+    hostLogf("sending ready event");
     st.control.sendEvent(event::kReady, pluginMetadata(*st.plugin));
+    hostLogf("ready event sent");
 
     st.audioThread = std::thread([&st] { runAudioThread(st); });
 
