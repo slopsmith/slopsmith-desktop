@@ -130,24 +130,36 @@ bool SandboxedProcessor::initialise(juce::String& errorOut)
     args.add("--max-block");        args.add(juce::String((int)spawnConfig.audio.maxBlockSamples));
     args.add("--channels");         args.add(juce::String((int)spawnConfig.audio.maxChannels));
 
-    std::promise<bool> readyP;
-    auto readyF = readyP.get_future();
-    bool readySet = false;
-
-    auto eventCb = [this, &readyP, &readySet](const juce::String& evname,
-                                              const juce::var& data)
+    // ControlChannel keeps the event callback past initialise()'s return, so
+    // the ready-handshake state has to outlive this stack frame. Wrap it in a
+    // shared_ptr the lambda copies — the future's shared state lives via the
+    // promise inside.
+    struct ReadyState
     {
-        if (evname == event::kReady && !readySet)
+        std::promise<bool> readyP;
+        std::atomic<bool>  readySet{false};
+    };
+    auto readyState = std::make_shared<ReadyState>();
+    auto readyF     = readyState->readyP.get_future();
+
+    auto eventCb = [this, readyState](const juce::String& evname,
+                                      const juce::var& data)
+    {
+        if (evname == event::kReady)
         {
-            descriptionCached.name = data.getProperty("pluginName", "").toString();
-            descriptionCached.manufacturerName =
-                data.getProperty("manufacturer", "").toString();
-            hasEditorCached    = (bool)data.getProperty("hasEditor", false);
-            acceptsMidiCached  = (bool)data.getProperty("acceptsMidi", false);
-            producesMidiCached = (bool)data.getProperty("producesMidi", false);
-            alive.store(true, std::memory_order_release);
-            readySet = true;
-            try { readyP.set_value(true); } catch (...) {}
+            bool expected = false;
+            if (readyState->readySet.compare_exchange_strong(expected, true,
+                                                             std::memory_order_acq_rel))
+            {
+                descriptionCached.name = data.getProperty("pluginName", "").toString();
+                descriptionCached.manufacturerName =
+                    data.getProperty("manufacturer", "").toString();
+                hasEditorCached    = (bool)data.getProperty("hasEditor", false);
+                acceptsMidiCached  = (bool)data.getProperty("acceptsMidi", false);
+                producesMidiCached = (bool)data.getProperty("producesMidi", false);
+                alive.store(true, std::memory_order_release);
+                try { readyState->readyP.set_value(true); } catch (...) {}
+            }
         }
         onControlEvent(evname, data);
     };
