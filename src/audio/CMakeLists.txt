@@ -11,7 +11,29 @@ set(AUDIO_SOURCES
     IRLoader.cpp
     PitchDetector.cpp
     ChordScorer.cpp
+    Sandbox/Protocol.cpp
 )
+
+# Plugin sandbox — out-of-process VST3 host for plugins that don't survive
+# in-process loading (notably Qt5-using plugins from Native Instruments;
+# see DIAG-UPDATE.md in the PR description for the diagnosis).
+#
+# Cross-platform note (constitution VIII): only the Windows implementation
+# ships in this PR. macOS / Linux fall back to in-process loading via the
+# stub factory; sandbox PRs for those OSes follow.
+if(WIN32)
+    list(APPEND AUDIO_SOURCES
+        Sandbox/SandboxedProcessor.cpp
+        Sandbox/ControlChannel.cpp
+        Sandbox/AudioChannel.cpp
+        Sandbox/SubprocessHandle.cpp
+        Sandbox/SandboxFactory_win.cpp
+    )
+else()
+    list(APPEND AUDIO_SOURCES
+        Sandbox/SandboxFactory_stub.cpp
+    )
+endif()
 
 # Build as shared library (.node)
 add_library(slopsmith_audio SHARED ${AUDIO_SOURCES} ${CMAKE_JS_SRC})
