@@ -265,22 +265,26 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
 
     if (op == op::kPrepare)
     {
-        double sr = (double)args.getProperty("sampleRate", 48000);
-        int bs    = (int)args.getProperty("blockSize", 256);
-        // (int)NaN and (int)<INT_MIN-or->INT_MAX double are UB — guard
-        // finiteness + the int range before the narrowing on the
-        // st.sampleRate = (int)sr line below. Mirrors the validation in
-        // SandboxFactory_win::createSandboxed at spawn time.
+        // Both sr and bs come from JSON-deserialised juce::var — could be
+        // double NaN, ±inf, or out-of-int-range. Read as double first and
+        // validate finiteness + range BEFORE the narrowing int cast.
+        // (int)NaN and (int)<INT_MIN-or->INT_MAX double are UB per C++.
+        // Mirrors the validation in SandboxFactory_win::createSandboxed
+        // at spawn time.
+        double sr  = (double)args.getProperty("sampleRate", 48000);
+        double bsd = (double)args.getProperty("blockSize",  256);
         if (! std::isfinite(sr)
             || sr <= 0.0
             || sr > (double)(std::numeric_limits<int>::max)()
-            || bs <= 0
-            || bs > (int)kAudioMaxBlockSamples)
+            || ! std::isfinite(bsd)
+            || bsd <= 0.0
+            || bsd > (double)kAudioMaxBlockSamples)
         {
             reply(false, {}, "invalid prepare args: sr=" + juce::String(sr)
-                             + " bs=" + juce::String(bs));
+                             + " bs=" + juce::String(bsd));
             return;
         }
+        const int bs = (int)bsd;
         st.sampleRate = (int)sr;
         st.blockSize  = bs;
         if (st.plugin)
