@@ -549,6 +549,11 @@ bool ControlChannel::sendEvent(const char* eventName, const juce::var& data)
 
 void ControlChannel::setRequestHandler(RequestHandler handler)
 {
+    // The I/O thread reads requestHandler unsynchronized — assignments after
+    // start() would race. Header documents "MUST be called BEFORE start()";
+    // assert it so a future regression (e.g. wiring a handler from a ready
+    // callback) fails loudly in debug builds rather than silently racing.
+    jassert(!ioThread.joinable() && !alive.load(std::memory_order_acquire));
     requestHandler = std::move(handler);
 }
 

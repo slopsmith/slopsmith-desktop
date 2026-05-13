@@ -72,7 +72,17 @@ juce::File resolveSandboxExe()
     char devOverride[1024]{};
     const DWORD dn = GetEnvironmentVariableA("SLOPSMITH_DEV_SANDBOX_PATH",
                                              devOverride, sizeof(devOverride));
-    if (dn > 0 && dn < sizeof(devOverride))
+    if (dn >= sizeof(devOverride))
+    {
+        // GetEnvironmentVariableA returns required-size-including-NUL when
+        // the buffer is too small. The user opted into this path explicitly
+        // via env var, so a silent fall-through to "no override" makes
+        // misconfigurations look like missing-env-var bugs. Trace it.
+        VST_TRACE("SandboxFactory: SLOPSMITH_DEV_SANDBOX_PATH truncated "
+                  "(required=%lu, buffer=%lu) — ignoring override",
+                  (unsigned long)dn, (unsigned long)sizeof(devOverride));
+    }
+    else if (dn > 0)
     {
         // Use brace-init to avoid the most-vexing-parse on
         // `File explicitPath(juce::String(devOverride));`, which MSVC

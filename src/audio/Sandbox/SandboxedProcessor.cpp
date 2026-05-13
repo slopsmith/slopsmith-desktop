@@ -116,6 +116,23 @@ void SandboxedProcessor::setOnCrash(CrashCallback cb)
 std::unique_ptr<SandboxedProcessor> SandboxedProcessor::spawn(const SpawnConfig& cfg,
                                                               juce::String& errorOut)
 {
+    // Validate caller-supplied dims against the protocol caps before any
+    // shm/pipe allocation — both sides assume slots fit inside the cap-
+    // derived layout; an oversize maxBlocks/maxChannels would let
+    // createHostSide allocate beyond what openSandboxSide validates
+    // (which today only checks magic + protocolVersion).
+    if (cfg.audio.maxBlocks == 0 || cfg.audio.maxBlocks > kAudioMaxBlocks)
+    {
+        errorOut = "invalid audio.maxBlocks: " + juce::String((int)cfg.audio.maxBlocks)
+                 + " (cap=" + juce::String((int)kAudioMaxBlocks) + ")";
+        return nullptr;
+    }
+    if (cfg.audio.maxChannels == 0 || cfg.audio.maxChannels > kAudioMaxChannels)
+    {
+        errorOut = "invalid audio.maxChannels: " + juce::String((int)cfg.audio.maxChannels)
+                 + " (cap=" + juce::String((int)kAudioMaxChannels) + ")";
+        return nullptr;
+    }
     std::unique_ptr<SandboxedProcessor> p(new SandboxedProcessor(cfg));
     if (!p->initialise(errorOut))
         return nullptr;

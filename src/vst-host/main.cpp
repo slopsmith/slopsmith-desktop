@@ -137,6 +137,11 @@ struct HostState
 juce::var pluginMetadata(juce::AudioPluginInstance& p)
 {
     juce::DynamicObject::Ptr obj(new juce::DynamicObject());
+    // Advertise the protocol version the sandbox was built against so the
+    // host can detect version skew at handshake time with a clear error,
+    // instead of waiting for the first mismatched frame's per-message `v`
+    // check to tear the channel down.
+    obj->setProperty("protocolVersion", (int)slopsmith::sandbox::kProtocolVersion);
     obj->setProperty("pluginName", p.getName());
     auto desc = p.getPluginDescription();
     obj->setProperty("manufacturer", desc.manufacturerName);
@@ -201,8 +206,10 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
             st.plugin->setNonRealtime(false);
             st.plugin->prepareToPlay(sr, bs);
         }
+        // `ok` is already on the envelope via wire::makeReply — keeping it
+        // off the result object so the schema stays uniform across ops
+        // (kOpenEditor/kGetState/etc. don't double up either).
         juce::DynamicObject::Ptr res(new juce::DynamicObject());
-        res->setProperty("ok", true);
         res->setProperty("latencySamples",
             st.plugin ? st.plugin->getLatencySamples() : 0);
         reply(true, juce::var(res.get()));
@@ -311,7 +318,15 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
         juce::MessageManager::callAsync([&st]() {
             st.editorWindow.reset();
             st.editor.reset();
-            st.plugin.reset();
+            // Do NOT reset st.plugin here — the audio thread can be
+            // between its running.load() check and a processBlock() call,
+            // and dropping the plugin out from under it would dereference
+            // a freed AudioPluginInstance. WinMain owns the destruction
+            // *after* audioThread.join() (see plugin.reset() below the
+            // dispatch loop), so the message-loop tear-down here only
+            // needs to drop the editor + window (which AsyncUpdater /
+            // MessageManagerLock require be destroyed with a live
+            // message thread).
             st.running.store(false, std::memory_order_release);
             // Post a real WM_QUIT so the OS main thread's dispatch loop
             // sees it. JUCEApplicationBase::quit() was a no-op here —

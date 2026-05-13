@@ -52,8 +52,14 @@ juce::var decode(const void* data, size_t bytes, juce::String* errorOut)
         if (errorOut) *errorOut = "empty message";
         return {};
     }
-    juce::String text(juce::CharPointer_UTF8(static_cast<const char*>(data)),
-                      bytes);
+    // Use the (begin, end) range constructor — the (CharPointer_UTF8, size_t)
+    // overload treats the size_t as a maximum *character* count and may scan
+    // past the buffer counting characters when the body contains multi-byte
+    // UTF-8 sequences (e.g. a plugin name with non-ASCII chars). The buffer
+    // is not NUL-terminated, so bounding strictly by byte length matters.
+    auto* begin = static_cast<const char*>(data);
+    juce::String text(juce::CharPointer_UTF8(begin),
+                      juce::CharPointer_UTF8(begin + bytes));
     juce::var parsed;
     auto result = juce::JSON::parse(text, parsed);
     if (result.failed())
