@@ -54,7 +54,20 @@ inline std::FILE* logFile()
             n = GetEnvironmentVariableA("USERPROFILE", path, sizeof(path));
         }
         if (n > 0 && n < sizeof(path)) {
-            std::strncat(path, "\\slopsmith-vst-trace.log", sizeof(path) - n - 1);
+            // Per-PID suffix: this header is compiled into both the addon
+            // and the sandbox host, so concurrent runs would otherwise
+            // interleave traces in one file and make sandbox debugging
+            // (host A spawning host B) hard to correlate. Mirrors the
+            // per-PID naming the sandbox-host log already uses.
+            char suffix[64]{};
+            const int suffixLen = std::snprintf(
+                suffix, sizeof(suffix), "\\slopsmith-vst-trace-%lu.log",
+                (unsigned long)GetCurrentProcessId());
+            if (suffixLen > 0
+                && (size_t)n + (size_t)suffixLen < sizeof(path))
+            {
+                std::strncat(path, suffix, sizeof(path) - n - 1);
+            }
         }
         // If both env vars failed, leave `path` empty — writing to the
         // drive root requires admin on a default Windows install and the

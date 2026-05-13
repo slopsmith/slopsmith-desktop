@@ -206,6 +206,33 @@ juce::var pluginMetadata(juce::AudioPluginInstance& p)
     return juce::var(obj.get());
 }
 
+// Shared GUI-teardown path used by both kShutdown and the control-disconnect
+// callback. The happy path runs editor/window destruction on the JUCE message
+// thread (AsyncUpdater / MessageManagerLock during destruction require a live
+// message loop). When the queue is gone (shutdown race), destruction is safe
+// to do inline because the MessageManager is no longer pumping — there's
+// nowhere for AsyncUpdater callbacks to dispatch to anyway.
+//
+// `postQuit` controls whether the lambda also calls PostQuitMessage to wake
+// the WinMain dispatch loop (true for kShutdown which is replying to an
+// explicit host request; false for the disconnect callback where the loop
+// detects the running=false flip on the next iteration anyway). Plugin
+// destruction stays in WinMain post-audioThread.join() (UAF protection).
+inline void teardownGuiOnMessageThread(HostState& st, bool postQuit)
+{
+    if (!juce::MessageManager::callAsync([&st, postQuit]() {
+        st.editorWindow.reset();
+        st.editor.reset();
+        st.running.store(false, std::memory_order_release);
+        if (postQuit) PostQuitMessage(0);
+    }))
+    {
+        st.editorWindow.reset();
+        st.editor.reset();
+        st.running.store(false, std::memory_order_release);
+    }
+}
+
 void runAudioThread(HostState& st)
 {
     juce::AudioBuffer<float> buffer(st.channels, st.blockSize);
@@ -409,45 +436,10 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
     else if (op == op::kShutdown)
     {
         reply(true, {});
-        // Tear down the editor + plugin on the message thread *while the
-        // dispatch loop is still pumping*. Plugin editors that use
-        // AsyncUpdater or JUCE's MessageManagerLock during destruction
-        // need a live message loop; deferring the destroy to after the
-        // WinMain loop exits would deadlock or leak (see CR finding on
-        // post-loop teardown).
-        if (!juce::MessageManager::callAsync([&st]() {
-            st.editorWindow.reset();
-            st.editor.reset();
-            // Do NOT reset st.plugin here — the audio thread can be
-            // between its running.load() check and a processBlock() call,
-            // and dropping the plugin out from under it would dereference
-            // a freed AudioPluginInstance. WinMain owns the destruction
-            // *after* audioThread.join() (see plugin.reset() below the
-            // dispatch loop), so the message-loop tear-down here only
-            // needs to drop the editor + window (which AsyncUpdater /
-            // MessageManagerLock require be destroyed with a live
-            // message thread).
-            st.running.store(false, std::memory_order_release);
-            // Post a real WM_QUIT so the OS main thread's dispatch loop
-            // sees it. JUCEApplicationBase::quit() was a no-op here —
-            // this binary doesn't construct a JUCEApplicationBase, only
-            // a ScopedJuceInitialiser_GUI.
-            PostQuitMessage(0);
-        }))
-        {
-            // Queue already gone — the lambda would never run. Tear down
-            // synchronously on this thread: with the MessageManager dead,
-            // AsyncUpdater/MessageManagerLock no longer have anywhere to
-            // dispatch to, so the "must run on message thread" constraint
-            // (which the lambda enforces in the happy path) doesn't apply.
-            // Doing it inline here preserves the documented kShutdown
-            // invariant — editor/window destroyed BEFORE WinMain's post-
-            // loop cleanup — instead of regressing to the leak/deadlock
-            // path the lambda was added to avoid.
-            st.editorWindow.reset();
-            st.editor.reset();
-            st.running.store(false, std::memory_order_release);
-        }
+        // Plugin destruction stays in WinMain post-audioThread.join() (audio
+        // thread can be between its running.load() check and processBlock —
+        // dropping plugin would dereference a freed AudioPluginInstance).
+        teardownGuiOnMessageThread(st, /*postQuit=*/true);
     }
     else if (op == op::kMidiEvent)
     {
@@ -615,30 +607,12 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         });
     if (!st.control.start({}, [&st](const juce::String&)
     {
-        // Mirror the kShutdown teardown: editor + window must be destroyed
-        // on the message thread (they use AsyncUpdater / MessageManagerLock
-        // during destruction). Just flipping `running` and letting WinMain's
-        // post-loop cleanup destroy them hits the same deadlock/leak path
-        // the kShutdown handler documents. Plugin is left for WinMain to
-        // destroy *after* audioThread.join() — same UAF reasoning as
-        // kShutdown.
-        if (!juce::MessageManager::callAsync([&st]()
-        {
-            st.editorWindow.reset();
-            st.editor.reset();
-            st.running.store(false, std::memory_order_release);
-            PostQuitMessage(0);
-        }))
-        {
-            // Queue already torn down — destroy editor/window inline (same
-            // reasoning as the kShutdown fallback: with the MessageManager
-            // dead the "must run on message thread" constraint no longer
-            // applies). Avoids regressing to the leak/deadlock path the
-            // callAsync was added to avoid.
-            st.editorWindow.reset();
-            st.editor.reset();
-            st.running.store(false, std::memory_order_release);
-        }
+        // Pipe dropped → mirror the kShutdown GUI teardown. postQuit=true
+        // because the WinMain dispatch loop is still pumping and needs to
+        // wake from its WaitMessage; running=false alone wouldn't break the
+        // 20ms runDispatchLoopUntil tick if the loop happens to be inside
+        // it when the disconnect fires.
+        teardownGuiOnMessageThread(st, /*postQuit=*/true);
     }))
     {
         hostLogf("control channel start failed");
