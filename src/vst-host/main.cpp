@@ -477,7 +477,20 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         });
     if (!st.control.start({}, [&st](const juce::String&)
     {
-        st.running.store(false, std::memory_order_release);
+        // Mirror the kShutdown teardown: editor + window must be destroyed
+        // on the message thread (they use AsyncUpdater / MessageManagerLock
+        // during destruction). Just flipping `running` and letting WinMain's
+        // post-loop cleanup destroy them hits the same deadlock/leak path
+        // the kShutdown handler documents. Plugin is left for WinMain to
+        // destroy *after* audioThread.join() — same UAF reasoning as
+        // kShutdown.
+        juce::MessageManager::callAsync([&st]()
+        {
+            st.editorWindow.reset();
+            st.editor.reset();
+            st.running.store(false, std::memory_order_release);
+            PostQuitMessage(0);
+        });
     }))
     {
         hostLogf("control channel start failed");

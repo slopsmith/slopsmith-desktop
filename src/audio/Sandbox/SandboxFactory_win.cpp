@@ -7,6 +7,8 @@
 #include "../VSTTrace.h"
 
 #include <juce_core/juce_core.h>
+#include <cmath>      // std::isfinite, std::lround
+#include <limits>     // std::numeric_limits
 #include <windows.h> // GetModuleHandleExW / GetModuleFileNameW
 
 namespace slopsmith::sandbox {
@@ -134,11 +136,21 @@ std::unique_ptr<juce::AudioProcessor> tryLoadSandboxed(
         return nullptr;
     }
 
+    // Validate sampleRate before narrowing to uint32_t — `(uint32_t)NaN` is UB
+    // and silently accepting 0 / negative / overflow makes a bad caller surface
+    // as a late sandbox-spawn failure instead of a clear errorOut here.
+    if (! std::isfinite(sampleRate) || sampleRate <= 0.0
+        || sampleRate > (double)std::numeric_limits<uint32_t>::max())
+    {
+        errorOut = "invalid sampleRate: " + juce::String(sampleRate);
+        return nullptr;
+    }
+
     SandboxedProcessor::SpawnConfig cfg;
     cfg.pluginPath = desc.fileOrIdentifier;
     cfg.pluginName = desc.name.isNotEmpty() ? desc.name : "plugin";
     cfg.sandboxExePath = exe.getFullPathName();
-    cfg.audio.sampleRate = (uint32_t)sampleRate;
+    cfg.audio.sampleRate = (uint32_t)std::lround(sampleRate);
     // Clamp to the protocol cap: vst-host's kPrepare rejects blockSize
     // > kAudioMaxBlockSamples, so spawning a larger shm layout would later
     // fail the prepare round-trip rather than silently misbehave.
