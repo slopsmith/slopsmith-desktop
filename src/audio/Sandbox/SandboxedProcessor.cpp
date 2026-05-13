@@ -255,6 +255,15 @@ bool SandboxedProcessor::initialise(juce::String& errorOut)
         // shortens the time we hold the pipe + the watchdog grace period
         // (otherwise it'd sit blocked until the destructor's teardown picks
         // it up at unique_ptr drop).
+        //
+        // Lifetime invariant for the disconnect callback fired in this
+        // window: control->start() succeeded before subprocess->start(), so
+        // the disconnectCb (captures `this`, calls teardown) is reachable
+        // for the brief gap between the two starts. teardown() calls
+        // subprocess->shutdown() on a SubprocessHandle whose start() never
+        // ran — safe because `running` defaults false and shutdown() bails
+        // immediately, leaving the (empty) PROCESS_INFORMATION handles
+        // as nullptr for CloseHandle to no-op.
         control->stop();
         return false;
     }

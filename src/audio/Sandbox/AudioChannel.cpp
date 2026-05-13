@@ -211,6 +211,24 @@ bool AudioChannel::openSandboxSide(const Names& names, juce::String& errorOut)
         close();
         return false;
     }
+    // Now that we know what the header *claims* the object should be, verify
+    // the actual mapped region is at least that big. The earlier VirtualQuery
+    // covered just sizeof(AudioShmHeader); a stale/foreign mapping that
+    // reused the same name with a smaller backing object would pass magic +
+    // protocolVersion + dim-cap checks and still let the first pushBlock /
+    // popBlock memcpy outside the mapping.
+    {
+        MEMORY_BASIC_INFORMATION mbi2{};
+        if (VirtualQuery(impl->view, &mbi2, sizeof(mbi2)) == 0
+            || mbi2.RegionSize < expectedTotal)
+        {
+            errorOut = "audio shm mapping too small for ring layout: region="
+                     + juce::String((int64_t)mbi2.RegionSize) + " expected>="
+                     + juce::String((int64_t)expectedTotal);
+            close();
+            return false;
+        }
+    }
 
     auto* base = reinterpret_cast<char*>(impl->view);
     impl->inputRing  = reinterpret_cast<float*>(base + impl->header->inputRingOffset);

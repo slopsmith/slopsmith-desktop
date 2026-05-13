@@ -64,7 +64,7 @@ bool SubprocessHandle::start(const juce::String& exePath,
     VST_TRACE("SubprocessHandle.start: spawned pid=%lu",
               (unsigned long)impl->pi.dwProcessId);
     running.store(true, std::memory_order_release);
-    cachedPid = (int)impl->pi.dwProcessId;
+    cachedPid = (uint32_t)impl->pi.dwProcessId;
     onExitCb = std::move(onExit);
 
     HANDLE procHandle = impl->pi.hProcess;

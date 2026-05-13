@@ -73,6 +73,16 @@ bool parseArgs(int argc, wchar_t** argv, Args& out, juce::String& whyFailed)
         }
         juce::String key(argv[i]);
         juce::String val(argv[i + 1]);
+        // Catch the missing-value-followed-by-another-flag case
+        // (e.g. `--plugin-path --control-pipe foo`) so the diagnostic
+        // points at the actual mistake rather than misparsing the next
+        // flag as the value and erroring out later on an unknown key.
+        if (val.startsWith("--"))
+        {
+            whyFailed = "missing value for " + key + " (next token '"
+                      + val + "' looks like a flag)";
+            return false;
+        }
         if      (key == "--plugin-path")     out.pluginPath = val;
         else if (key == "--control-pipe")    out.controlPipe = val;
         else if (key == "--audio-shm")       out.audio.shm = val;
@@ -407,8 +417,11 @@ static FILE* g_hostLog = nullptr;
 static std::mutex g_hostLogMutex;
 static void hostLogf(const char* fmt, ...)
 {
-    if (!g_hostLog) return;
+    // Null-check INSIDE the lock — HostLogCloser (or any future close path)
+    // assigns g_hostLog = nullptr under the same mutex, so a lock-free fast
+    // path would race the close-then-null with the read-then-use here.
     std::lock_guard<std::mutex> lock(g_hostLogMutex);
+    if (!g_hostLog) return;
     va_list ap; va_start(ap, fmt);
     std::vfprintf(g_hostLog, fmt, ap);
     va_end(ap);
@@ -468,6 +481,10 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
     // the lifetime explicit means future early-returns get it for free.
     struct HostLogCloser {
         ~HostLogCloser() {
+            // Same mutex hostLogf takes so a future concurrent caller can't
+            // observe a half-torn-down g_hostLog (NULL-with-FILE-still-open
+            // or post-fclose dangling pointer).
+            std::lock_guard<std::mutex> lock(g_hostLogMutex);
             if (g_hostLog) { std::fclose(g_hostLog); g_hostLog = nullptr; }
         }
     } hostLogCloser;
@@ -599,6 +616,8 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
     st.editorWindow.reset();
     st.editor.reset();
     st.plugin.reset();
-    if (g_hostLog) { std::fclose(g_hostLog); g_hostLog = nullptr; }
+    // g_hostLog is closed by HostLogCloser as this function returns
+    // (RAII near the top of WinMain). The explicit close that used to
+    // live here was redundant after introducing the RAII guard.
     return 0;
 }
