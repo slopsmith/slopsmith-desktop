@@ -64,7 +64,9 @@ bool parseArgs(int argc, wchar_t** argv, Args& out)
         else if (key == "--channels")        out.channels = val.getIntValue();
     }
     return out.pluginPath.isNotEmpty() && out.controlPipe.isNotEmpty()
-        && out.audio.shm.isNotEmpty();
+        && out.audio.shm.isNotEmpty()
+        && out.audio.evtToHost.isNotEmpty()
+        && out.audio.evtToSandbox.isNotEmpty();
 }
 
 class EditorWindow : public juce::DocumentWindow
@@ -135,6 +137,14 @@ void runAudioThread(HostState& st)
 void dispatchRequest(HostState& st, int requestId, const juce::String& op,
                      const juce::var& args)
 {
+    // Host uses requestId == -1 for fire-and-forget posts (postNoReply); the
+    // sandbox would otherwise enqueue an unmatched reply frame each time.
+    auto reply = [&st, requestId](bool ok, const juce::var& v,
+                                  const juce::String& err = {}) {
+        if (requestId >= 0)
+            st.control.sendReply(requestId, ok, v, err);
+    };
+
     if (op == op::kPrepare)
     {
         double sr = (double)args.getProperty("sampleRate", 48000);
@@ -150,22 +160,22 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
         res->setProperty("ok", true);
         res->setProperty("latencySamples",
             st.plugin ? st.plugin->getLatencySamples() : 0);
-        st.control.sendReply(requestId, true, juce::var(res.get()));
+        reply(true, juce::var(res.get()));
     }
     else if (op == op::kOpenEditor)
     {
         if (!st.plugin || !st.plugin->hasEditor())
         {
-            st.control.sendReply(requestId, false, {}, "no editor");
+            reply(false, {}, "no editor");
             return;
         }
         // Must run on the message thread.
-        juce::MessageManager::callAsync([&st, requestId]
+        juce::MessageManager::callAsync([&st, reply]
         {
             st.editor.reset(st.plugin->createEditor());
             if (!st.editor)
             {
-                st.control.sendReply(requestId, false, {}, "createEditor null");
+                reply(false, {}, "createEditor null");
                 return;
             }
             if (st.editor->getWidth() < 16 || st.editor->getHeight() < 16)
@@ -178,16 +188,16 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
             res->setProperty("hwnd", "0x" + juce::String::toHexString((juce::int64)(uintptr_t)hwnd));
             res->setProperty("w", st.editor->getWidth());
             res->setProperty("h", st.editor->getHeight());
-            st.control.sendReply(requestId, true, juce::var(res.get()));
+            reply(true, juce::var(res.get()));
         });
     }
     else if (op == op::kCloseEditor)
     {
-        juce::MessageManager::callAsync([&st, requestId]
+        juce::MessageManager::callAsync([&st, reply]
         {
             st.editorWindow.reset();
             st.editor.reset();
-            st.control.sendReply(requestId, true, {});
+            reply(true, {});
         });
     }
     else if (op == op::kGetState)
@@ -197,7 +207,7 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
         juce::DynamicObject::Ptr res(new juce::DynamicObject());
         res->setProperty("stateBase64",
             juce::Base64::toBase64(mb.getData(), mb.getSize()));
-        st.control.sendReply(requestId, true, juce::var(res.get()));
+        reply(true, juce::var(res.get()));
     }
     else if (op == op::kSetState)
     {
@@ -206,7 +216,7 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
         juce::Base64::convertFromBase64(mo, b64);
         if (st.plugin)
             st.plugin->setStateInformation(mo.getData(), (int)mo.getDataSize());
-        st.control.sendReply(requestId, true, {});
+        reply(true, {});
     }
     else if (op == op::kSetParameter)
     {
@@ -214,11 +224,11 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
         float val = (float)(double)args.getProperty("value", 0.0);
         if (st.plugin && idx >= 0 && idx < st.plugin->getParameters().size())
             st.plugin->getParameters()[idx]->setValue(val);
-        st.control.sendReply(requestId, true, {});
+        reply(true, {});
     }
     else if (op == op::kShutdown)
     {
-        st.control.sendReply(requestId, true, {});
+        reply(true, {});
         st.running.store(false, std::memory_order_release);
         juce::MessageManager::callAsync([] { juce::JUCEApplicationBase::quit(); });
     }
@@ -228,7 +238,7 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
     }
     else
     {
-        st.control.sendReply(requestId, false, {}, "unknown op: " + op);
+        reply(false, {}, "unknown op: " + op);
     }
 }
 
@@ -237,7 +247,8 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
 // Debug-log path: %TEMP%\slopsmith-vst-host-<pid>.log. Plain text, line-buffered
 // so a fast-fail still leaves a useful tail. This is essential because the
 // subprocess runs hidden (no console) so fprintf(stderr) goes nowhere; without
-// the file we can't see why it died.
+// the file we can't see why it died. The per-PID suffix keeps concurrent
+// sandboxes from interleaving their log writes.
 static FILE* g_hostLog = nullptr;
 static void hostLogf(const char* fmt, ...)
 {
@@ -254,14 +265,16 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
     {
         char path[1024]{};
         DWORD n = GetEnvironmentVariableA("TEMP", path, sizeof(path));
-        if (n > 0 && n < sizeof(path))
-            std::strncat(path, "\\slopsmith-vst-host.log", sizeof(path) - n - 1);
+        const unsigned long pid = (unsigned long)GetCurrentProcessId();
+        char suffix[64];
+        std::snprintf(suffix, sizeof(suffix), "\\slopsmith-vst-host-%lu.log", pid);
+        if (n > 0 && n < sizeof(path) - sizeof(suffix))
+            std::strncat(path, suffix, sizeof(path) - n - 1);
         else
-            std::strncpy(path, "C:\\slopsmith-vst-host.log", sizeof(path) - 1);
+            std::snprintf(path, sizeof(path), "C:\\slopsmith-vst-host-%lu.log", pid);
         g_hostLog = std::fopen(path, "a");
         if (g_hostLog)
-            hostLogf("\n==== slopsmith-vst-host pid=%lu starting ====",
-                     (unsigned long)GetCurrentProcessId());
+            hostLogf("\n==== slopsmith-vst-host pid=%lu starting ====", pid);
     }
 
     int argc = 0;
