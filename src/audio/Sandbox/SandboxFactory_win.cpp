@@ -4,6 +4,7 @@
 // constructs a SandboxedProcessor (which spawns slopsmith-vst-host.exe).
 
 #include "SandboxedProcessor.h"
+#include "../VSTTrace.h"
 
 #include <juce_core/juce_core.h>
 
