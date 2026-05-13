@@ -35,7 +35,8 @@
     },
     "files": [
       "dist/**/*",
-      "build/Release/*.node"
+      "build/Release/*.node",
+      "build/Release/slopsmith-vst-host.exe"
     ],
     "extraResources": [
       {
@@ -60,7 +61,8 @@
       }
     ],
     "asarUnpack": [
-      "build/Release/*.node"
+      "build/Release/*.node",
+      "build/Release/slopsmith-vst-host.exe"
     ],
     "linux": {
       "target": [
