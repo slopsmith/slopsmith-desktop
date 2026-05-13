@@ -137,59 +137,72 @@ void ControlChannel::stop()
     pending.clear();
 }
 
-// Helper for synchronous overlapped I/O — issues the operation, waits for it
-// up to `timeoutMs`, and on timeout cancels the pending I/O so the caller
-// reliably returns. INFINITE is the default for reads, which must wait for
-// the peer; writes pass a finite timeout so a stalled reader can't pin the
-// caller indefinitely.
-static bool overlappedTransfer(HANDLE pipe, bool isWrite, void* buf,
-                               DWORD bytesPerOp, DWORD timeoutMs = INFINITE)
+// One-shot overlapped issue/wait/result, returning the actual bytes
+// transferred (or 0 on failure with GetLastError set). Used by
+// overlappedTransfer below in a loop, because byte-mode pipes can satisfy
+// a single ReadFile/WriteFile with fewer bytes than requested.
+static DWORD overlappedChunk(HANDLE pipe, bool isWrite, void* buf,
+                             DWORD bytes, DWORD timeoutMs)
 {
     OVERLAPPED ov{};
     ov.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     if (ov.hEvent == nullptr)
-    {
-        // Out of handle quota / kernel resources. GetLastError() is preserved
-        // for the caller — no synthetic code to mask the real reason.
-        return false;
-    }
-    BOOL ok = isWrite
-        ? WriteFile(pipe, buf, bytesPerOp, nullptr, &ov)
-        : ReadFile (pipe, buf, bytesPerOp, nullptr, &ov);
-    DWORD lastErr = ok ? 0 : GetLastError();
-    if (!ok && lastErr != ERROR_IO_PENDING)
+        return 0;
+    const BOOL started = isWrite
+        ? WriteFile(pipe, buf, bytes, nullptr, &ov)
+        : ReadFile (pipe, buf, bytes, nullptr, &ov);
+    const DWORD startErr = started ? 0 : GetLastError();
+    if (!started && startErr != ERROR_IO_PENDING)
     {
         CloseHandle(ov.hEvent);
-        SetLastError(lastErr);
-        return false;
+        SetLastError(startErr);
+        return 0;
     }
     if (timeoutMs != INFINITE)
     {
-        // WaitForSingleObject + bounded timeout, then either complete or
-        // cancel. CancelIoEx + a final GetOverlappedResult(TRUE) is the
-        // documented pattern that lets us safely CloseHandle the event
-        // without leaving the kernel mid-operation.
-        const DWORD wait = WaitForSingleObject(ov.hEvent, timeoutMs);
-        if (wait != WAIT_OBJECT_0)
+        if (WaitForSingleObject(ov.hEvent, timeoutMs) != WAIT_OBJECT_0)
         {
             CancelIoEx(pipe, &ov);
             DWORD drained = 0;
             GetOverlappedResult(pipe, &ov, &drained, TRUE);
             CloseHandle(ov.hEvent);
             SetLastError(WAIT_TIMEOUT);
-            return false;
+            return 0;
         }
     }
     DWORD transferred = 0;
     if (!GetOverlappedResult(pipe, &ov, &transferred, TRUE))
     {
-        DWORD err = GetLastError();
+        const DWORD err = GetLastError();
         CloseHandle(ov.hEvent);
         SetLastError(err);
-        return false;
+        return 0;
     }
     CloseHandle(ov.hEvent);
-    return transferred == bytesPerOp;
+    return transferred;
+}
+
+// Loop over overlappedChunk until `bytesPerOp` have been transferred. Needed
+// because the pipe is in byte mode (PIPE_TYPE_BYTE), so a single ReadFile or
+// WriteFile can return fewer bytes than requested even when the rest is
+// still on the wire. INFINITE is the default for reads (the I/O thread is
+// the server-side wait); writes pass a finite timeout so a stalled reader
+// can't pin the caller indefinitely.
+static bool overlappedTransfer(HANDLE pipe, bool isWrite, void* buf,
+                               DWORD bytesPerOp, DWORD timeoutMs = INFINITE)
+{
+    auto* p = static_cast<char*>(buf);
+    DWORD remaining = bytesPerOp;
+    while (remaining > 0)
+    {
+        const DWORD got = overlappedChunk(pipe, isWrite, p, remaining,
+                                          timeoutMs);
+        if (got == 0)
+            return false; // GetLastError() preserved from overlappedChunk
+        p         += got;
+        remaining -= got;
+    }
+    return true;
 }
 
 bool ControlChannel::writeFrame(const juce::MemoryBlock& body)
