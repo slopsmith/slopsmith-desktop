@@ -318,8 +318,14 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         DWORD n = GetEnvironmentVariableA("TEMP", path, sizeof(path));
         const unsigned long pid = (unsigned long)GetCurrentProcessId();
         char suffix[64];
-        std::snprintf(suffix, sizeof(suffix), "\\slopsmith-vst-host-%lu.log", pid);
-        if (n > 0 && n < sizeof(path) - sizeof(suffix))
+        const int suffixLen = std::snprintf(
+            suffix, sizeof(suffix), "\\slopsmith-vst-host-%lu.log", pid);
+        // strlen of the formatted suffix, NOT sizeof(suffix) — the array is
+        // 64 bytes but the actual content is typically ~30 bytes, and using
+        // sizeof would over-reserve room and falsely fall back for moderately
+        // long TEMP paths.
+        if (n > 0 && suffixLen > 0
+                  && (size_t)n + (size_t)suffixLen < sizeof(path))
             std::strncat(path, suffix, sizeof(path) - n - 1);
         else
             std::snprintf(path, sizeof(path), "C:\\slopsmith-vst-host-%lu.log", pid);
@@ -426,11 +432,16 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         mm->runDispatchLoopUntil(20);
 
     st.audioThread.join();
+    // Stop the control channel BEFORE destroying plugin/editor state.
+    // Otherwise the ControlChannel I/O thread can dispatch a late
+    // request (or the disconnect callback) into a half-torn-down state.
+    // sendEvent(kGoodbye) is best-effort just before stop so a peer
+    // sees a clean exit; if it fails (broken pipe) we don't care.
+    st.control.sendEvent(event::kGoodbye, {});
+    st.control.stop();
     st.editorWindow.reset();
     st.editor.reset();
     st.plugin.reset();
-    st.control.sendEvent(event::kGoodbye, {});
-    st.control.stop();
     if (g_hostLog) { std::fclose(g_hostLog); g_hostLog = nullptr; }
     return 0;
 }
