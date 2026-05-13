@@ -443,11 +443,14 @@ juce::AudioProcessorEditor* SandboxedProcessor::createEditor()
    #endif
     int w = (int)result.getProperty("w", 800);
     int h = (int)result.getProperty("h", 600);
-    // Allocate the editor BEFORE flipping editorOpen — if `new` throws
-    // (OOM, etc.) the sandbox side has already opened its editor but
-    // ~SandboxedEditor would never run to send kCloseEditor, leaving the
-    // host's editorOpen flag and the sandbox state divergent. On throw,
-    // best-effort kCloseEditor mirrors the null-HWND branch above.
+    // Publish editorOpen BEFORE constructing the editor so that
+    // ~SandboxedEditor (which calls notifyEditorClosing → editorOpen
+    // .exchange(false) and posts kCloseEditor on the true→false edge)
+    // works correctly even if JUCE destroys the editor before this
+    // function returns. On throw, roll back AND post the best-effort
+    // kCloseEditor (mirroring the null-HWND branch above) so host and
+    // sandbox state stay aligned.
+    editorOpen.store(true, std::memory_order_release);
     SandboxedEditor* ed = nullptr;
     try
     {
@@ -455,11 +458,11 @@ juce::AudioProcessorEditor* SandboxedProcessor::createEditor()
     }
     catch (...)
     {
+        editorOpen.store(false, std::memory_order_release);
         if (control)
             control->postNoReply(op::kCloseEditor, {});
         throw;
     }
-    editorOpen.store(true, std::memory_order_release);
     return ed;
 }
 

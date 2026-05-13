@@ -31,13 +31,15 @@ public:
     void shutdown(int timeoutMs);
 
     bool isRunning() const noexcept { return running.load(std::memory_order_acquire); }
-    int  pid() const noexcept { return cachedPid; }
+    // Windows DWORD is unsigned 32-bit; storing as int would silently
+    // narrow a high PID into a negative value when surfaced via pid().
+    uint32_t pid() const noexcept { return cachedPid; }
 
 private:
     struct Impl;
     std::unique_ptr<Impl> impl;
     std::atomic<bool> running{false};
-    int cachedPid = 0;
+    uint32_t cachedPid = 0;
     std::function<void(int)> onExitCb;
     std::thread watcher;
 

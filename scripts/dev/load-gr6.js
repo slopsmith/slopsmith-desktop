@@ -47,8 +47,18 @@ try {
 setTimeout(() => {
     // Allow override for CI / dev machines whose VST3 layout differs from
     // the standard "C:\Program Files\Common Files\VST3" install location.
-    const gr6 = process.env.GR6_PATH
-             || 'C:\\Program Files\\Common Files\\VST3\\Guitar Rig 6.vst3';
+    // The default Native Instruments install ships "Guitar Rig 6.vst3";
+    // some installer versions or FX-only variants land as
+    // "Guitar Rig 6 FX.vst3". Try both before giving up.
+    const fs = require('fs');
+    const candidates = process.env.GR6_PATH
+        ? [process.env.GR6_PATH]
+        : [
+            'C:\\Program Files\\Common Files\\VST3\\Guitar Rig 6.vst3',
+            'C:\\Program Files\\Common Files\\VST3\\Guitar Rig 6 FX.vst3',
+          ];
+    const gr6 = candidates.find(p => { try { return fs.existsSync(p); } catch (_) { return false; } })
+              || candidates[0];
     console.log('[test] calling addon.loadVST(' + gr6 + ')');
     let slot;
     try {

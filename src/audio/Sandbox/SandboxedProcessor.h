@@ -123,6 +123,15 @@ private:
 
     SpawnConfig spawnConfig;
     juce::String spawnName;
+    // Publication discipline for the cached-from-`ready`-event fields below:
+    // the control I/O thread writes them, then publishes via
+    // alive.store(release). Readers MUST go through isAlive() (which does
+    // load(acquire)) before touching any of these — non-atomic members are
+    // torn-readable otherwise. Every getter here gates this way; if you add
+    // a new accessor or want to read these for logging, gate on isAlive()
+    // or load alive directly with memory_order_acquire first. (Don't
+    // shortcut with a getDescriptionUnchecked() — it would expose a torn
+    // PluginDescription on a future caller's first read.)
     juce::PluginDescription descriptionCached;
     bool hasEditorCached = false;
     bool acceptsMidiCached = false;

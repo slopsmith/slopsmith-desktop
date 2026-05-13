@@ -136,6 +136,11 @@ struct HostState
     ControlChannel control;
     AudioChannel audio;
     std::atomic<bool> running{true};
+    // Set true while a kOpenEditor/kCloseEditor callAsync is in flight. The
+    // I/O thread dispatches the next request immediately after replying, so
+    // without this guard a host retrying kOpenEditor (timeout, double-click,
+    // etc.) could race two async lambdas on st.editor / st.editorWindow.
+    std::atomic<bool> editorRequestInFlight{false};
     std::thread audioThread;
     int sampleRate = 48000;
     int blockSize  = 256;
@@ -229,6 +234,17 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
             reply(false, {}, "no editor");
             return;
         }
+        // Reject overlapping open/close: the callAsync below mutates
+        // st.editor/st.editorWindow, and the I/O thread can dispatch the
+        // next request before that lambda runs. Two async lambdas racing
+        // on the unique_ptr resets would corrupt the editor state.
+        bool expected = false;
+        if (!st.editorRequestInFlight.compare_exchange_strong(
+                expected, true, std::memory_order_acq_rel))
+        {
+            reply(false, {}, "editor open/close already in flight");
+            return;
+        }
         // Must run on the message thread.
         juce::MessageManager::callAsync([&st, reply]
         {
@@ -243,6 +259,7 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
             st.editor.reset(st.plugin->createEditor());
             if (!st.editor)
             {
+                st.editorRequestInFlight.store(false, std::memory_order_release);
                 reply(false, {}, "createEditor null");
                 return;
             }
@@ -260,6 +277,7 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
                 // following up with a redundant kCloseEditor on hwnd==null.
                 st.editorWindow.reset();
                 st.editor.reset();
+                st.editorRequestInFlight.store(false, std::memory_order_release);
                 reply(false, {}, "failed to obtain native window handle");
                 return;
             }
@@ -267,15 +285,24 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
             res->setProperty("hwnd", "0x" + juce::String::toHexString((juce::int64)(uintptr_t)hwnd));
             res->setProperty("w", st.editor->getWidth());
             res->setProperty("h", st.editor->getHeight());
+            st.editorRequestInFlight.store(false, std::memory_order_release);
             reply(true, juce::var(res.get()));
         });
     }
     else if (op == op::kCloseEditor)
     {
+        bool expected = false;
+        if (!st.editorRequestInFlight.compare_exchange_strong(
+                expected, true, std::memory_order_acq_rel))
+        {
+            reply(false, {}, "editor open/close already in flight");
+            return;
+        }
         juce::MessageManager::callAsync([&st, reply]
         {
             st.editorWindow.reset();
             st.editor.reset();
+            st.editorRequestInFlight.store(false, std::memory_order_release);
             reply(true, {});
         });
     }
@@ -436,6 +463,14 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         if (g_hostLog)
             hostLogf("\n==== slopsmith-vst-host pid=%lu starting ====", pid);
     }
+    // RAII close for g_hostLog: every early `return N` below would otherwise
+    // leak the FILE* until process exit. The OS reaps it anyway, but making
+    // the lifetime explicit means future early-returns get it for free.
+    struct HostLogCloser {
+        ~HostLogCloser() {
+            if (g_hostLog) { std::fclose(g_hostLog); g_hostLog = nullptr; }
+        }
+    } hostLogCloser;
 
     int argc = 0;
     wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
