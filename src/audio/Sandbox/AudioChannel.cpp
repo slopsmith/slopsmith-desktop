@@ -214,16 +214,28 @@ bool AudioChannel::popBlock(bool isOutputRing, juce::AudioBuffer<float>& dst,
 {
     if (!impl->header) return false;
     HANDLE evt = isOutputRing ? impl->evtToHost : impl->evtToSandbox;
-    if (WaitForSingleObject(evt, timeoutMs) != WAIT_OBJECT_0)
-    {
-        atomicAt(impl->header->dropouts).fetch_add(1, std::memory_order_relaxed);
-        return false;
-    }
     auto writeIdx = atomicAt(impl->header->writeIdx);
     auto readIdx  = atomicAt(impl->header->readIdx);
+
+    // Check indices BEFORE waiting. SetEvent on an auto-reset event is not
+    // counting: if the producer signals twice in a row (queue 2 blocks),
+    // both signals collapse to one wake. Without this fast path, the
+    // consumer would block on the second pop even though w > r already.
     uint64_t r = readIdx.load(std::memory_order_relaxed);
     uint64_t w = writeIdx.load(std::memory_order_acquire);
-    if (w == r) return false; // spurious wakeup
+    if (w == r)
+    {
+        if (WaitForSingleObject(evt, timeoutMs) != WAIT_OBJECT_0)
+        {
+            atomicAt(impl->header->dropouts).fetch_add(1, std::memory_order_relaxed);
+            return false;
+        }
+        // Re-read; the wake might have been from teardown or another
+        // spurious source.
+        r = readIdx.load(std::memory_order_relaxed);
+        w = writeIdx.load(std::memory_order_acquire);
+        if (w == r) return false;
+    }
 
     auto slot = r % impl->header->maxBlocks;
     auto bytesPerSlot = impl->header->ringBytesPerSlot;
