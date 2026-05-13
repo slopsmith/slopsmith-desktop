@@ -86,23 +86,10 @@ bool ControlChannel::start(EventCallback evCb,
     onEvent = std::move(evCb);
     onDisconnect = std::move(disconnectCb);
     alive.store(true, std::memory_order_release);
-
-    // On the server side, block waiting for the client to connect *before*
-    // starting the read loop. ConnectNamedPipe returns immediately if the
-    // client is already connected (ERROR_PIPE_CONNECTED), so both cases work.
-    if (impl->isServer)
-    {
-        if (!ConnectNamedPipe(impl->pipe, nullptr))
-        {
-            DWORD err = GetLastError();
-            if (err != ERROR_PIPE_CONNECTED)
-            {
-                alive.store(false, std::memory_order_release);
-                return false;
-            }
-        }
-    }
-
+    // ConnectNamedPipe is performed inside the I/O thread so the caller never
+    // blocks. If the sandbox subprocess dies before connecting, the caller's
+    // watchdog can call stop(), which CancelIoEx's the pending connect and
+    // unwinds cleanly.
     ioThread = std::thread([this] { ioLoop(); });
     return true;
 }
@@ -174,6 +161,19 @@ bool ControlChannel::readFrame(juce::MemoryBlock& out)
 
 void ControlChannel::ioLoop()
 {
+    // Server side: wait for the sandbox to connect. ConnectNamedPipe is
+    // synchronous (no overlapped) — it returns when either the client connects
+    // or the pipe handle is closed via stop().
+    if (impl->isServer && impl->pipe != INVALID_HANDLE_VALUE)
+    {
+        if (!ConnectNamedPipe(impl->pipe, nullptr)
+            && GetLastError() != ERROR_PIPE_CONNECTED)
+        {
+            failWith(kReasonReadError + " (connect)");
+            return;
+        }
+    }
+
     juce::MemoryBlock frame;
     while (alive.load(std::memory_order_acquire))
     {
