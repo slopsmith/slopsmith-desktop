@@ -21,6 +21,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <thread>
 
 // `CommandLineToArgvW` / `LocalFree` from shellapi.h come in via JUCE's
@@ -54,6 +55,13 @@ struct Args
     int channels   = 2;
 };
 
+// Accepts only the space-separated `--key value` form (loop steps i+=2).
+// The `--key=value` form is **not** supported: SandboxedProcessor builds the
+// command line with separate args (see SandboxedProcessor::initialise's
+// args.add() pairs), so adding `--key=value` parsing here would be dead code
+// for our own call path; an external caller passing `--sample-rate=48000`
+// gets a clear "unknown flag '--sample-rate=48000'" rather than silent
+// misparsing.
 bool parseArgs(int argc, wchar_t** argv, Args& out, juce::String& whyFailed)
 {
     for (int i = 1; i < argc; i += 2)
@@ -364,9 +372,16 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
 // the file we can't see why it died. The per-PID suffix keeps concurrent
 // sandboxes from interleaving their log writes.
 static FILE* g_hostLog = nullptr;
+// Guards interleaved writes from any thread. Today's call sites are all on
+// the main thread (WinMain's startup path), but `setRequestHandler` and
+// `runAudioThread` are within reach of future edits, and a corrupted log
+// file is exactly the diagnostic source we depend on when a sandbox dies
+// silently. Mirrors VSTTrace.h's logMutex() pattern.
+static std::mutex g_hostLogMutex;
 static void hostLogf(const char* fmt, ...)
 {
     if (!g_hostLog) return;
+    std::lock_guard<std::mutex> lock(g_hostLogMutex);
     va_list ap; va_start(ap, fmt);
     std::vfprintf(g_hostLog, fmt, ap);
     va_end(ap);

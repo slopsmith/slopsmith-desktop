@@ -24,14 +24,9 @@ namespace {
         {
             setSize(w > 0 ? w : 800, h > 0 ? h : 600);
             setOpaque(true);
-           #if JUCE_WINDOWS
-            if (nativeHwnd)
-            {
-                // Reparent the plugin's window into this Component's peer
-                // when the editor is added to a parent. Done in
-                // parentHierarchyChanged() so we have a valid HWND to use.
-            }
-           #endif
+            // Reparenting the plugin HWND happens in parentHierarchyChanged()
+            // — we need a valid peer parent which doesn't exist until we're
+            // added to a Component hierarchy.
         }
 
         ~SandboxedEditor() override
@@ -448,8 +443,24 @@ juce::AudioProcessorEditor* SandboxedProcessor::createEditor()
    #endif
     int w = (int)result.getProperty("w", 800);
     int h = (int)result.getProperty("h", 600);
+    // Allocate the editor BEFORE flipping editorOpen — if `new` throws
+    // (OOM, etc.) the sandbox side has already opened its editor but
+    // ~SandboxedEditor would never run to send kCloseEditor, leaving the
+    // host's editorOpen flag and the sandbox state divergent. On throw,
+    // best-effort kCloseEditor mirrors the null-HWND branch above.
+    SandboxedEditor* ed = nullptr;
+    try
+    {
+        ed = new SandboxedEditor(*this, hwnd, w, h);
+    }
+    catch (...)
+    {
+        if (control)
+            control->postNoReply(op::kCloseEditor, {});
+        throw;
+    }
     editorOpen.store(true, std::memory_order_release);
-    return new SandboxedEditor(*this, hwnd, w, h);
+    return ed;
 }
 
 void SandboxedProcessor::getStateInformation(juce::MemoryBlock& destData)
