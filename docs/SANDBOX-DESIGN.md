@@ -47,7 +47,8 @@ slopsmith-vst-host.exe
 
 Spawned via `CreateProcess`. The main process creates the pipe + shm + events first,
 then spawns; the sandbox connects on startup. Watchdog: if no `ready` event arrives
-within 5 s, kill and report failure.
+within `kReadyTimeoutMs` (30 s — long enough for Qt-using plugins like GR6 to
+spin up their QML engine on a cold cache), kill and report failure.
 
 `<uuid>` is a v4 UUID generated per spawn so multiple sandboxes coexist cleanly.
 

@@ -98,10 +98,10 @@ struct AudioShmHeader
     uint32_t maxChannels = 0;
     uint32_t sampleRate = 0;
 
-    // Atomics live in trailing padding. Using uint64_t here for layout; the
-    // .cpp side reinterpret_cast<std::atomic<uint64_t>*>'s them — safe because
-    // std::atomic<uint64_t> has the same size and alignment as uint64_t on
-    // all supported targets.
+    // Plain uint64_t for shm layout portability across the host/sandbox
+    // boundary. The .cpp side accesses each via std::atomic_ref<uint64_t>
+    // at the point of use (C++20). Don't reintroduce reinterpret_cast to
+    // std::atomic<uint64_t>* — that's not layout-guaranteed.
     alignas(8) uint64_t writeIdx = 0;   // host increments
     alignas(8) uint64_t readIdx  = 0;   // sandbox increments
     alignas(8) uint64_t xruns    = 0;   // host could not fit a block

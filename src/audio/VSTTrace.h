@@ -6,7 +6,10 @@
 // with immediate flush so a process abort (e.g. `__fastfail` from a
 // crashy plugin) doesn't lose the last few lines.
 //
-// Throwaway diagnostic — do not ship in a release build.
+// Compiled into all builds, but no-op at runtime unless
+// SLOPSMITH_SANDBOX_DEBUG=1 is set when the addon loads. The first
+// `writef()` call caches the env var, so flipping it mid-process has
+// no effect.
 
 #pragma once
 
