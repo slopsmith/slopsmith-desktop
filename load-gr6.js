@@ -32,6 +32,8 @@ setTimeout(() => {
             console.log('[test] openPluginEditor returned:', ok);
         } catch (e) {
             console.log('[test] EXCEPTION on openPluginEditor:', e.message);
+            try { addon.shutdown(); } catch (_) {}
+            process.exit(1);
         }
         console.log('[test] sleeping 5s for editor creation + potential crash...');
         setTimeout(() => {

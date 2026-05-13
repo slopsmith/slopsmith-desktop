@@ -316,6 +316,10 @@ juce::AudioProcessorEditor* SandboxedProcessor::createEditor()
     void* hwnd = nullptr;
    #if JUCE_WINDOWS
     hwnd = reinterpret_cast<void*>(hwndStr.getHexValue64());
+    // A blank or unparseable HWND means the sandbox claimed openEditor but
+    // didn't actually create a window. Don't hand back an editor that has
+    // nothing to reparent — the host would render a blank placeholder.
+    if (hwnd == nullptr) return nullptr;
    #else
     juce::ignoreUnused(hwndStr);
    #endif
