@@ -62,15 +62,30 @@ juce::File resolveSandboxExe()
 bool shouldSandbox(const juce::PluginDescription& desc)
 {
     if (kDefaultNeedsSandboxManufacturers.contains(desc.manufacturerName))
+    {
+        VST_TRACE("shouldSandbox: %s — manufacturer '%s' on denylist",
+                  desc.fileOrIdentifier.toRawUTF8(),
+                  desc.manufacturerName.toRawUTF8());
         return true;
+    }
 
     // Filename match: useful at LoadVST time before we have the manufacturer.
-    juce::String basename = juce::File(desc.fileOrIdentifier)
-                                .getFileNameWithoutExtension();
+    // Anchor to prefix on a .vst3 file rather than a loose substring so a
+    // non-NI plugin whose name happens to contain "Guitar Rig" doesn't get
+    // forced into the sandbox.
+    const auto path = juce::File(desc.fileOrIdentifier);
+    if (!path.getFileName().endsWithIgnoreCase(".vst3"))
+        return false;
+    const auto basename = path.getFileNameWithoutExtension();
     for (auto& needle : kDefaultNeedsSandboxFilenames)
     {
-        if (basename.containsIgnoreCase(needle))
+        if (basename.startsWithIgnoreCase(needle))
+        {
+            VST_TRACE("shouldSandbox: %s — filename starts with '%s'",
+                      desc.fileOrIdentifier.toRawUTF8(),
+                      needle.toRawUTF8());
             return true;
+        }
     }
     return false;
 }

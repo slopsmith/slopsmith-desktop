@@ -132,6 +132,12 @@ juce::var pluginMetadata(juce::AudioPluginInstance& p)
     obj->setProperty("producesMidi", p.producesMidi());
     obj->setProperty("numParams", p.getParameters().size());
     obj->setProperty("latencySamples", p.getLatencySamples());
+    // Total channel counts across all enabled buses. The host caches these
+    // so a future SandboxedProcessor::BusesProperties pass (deferred until
+    // the audio-thread-sync PR) can match the plugin's real topology
+    // instead of hard-coding stereo↔stereo.
+    obj->setProperty("numInputs",  p.getTotalNumInputChannels());
+    obj->setProperty("numOutputs", p.getTotalNumOutputChannels());
     return juce::var(obj.get());
 }
 

@@ -102,6 +102,11 @@ private:
     bool hasEditorCached = false;
     bool acceptsMidiCached = false;
     bool producesMidiCached = false;
+    // Cached from the `ready` event so the deferred BusesProperties refactor
+    // can use them without an extra round-trip. Currently informational only
+    // (the constructor hard-codes stereo I/O — see PR-body follow-up list).
+    int  numInputsCached  = 2;
+    int  numOutputsCached = 2;
 
     std::atomic<bool> alive{false};
     std::atomic<bool> editorOpen{false};

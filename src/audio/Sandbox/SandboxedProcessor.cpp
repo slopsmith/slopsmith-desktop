@@ -91,6 +91,10 @@ SandboxedProcessor::SandboxedProcessor(SpawnConfig cfg)
 
 SandboxedProcessor::~SandboxedProcessor()
 {
+    // Destruction is a deliberate teardown, not a crash. Drop the onCrash
+    // callback before teardown so it doesn't fire — consumers reasonably
+    // assume onCrash means "the sandbox died unexpectedly".
+    onCrash = nullptr;
     teardown("destructor");
 }
 
@@ -159,6 +163,10 @@ bool SandboxedProcessor::initialise(juce::String& errorOut)
                 hasEditorCached    = (bool)data.getProperty("hasEditor", false);
                 acceptsMidiCached  = (bool)data.getProperty("acceptsMidi", false);
                 producesMidiCached = (bool)data.getProperty("producesMidi", false);
+                numInputsCached    = (int)data.getProperty("numInputs",
+                                                            (int)spawnConfig.audio.maxChannels);
+                numOutputsCached   = (int)data.getProperty("numOutputs",
+                                                            (int)spawnConfig.audio.maxChannels);
                 alive.store(true, std::memory_order_release);
                 try { readyState->readyP.set_value(true); } catch (...) {}
             }

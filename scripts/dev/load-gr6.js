@@ -1,3 +1,10 @@
+// Smoke-test harness for the Windows VST sandbox path. Loads the addon,
+// spawns the sandbox subprocess for Guitar Rig 6, opens its editor, then
+// closes and shuts down cleanly. Used by clean-rerun.cmd on the test VM.
+//
+// Run from the repo root: `node scripts/dev/load-gr6.js > load-gr6-sandbox.log`.
+// The Guitar Rig 6 path is hardcoded to its standard Win11 install location;
+// adjust the GR6 path below if your install differs.
 'use strict';
 const path = require('path');
 const addonPath = path.join(process.cwd(), 'build', 'Release', 'slopsmith_audio.node');

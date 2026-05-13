@@ -38,9 +38,11 @@ juce::var makeReply(int requestId, bool ok, const juce::var& result,
 
 juce::MemoryBlock encode(const juce::var& v)
 {
-    auto json = juce::JSON::toString(v, /*allOnOneLine*/ true);
-    auto utf8 = json.toUTF8();
-    return juce::MemoryBlock(utf8.getAddress(), utf8.sizeInBytes() - 1);
+    const auto json = juce::JSON::toString(v, /*allOnOneLine*/ true);
+    // MemoryBlock copies, so the temporary's storage doesn't need to
+    // outlive this expression. getNumBytesAsUTF8() excludes the trailing
+    // NUL, which we don't want on the wire.
+    return juce::MemoryBlock(json.toRawUTF8(), json.getNumBytesAsUTF8());
 }
 
 juce::var decode(const void* data, size_t bytes, juce::String* errorOut)
