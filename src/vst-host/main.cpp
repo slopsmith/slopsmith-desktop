@@ -84,8 +84,13 @@ class EditorWindow : public juce::DocumentWindow
 {
 public:
     EditorWindow(const juce::String& name, juce::AudioProcessorEditor* ed)
-        : DocumentWindow(name, juce::Colours::darkgrey, DocumentWindow::closeButton)
+        : DocumentWindow(name, juce::Colours::darkgrey,
+                         /*buttonsNeeded*/ 0)
     {
+        // No buttons: the window is reparented into the Electron renderer
+        // and the host controls open/close via op::kOpenEditor /
+        // op::kCloseEditor. A user-visible close button with a no-op
+        // handler would just look broken.
         setUsingNativeTitleBar(true);
         setResizable(true, false);
         setContentNonOwned(ed, true);
@@ -95,7 +100,6 @@ public:
         setSize(ed->getWidth(), ed->getHeight());
         setTopLeftPosition(-32000, -32000);
     }
-    void closeButtonPressed() override {}
 };
 
 // Single-plugin host state, owned by the main thread; the worker thread reads

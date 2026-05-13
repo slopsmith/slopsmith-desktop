@@ -38,7 +38,7 @@ matches a denylist (see §5).
 ```text
 slopsmith-vst-host.exe
     --plugin-path "<absolute vst3 path>"
-    --control-pipe "\\.\pipe\slopsmith-vst-<uuid>-ctl"
+    --control-pipe "\\.\pipe\slopsmith-vst-<uuid>"
     --audio-shm    "Local\slopsmith-vst-<uuid>-audio"
     --audio-event-in  "Local\slopsmith-vst-<uuid>-evt-in"
     --audio-event-out "Local\slopsmith-vst-<uuid>-evt-out"

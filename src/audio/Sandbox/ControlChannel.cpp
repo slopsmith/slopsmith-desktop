@@ -334,8 +334,13 @@ void ControlChannel::ioLoop()
         auto msg = wire::decode(frame.getData(), frame.getSize(), &parseError);
         if (!msg.isObject())
         {
-            CTL_TRACE("decode failed: %s; first bytes: %.32s",
-                      parseError.toRawUTF8(), (const char*)frame.getData());
+            // %.*s with an explicit length — the frame buffer is not
+            // NUL-terminated and can be 0 bytes (no body), so %.32s would
+            // read past the end (or dereference null).
+            const int previewLen = juce::jmin<int>(32, (int)frame.getSize());
+            CTL_TRACE("decode failed: %s; first %d bytes: %.*s",
+                      parseError.toRawUTF8(), previewLen,
+                      previewLen, (const char*)frame.getData());
             failWith(kReasonProtocolError + ": " + parseError);
             return;
         }
