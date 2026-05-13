@@ -80,12 +80,17 @@ public:
                       juce::MidiBuffer& midiMessages) override;
 
     double getTailLengthSeconds() const override { return 0.0; }
-    bool   acceptsMidi() const override { return acceptsMidiCached; }
-    bool   producesMidi() const override { return producesMidiCached; }
+    // Cached-field getters: gate on isAlive() with acquire-semantics so a
+    // caller that opportunistically queries before the `ready` handshake
+    // completes can't observe uninitialised state. The event-callback
+    // populates the cache *before* alive.store(release), so the matching
+    // alive.load(acquire) in isAlive() pairs as a synchronizes-with edge.
+    bool   acceptsMidi() const override { return isAlive() && acceptsMidiCached; }
+    bool   producesMidi() const override { return isAlive() && producesMidiCached; }
     bool   isMidiEffect() const override { return false; }
 
     juce::AudioProcessorEditor* createEditor() override;
-    bool hasEditor() const override { return hasEditorCached; }
+    bool hasEditor() const override { return isAlive() && hasEditorCached; }
 
     // Idempotent — callers don't need to track editor state themselves.
     void notifyEditorClosing();
@@ -102,7 +107,12 @@ public:
     // Plugin description we synthesised from the `ready` event. Returned by
     // getPluginDescription() so SignalChain can present it like any other
     // plugin.
-    juce::PluginDescription getDescription() const { return descriptionCached; }
+    juce::PluginDescription getDescription() const
+    {
+        // Empty description before the ready handshake — better than a
+        // torn read of the cached fields.
+        return isAlive() ? descriptionCached : juce::PluginDescription{};
+    }
 
 private:
     SandboxedProcessor(SpawnConfig cfg);

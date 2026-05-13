@@ -129,6 +129,27 @@ bool AudioChannel::openSandboxSide(const Names& names, juce::String& errorOut)
     cachedDims.maxBlockSamples = impl->header->maxBlockSamples;
     cachedDims.maxChannels = impl->header->maxChannels;
     cachedDims.sampleRate = impl->header->sampleRate;
+
+    // Sandbox side maps the view with size=0, which means "whole object".
+    // We don't know the OS-reported view size, but we can reconstruct the
+    // expected total from the validated dims and bounds-check the offsets
+    // against that. Anything beyond would be a stale/incompatible host
+    // header that survived magic+version validation (unlikely but cheap
+    // to catch — and the alternative is an out-of-bounds memcpy on the
+    // first pushBlock/popBlock).
+    const uint64_t expectedTotal = sizeof(AudioShmHeader)
+        + 2 * uint64_t(impl->header->maxBlocks) * impl->header->ringBytesPerSlot;
+    const uint64_t inEnd  = impl->header->inputRingOffset
+        + uint64_t(impl->header->maxBlocks) * impl->header->ringBytesPerSlot;
+    const uint64_t outEnd = impl->header->outputRingOffset
+        + uint64_t(impl->header->maxBlocks) * impl->header->ringBytesPerSlot;
+    if (inEnd > expectedTotal || outEnd > expectedTotal)
+    {
+        errorOut = "audio shm ring offsets out of bounds";
+        close();
+        return false;
+    }
+
     auto* base = reinterpret_cast<char*>(impl->view);
     impl->inputRing  = reinterpret_cast<float*>(base + impl->header->inputRingOffset);
     impl->outputRing = reinterpret_cast<float*>(base + impl->header->outputRingOffset);
@@ -234,7 +255,14 @@ bool AudioChannel::popBlock(bool isOutputRing, juce::AudioBuffer<float>& dst,
         // spurious source.
         r = readIdx.load(std::memory_order_relaxed);
         w = writeIdx.load(std::memory_order_acquire);
-        if (w == r) return false;
+        if (w == r)
+        {
+            // Bump dropouts so the spurious-wake class is visible in the
+            // counters; otherwise it looks like a clean pop in operator
+            // logs but the caller still sees a failed return.
+            atomicAt(impl->header->dropouts).fetch_add(1, std::memory_order_relaxed);
+            return false;
+        }
     }
 
     auto slot = r % impl->header->maxBlocks;

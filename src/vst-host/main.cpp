@@ -346,7 +346,11 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         // 64 bytes but the actual content is typically ~30 bytes, and using
         // sizeof would over-reserve room and falsely fall back for moderately
         // long TEMP paths.
-        if (n > 0 && suffixLen > 0
+        //
+        // n < sizeof(path) → got the actual value, not the truncation
+        // sentinel (GetEnvironmentVariableA returns required-buf-size if
+        // the buffer was too small). Mirrors the USERPROFILE branch below.
+        if (n > 0 && n < sizeof(path) && suffixLen > 0
                   && (size_t)n + (size_t)suffixLen < sizeof(path))
         {
             std::strncat(path, suffix, sizeof(path) - n - 1);

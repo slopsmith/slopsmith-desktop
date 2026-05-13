@@ -78,7 +78,10 @@ public:
     bool sendEvent(const char* eventName, const juce::var& data);
 
     // Sandbox-side: when the channel parses an inbound request, the consumer
-    // installs a request handler.
+    // installs a request handler. MUST be called BEFORE start() — the I/O
+    // thread reads `requestHandler` on every inbound request, and the
+    // member is intentionally not synchronised. Installing after start()
+    // races the read.
     using RequestHandler =
         std::function<void(int requestId, const juce::String& op,
                            const juce::var& args)>;

@@ -7,23 +7,19 @@
 #include "../VSTTrace.h"
 
 #include <juce_core/juce_core.h>
+#include <windows.h> // GetModuleHandleExW / GetModuleFileNameW
 
 namespace slopsmith::sandbox {
 
 namespace {
 
-// Static rules: the manufacturer names below are presumed Qt5-using and
-// therefore go through the sandbox by default. Users can extend this list
-// via %APPDATA%/Slopsmith/sandbox-list.json — that work lands in a follow-up
-// commit.
-const juce::StringArray kDefaultNeedsSandboxManufacturers = {
-    "Native Instruments",
-    "Native Instruments GmbH",
-};
-
-// Filename substrings of NI plugins we know need the sandbox. At LoadVST
-// time we don't have the manufacturer yet (that would require scanning the
-// plugin first), so we match the file name. Case-insensitive.
+// Filename-only matching in v1. The manufacturer-based denylist was
+// removed: at LoadVST time we synthesise a PluginDescription whose
+// manufacturerName is empty (we haven't scanned the plugin yet), so a
+// manufacturer match was unreachable in practice. The manufacturer +
+// vst3 UID route lands with the proper plugin-scan / sandbox-list.json
+// follow-up.
+//
 // v1 is effect-plugins only: the sandbox path doesn't yet deliver MIDI to
 // the plugin (op::kMidiEvent is no-op'd in vst-host and gets sent over the
 // control channel, which the audio-shm MIDI follow-up replaces). Forcing
@@ -38,19 +34,37 @@ const juce::StringArray kDefaultNeedsSandboxFilenames = {
 
 juce::File resolveSandboxExe()
 {
-    // Packaged: resources/bin/slopsmith-vst-host.exe relative to the addon DLL.
-    auto self = juce::File::getSpecialLocation(
-        juce::File::currentExecutableFile);
-    auto candidate = self.getParentDirectory()
-                          .getChildFile("resources/bin/slopsmith-vst-host.exe");
-    if (candidate.existsAsFile()) return candidate;
+    // Locate the directory of the .node DLL via GetModuleHandleEx with this
+    // function's address — juce::File::currentExecutableFile returns the
+    // host's exe (node.exe / electron.exe / slopsmith.exe) when we're loaded
+    // as an addon, which points at the wrong directory entirely.
+    juce::File addonDir;
+    HMODULE selfModule = nullptr;
+    if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+                              | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCWSTR>(&resolveSandboxExe),
+                           &selfModule)
+        && selfModule != nullptr)
+    {
+        wchar_t buf[MAX_PATH + 1] = {};
+        const DWORD n = GetModuleFileNameW(selfModule, buf, MAX_PATH);
+        if (n > 0 && n < MAX_PATH)
+            addonDir = juce::File(juce::String(buf)).getParentDirectory();
+    }
 
-    // Dev: build/Release/slopsmith-vst-host.exe relative to the addon .node.
-    candidate = self.getParentDirectory()
-                     .getChildFile("slopsmith-vst-host.exe");
-    if (candidate.existsAsFile()) return candidate;
+    // Dev: build/Release/slopsmith-vst-host.exe next to the addon .node.
+    if (addonDir.exists())
+    {
+        auto candidate = addonDir.getChildFile("slopsmith-vst-host.exe");
+        if (candidate.existsAsFile()) return candidate;
 
-    // Repo layout while iterating: build\Release\ next to the .node
+        // Electron-packaged: resources/app.asar.unpacked/build/Release/...
+        // currently the build/Release is the addon dir, so a sibling layout
+        // resolves here. The full asar-unpacked lookup is on the packaging
+        // follow-up (see PR-body checklist).
+    }
+
+    // Repo layout while iterating: build\Release\ from CWD.
     auto buildDir = juce::File::getCurrentWorkingDirectory()
                          .getChildFile("build/Release/slopsmith-vst-host.exe");
     if (buildDir.existsAsFile()) return buildDir;
@@ -62,14 +76,6 @@ juce::File resolveSandboxExe()
 
 bool shouldSandbox(const juce::PluginDescription& desc)
 {
-    if (kDefaultNeedsSandboxManufacturers.contains(desc.manufacturerName))
-    {
-        VST_TRACE("shouldSandbox: %s — manufacturer '%s' on denylist",
-                  desc.fileOrIdentifier.toRawUTF8(),
-                  desc.manufacturerName.toRawUTF8());
-        return true;
-    }
-
     // Filename match: useful at LoadVST time before we have the manufacturer.
     // Anchor to prefix on a .vst3 file rather than a loose substring so a
     // non-NI plugin whose name happens to contain "Guitar Rig" doesn't get

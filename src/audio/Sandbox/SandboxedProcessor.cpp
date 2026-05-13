@@ -20,7 +20,7 @@ namespace {
     {
     public:
         SandboxedEditor(SandboxedProcessor& p, void* hwnd, int w, int h)
-            : juce::AudioProcessorEditor(&p), nativeHwnd(hwnd)
+            : juce::AudioProcessorEditor(&p), proc(p), nativeHwnd(hwnd)
         {
             setSize(w > 0 ? w : 800, h > 0 ? h : 600);
             setOpaque(true);
@@ -36,8 +36,15 @@ namespace {
 
         ~SandboxedEditor() override
         {
-            if (auto* proc = dynamic_cast<SandboxedProcessor*>(getAudioProcessor()))
-                proc->notifyEditorClosing();
+            // Cache the processor by reference at construction rather than
+            // re-fetching via getAudioProcessor() at destruction — if the
+            // host ever inverts the lifetime (editor outlives the processor,
+            // legal under JUCE's contract during atypical teardown), the
+            // base-class pointer dangles and dynamic_cast is UB. The
+            // reference points at the same processor that owns *this*
+            // editor, and JUCE guarantees the processor outlives any editor
+            // it created via createEditor().
+            proc.notifyEditorClosing();
         }
 
         void parentHierarchyChanged() override
@@ -77,6 +84,7 @@ namespace {
         }
 
     private:
+        SandboxedProcessor& proc;
         void* nativeHwnd = nullptr;
     };
 } // anonymous
@@ -340,15 +348,29 @@ void SandboxedProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     {
         // Input ring full — sandbox isn't keeping up. Don't wait the full
         // pop timeout (which would extend the dropout); zero output and
-        // exit. xruns was incremented inside pushBlock.
+        // exit. xruns was incremented inside pushBlock. WARNING: with the
+        // v1 shared writeIdx/readIdx pair (see SANDBOX-DESIGN §4 v2 split),
+        // skipping the corresponding pop leaves the two rings phase-shifted
+        // for subsequent blocks. The per-direction-indices refactor in
+        // PR #2 fixes this cleanly; a v1 sandbox hitting back-pressure
+        // here will produce one block of stale output before recovering.
+        VST_TRACE("[sandbox] processBlock: input ring full, dropping (xruns++)");
         buffer.clear();
         return;
     }
-    if (!audio->popBlock(/*isOutputRing=*/true, buffer, n,
-                         /*timeoutMs=*/ (int)juce::jmax(2.0,
-                             1000.0 * n / juce::jmax(1, (int)spawnConfig.audio.sampleRate) * 4.0)))
+    // Pop timeout = 4× the block period, floored at 2 ms so very high
+    // sample rates / small blocks don't end up with sub-millisecond budgets.
+    constexpr int kPopTimeoutBlockMultiplier = 4;
+    const int popTimeoutMs = (int)juce::jmax(2.0,
+        1000.0 * n / juce::jmax(1, (int)spawnConfig.audio.sampleRate)
+            * kPopTimeoutBlockMultiplier);
+    if (!audio->popBlock(/*isOutputRing=*/true, buffer, n, popTimeoutMs))
     {
-        // Missed deadline — sandbox is too slow or hung.
+        // Missed deadline — sandbox is too slow or hung. AudioChannel
+        // already bumped `dropouts`; trace so the missed-deadline path is
+        // diagnosable without a debugger.
+        VST_TRACE("[sandbox] processBlock: pop timeout (%d ms), inserting silence",
+                  popTimeoutMs);
         buffer.clear();
     }
 }
