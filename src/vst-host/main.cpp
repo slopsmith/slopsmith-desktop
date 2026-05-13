@@ -106,7 +106,12 @@ bool parseArgs(int argc, wchar_t** argv, Args& out, juce::String& whyFailed)
     if (out.audio.evtToHost.isEmpty())   { whyFailed = "missing --audio-event-out"; return false; }
     if (out.audio.evtToSandbox.isEmpty()){ whyFailed = "missing --audio-event-in"; return false; }
     if (out.sampleRate <= 0) { whyFailed = "invalid --sample-rate=" + juce::String(out.sampleRate); return false; }
-    if (out.maxBlock   <= 0) { whyFailed = "invalid --max-block="   + juce::String(out.maxBlock);   return false; }
+    if (out.maxBlock <= 0 || out.maxBlock > (int)kAudioMaxBlockSamples)
+    {
+        whyFailed = "invalid --max-block=" + juce::String(out.maxBlock)
+                  + " (cap=" + juce::String((int)kAudioMaxBlockSamples) + ")";
+        return false;
+    }
     if (out.channels   <= 0) { whyFailed = "invalid --channels="    + juce::String(out.channels);   return false; }
     return true;
 }
@@ -256,7 +261,7 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
             return;
         }
         // Must run on the message thread.
-        juce::MessageManager::callAsync([&st, reply]
+        if (!juce::MessageManager::callAsync([&st, reply]
         {
             // Tear down any prior editor BEFORE replacing st.editor. The
             // existing EditorWindow holds st.editor.get() via
@@ -297,7 +302,15 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
             res->setProperty("h", st.editor->getHeight());
             st.editorRequestInFlight.store(false, std::memory_order_release);
             reply(true, juce::var(res.get()));
-        });
+        }))
+        {
+            // callAsync returns false when the message queue is gone (shutdown).
+            // Lambda never runs, so undo the in-flight flag here and surface
+            // the failure to the host — otherwise editorRequestInFlight would
+            // stay true forever and block all subsequent open/close requests.
+            st.editorRequestInFlight.store(false, std::memory_order_release);
+            reply(false, {}, "message queue unavailable (shutdown)");
+        }
     }
     else if (op == op::kCloseEditor)
     {
@@ -308,13 +321,17 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
             reply(false, {}, "editor open/close already in flight");
             return;
         }
-        juce::MessageManager::callAsync([&st, reply]
+        if (!juce::MessageManager::callAsync([&st, reply]
         {
             st.editorWindow.reset();
             st.editor.reset();
             st.editorRequestInFlight.store(false, std::memory_order_release);
             reply(true, {});
-        });
+        }))
+        {
+            st.editorRequestInFlight.store(false, std::memory_order_release);
+            reply(false, {}, "message queue unavailable (shutdown)");
+        }
     }
     else if (op == op::kGetState)
     {
@@ -371,7 +388,7 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
         // need a live message loop; deferring the destroy to after the
         // WinMain loop exits would deadlock or leak (see CR finding on
         // post-loop teardown).
-        juce::MessageManager::callAsync([&st]() {
+        if (!juce::MessageManager::callAsync([&st]() {
             st.editorWindow.reset();
             st.editor.reset();
             // Do NOT reset st.plugin here — the audio thread can be
@@ -389,7 +406,16 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
             // this binary doesn't construct a JUCEApplicationBase, only
             // a ScopedJuceInitialiser_GUI.
             PostQuitMessage(0);
-        });
+        }))
+        {
+            // If the queue is already gone (e.g. another path raced us into
+            // shutdown), still flip `running` so the audio thread + WinMain
+            // dispatch loop exit. Editor/window will be destroyed by the
+            // WinMain post-loop cleanup if the message thread is gone — at
+            // that point AsyncUpdater/MessageManagerLock aren't a concern
+            // because the loop is no longer pumping.
+            st.running.store(false, std::memory_order_release);
+        }
     }
     else if (op == op::kMidiEvent)
     {
@@ -564,13 +590,20 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         // the kShutdown handler documents. Plugin is left for WinMain to
         // destroy *after* audioThread.join() — same UAF reasoning as
         // kShutdown.
-        juce::MessageManager::callAsync([&st]()
+        if (!juce::MessageManager::callAsync([&st]()
         {
             st.editorWindow.reset();
             st.editor.reset();
             st.running.store(false, std::memory_order_release);
             PostQuitMessage(0);
-        });
+        }))
+        {
+            // Queue already torn down — flip `running` directly so the
+            // dispatch loop and audio thread exit; the editor/window will
+            // be destroyed by WinMain's post-loop cleanup (safe because at
+            // that point nothing else is using the message thread anyway).
+            st.running.store(false, std::memory_order_release);
+        }
     }))
     {
         hostLogf("control channel start failed");
