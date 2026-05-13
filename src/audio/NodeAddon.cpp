@@ -21,6 +21,7 @@ static std::unique_ptr<AudioEngine> engine;
 static std::unique_ptr<VSTHost> vstHost;
 static std::thread juceMessageThread;
 static std::atomic<bool> juceRunning{false};
+static std::atomic<bool> alreadyShutDown{false};
 
 // ── JUCE Message Thread ───────────────────────────────────────────────────────
 // JUCE requires a message thread for plugin loading, audio device management, etc.
@@ -118,14 +119,25 @@ static Napi::Value Init(const Napi::CallbackInfo& info)
     return env.Undefined();
 }
 
-static Napi::Value Shutdown(const Napi::CallbackInfo& info)
+static void doShutdown()
 {
-    dispatchOnMessageThread([]() {
-        if (engine) { engine->stopAudio(); engine.reset(); }
-        vstHost.reset();
-    });
+    bool expected = false;
+    if (!alreadyShutDown.compare_exchange_strong(expected, true)) return;
+
+    if (juceRunning.load() || engine || vstHost)
+    {
+        dispatchOnMessageThread([]() {
+            if (engine) { engine->stopAudio(); engine.reset(); }
+            vstHost.reset();
+        });
+    }
 
     stopJuceMessageThread();
+}
+
+static Napi::Value Shutdown(const Napi::CallbackInfo& info)
+{
+    doShutdown();
     return info.Env().Undefined();
 }
 
@@ -1463,6 +1475,11 @@ static Napi::Object InitModule(Napi::Env env, Napi::Object exports)
     exports.Set("savePreset", Napi::Function::New(env, SavePreset));
     exports.Set("loadPreset", Napi::Function::New(env, LoadPreset));
     exports.Set("setMultiBypass", Napi::Function::New(env, SetMultiBypass));
+
+    // Drain JUCE message thread + sandbox subprocesses before DLL unload, so a
+    // JS process exit without an explicit addon.shutdown() doesn't crash in
+    // static destructors.
+    napi_add_env_cleanup_hook(env, [](void*) { doShutdown(); }, nullptr);
 
     return exports;
 }
