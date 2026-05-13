@@ -236,7 +236,7 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
         // SandboxFactory_win::createSandboxed at spawn time.
         if (! std::isfinite(sr)
             || sr <= 0.0
-            || sr > (double)std::numeric_limits<int>::max()
+            || sr > (double)(std::numeric_limits<int>::max)()
             || bs <= 0
             || bs > (int)kAudioMaxBlockSamples)
         {
