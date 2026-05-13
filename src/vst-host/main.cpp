@@ -195,6 +195,14 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
         // Must run on the message thread.
         juce::MessageManager::callAsync([&st, reply]
         {
+            // Tear down any prior editor BEFORE replacing st.editor. The
+            // existing EditorWindow holds st.editor.get() via
+            // setContentNonOwned, so resetting st.editor first would leave
+            // a dangling content pointer in the window. Resetting the
+            // window first detaches its content before we touch the editor.
+            if (st.editorWindow) st.editorWindow.reset();
+            if (st.editor)       st.editor.reset();
+
             st.editor.reset(st.plugin->createEditor());
             if (!st.editor)
             {
