@@ -184,7 +184,7 @@ Resolution order on `loadVST`:
    `learned-from-crash: true` flag, so the next load is sandboxed.
 
 `linksDll` matching needs a quick prescan: open the vst3 file, walk its PE import
-table. Cached in `~/.cache/slopsmith/plugin-deps.json`.
+table. Cached in `%LOCALAPPDATA%\Slopsmith\plugin-deps.json`.
 
 ## 6. Window reparenting into Electron
 
