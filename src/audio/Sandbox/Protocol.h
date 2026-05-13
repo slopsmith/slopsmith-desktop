@@ -44,7 +44,10 @@ inline constexpr uint32_t kAudioMaxChannels = 8;
 inline constexpr int kDefaultReplyTimeoutMs = 10000;
 
 // Watchdog: a sandbox that doesn't send `ready` this fast is presumed broken.
-inline constexpr int kReadyTimeoutMs = 5000;
+// Generous because some plugins (NI Guitar Rig 6 in particular) spin up an
+// embedded Qt5/QML engine on first load, which can take 8-12 seconds on a
+// cold cache.
+inline constexpr int kReadyTimeoutMs = 30000;
 
 // Control channel — operation names.
 //

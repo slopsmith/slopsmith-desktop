@@ -36,7 +36,7 @@ bool ControlChannel::createServerSide(juce::String& pipeNameOut,
     HANDLE h = CreateNamedPipeW(
         pipeName.toWideCharPointer(),
         PIPE_ACCESS_DUPLEX,
-        PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
         /*maxInstances*/ 1,
         kControlPipeBufferBytes,
         kControlPipeBufferBytes,
@@ -67,14 +67,9 @@ bool ControlChannel::connectClientSide(const juce::String& pipeName,
         errorOut = "CreateFileW (client) failed: " + juce::String((int)GetLastError());
         return false;
     }
-    DWORD mode = PIPE_READMODE_MESSAGE;
-    if (!SetNamedPipeHandleState(h, &mode, nullptr, nullptr))
-    {
-        errorOut = "SetNamedPipeHandleState failed: "
-                 + juce::String((int)GetLastError());
-        CloseHandle(h);
-        return false;
-    }
+    // Pipe was opened in BYTE mode (default) which matches our framing —
+    // no SetNamedPipeHandleState call needed since CreateNamedPipeW on the
+    // server side is now also PIPE_TYPE_BYTE | PIPE_READMODE_BYTE.
     impl->pipe = h;
     impl->isServer = false;
     return true;
