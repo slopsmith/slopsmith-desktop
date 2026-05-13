@@ -413,10 +413,17 @@ void ControlChannel::ioLoop()
         }
         if (msg.hasProperty("op"))
         {
+            const int id = (int)msg.getProperty("id", -1);
             if (requestHandler)
             {
-                int id = (int)msg.getProperty("id", -1);
                 requestHandler(id, msg["op"].toString(), msg["args"]);
+            }
+            else if (id >= 0)
+            {
+                // No handler installed (host side never accepts inbound
+                // requests). Reply with an explicit error so a misbehaving
+                // or forged peer can't pin our request() with a 10 s wait.
+                sendReply(id, false, {}, "no request handler installed");
             }
             continue;
         }

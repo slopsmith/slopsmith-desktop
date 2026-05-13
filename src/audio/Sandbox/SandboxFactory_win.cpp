@@ -64,10 +64,19 @@ juce::File resolveSandboxExe()
         // follow-up (see PR-body checklist).
     }
 
-    // Repo layout while iterating: build\Release\ from CWD.
-    auto buildDir = juce::File::getCurrentWorkingDirectory()
-                         .getChildFile("build/Release/slopsmith-vst-host.exe");
-    if (buildDir.existsAsFile()) return buildDir;
+    // Explicit dev override — opt-in via SLOPSMITH_DEV_SANDBOX_PATH.
+    // The previous implicit CWD probe would have spawned any
+    // `build/Release/slopsmith-vst-host.exe` happening to be in the
+    // launch directory, which is a search-path attack vector. Fail
+    // closed in production; require the env var for dev workflows.
+    char devOverride[1024]{};
+    const DWORD dn = GetEnvironmentVariableA("SLOPSMITH_DEV_SANDBOX_PATH",
+                                             devOverride, sizeof(devOverride));
+    if (dn > 0 && dn < sizeof(devOverride))
+    {
+        juce::File explicitPath(juce::String(devOverride));
+        if (explicitPath.existsAsFile()) return explicitPath;
+    }
 
     return {};
 }

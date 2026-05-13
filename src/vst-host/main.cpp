@@ -302,8 +302,23 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
     else if (op == op::kShutdown)
     {
         reply(true, {});
-        st.running.store(false, std::memory_order_release);
-        juce::MessageManager::callAsync([] { juce::JUCEApplicationBase::quit(); });
+        // Tear down the editor + plugin on the message thread *while the
+        // dispatch loop is still pumping*. Plugin editors that use
+        // AsyncUpdater or JUCE's MessageManagerLock during destruction
+        // need a live message loop; deferring the destroy to after the
+        // WinMain loop exits would deadlock or leak (see CR finding on
+        // post-loop teardown).
+        juce::MessageManager::callAsync([&st]() {
+            st.editorWindow.reset();
+            st.editor.reset();
+            st.plugin.reset();
+            st.running.store(false, std::memory_order_release);
+            // Post a real WM_QUIT so the OS main thread's dispatch loop
+            // sees it. JUCEApplicationBase::quit() was a no-op here —
+            // this binary doesn't construct a JUCEApplicationBase, only
+            // a ScopedJuceInitialiser_GUI.
+            PostQuitMessage(0);
+        });
     }
     else if (op == op::kMidiEvent)
     {

@@ -45,7 +45,10 @@ try {
 }
 
 setTimeout(() => {
-    const gr6 = 'C:\\Program Files\\Common Files\\VST3\\Guitar Rig 6.vst3';
+    // Allow override for CI / dev machines whose VST3 layout differs from
+    // the standard "C:\Program Files\Common Files\VST3" install location.
+    const gr6 = process.env.GR6_PATH
+             || 'C:\\Program Files\\Common Files\\VST3\\Guitar Rig 6.vst3';
     console.log('[test] calling addon.loadVST(' + gr6 + ')');
     let slot;
     try {

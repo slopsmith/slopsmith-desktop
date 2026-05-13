@@ -163,6 +163,13 @@ bool SandboxedProcessor::initialise(juce::String& errorOut)
     auto readyState = std::make_shared<ReadyState>();
     auto readyF     = readyState->readyP.get_future();
 
+    // Ordering invariant for the cached fields below:
+    //   1. The event callback (control I/O thread) writes the cached fields.
+    //   2. The same callback then publishes via `alive.store(release)`.
+    // Reads MUST observe `alive` via `isAlive()` (which does `load(acquire)`)
+    // before touching the cached fields. The getters in SandboxedProcessor.h
+    // already gate this way; new getters must follow the same pattern, or
+    // the cached field has to become std::atomic.
     auto eventCb = [this, readyState](const juce::String& evname,
                                       const juce::var& data)
     {
@@ -199,6 +206,15 @@ bool SandboxedProcessor::initialise(juce::String& errorOut)
         }
     };
 
+    // Lifetime invariant for the callbacks below: both capture `this` and
+    // call teardown(). teardown() calls control->stop() and subprocess->
+    // shutdown() which JOIN the threads invoking these callbacks. So the
+    // callbacks always complete before destruction proceeds — but only
+    // because stop()/shutdown() happen at the top of teardown(), before
+    // member-destruction. Keep that ordering when editing teardown(); if
+    // a future refactor moves member destruction before the joins, the
+    // watcher thread could re-enter teardown on a partially-destroyed
+    // `this`. A weak_ptr-based state block would make this self-evident.
     auto disconnectCb = [this, failHandshake](const juce::String& reason)
     {
         failHandshake();

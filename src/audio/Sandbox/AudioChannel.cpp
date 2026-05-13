@@ -130,6 +130,28 @@ bool AudioChannel::openSandboxSide(const Names& names, juce::String& errorOut)
     cachedDims.maxChannels = impl->header->maxChannels;
     cachedDims.sampleRate = impl->header->sampleRate;
 
+    // Cross-check ringBytesPerSlot against the dims the host published. A
+    // mismatch here would silently produce misaligned ring access — the
+    // protocol version check upstream already guarantees host/sandbox
+    // agree on the layout, this just makes the contract local.
+    const uint64_t expectedSlotBytes = cachedDims.bytesPerSlot();
+    if (impl->header->ringBytesPerSlot != expectedSlotBytes)
+    {
+        errorOut = "audio shm ringBytesPerSlot mismatch: expected "
+                 + juce::String((int64_t)expectedSlotBytes) + ", got "
+                 + juce::String((int64_t)impl->header->ringBytesPerSlot);
+        close();
+        return false;
+    }
+
+    // Spawn-order invariant: the host fully initialises the shared header
+    // (sets magic, protocolVersion, maxBlocks, etc.) BEFORE calling
+    // CreateProcessW, so by the time the sandbox observes the mapping the
+    // header is fully populated. If a future refactor lets the sandbox map
+    // the view before host-side init completes, add explicit
+    // synchronisation (atomic seq counter, or an event signalled after
+    // init) — without it the sandbox could observe partial fields.
+
     // Sandbox side maps the view with size=0, which means "whole object".
     // We don't know the OS-reported view size, but we can reconstruct the
     // expected total from the validated dims and bounds-check the offsets

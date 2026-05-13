@@ -24,9 +24,13 @@ no effect — set it before launching the host process (`node ...`,
   from the JUCE VST3 host context (in-process load path only).
 
 The sandbox host also opens a per-PID file at
-`%TEMP%\slopsmith-vst-host-<pid>.log` regardless of the env var — that's for
-"the subprocess died and I have no console" diagnosis; it's small and only
-written from one process.
+`%TEMP%\slopsmith-vst-host-<pid>.log` **unconditionally** — this is by
+design and intentionally not gated on `SLOPSMITH_SANDBOX_DEBUG`. The
+sandbox subprocess runs hidden (no console window) and can die before
+the env var has propagated, so an always-on per-PID file is the only
+reliable way to diagnose "the subprocess died and I have no console"
+crashes in the field. The file is small (a handful of lines per session),
+written from a single process, and rotates per PID so they cap naturally.
 
 ## Turning it on
 
