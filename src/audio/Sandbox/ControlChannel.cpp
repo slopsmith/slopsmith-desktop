@@ -38,15 +38,10 @@ bool ControlChannel::createServerSide(juce::String& pipeNameOut,
     juce::Uuid uuid;
     juce::String pipeName = "\\\\.\\pipe\\slopsmith-vst-" + uuid.toDashedString();
 
-    // PIPE_REJECT_REMOTE_CLIENTS (Vista+) refuses connections from machines
-    // other than the local one. The pipe name is already random per-spawn,
-    // but rejecting remote clients narrows the attack surface to local
-    // processes regardless of pipe ACLs.
     HANDLE h = CreateNamedPipeW(
         pipeName.toWideCharPointer(),
         PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
-        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT
-            | PIPE_REJECT_REMOTE_CLIENTS,
+        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
         /*maxInstances*/ 1,
         kControlPipeBufferBytes,
         kControlPipeBufferBytes,

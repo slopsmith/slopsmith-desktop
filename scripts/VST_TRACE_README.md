@@ -1,7 +1,7 @@
 # VST trace — runtime-gated diagnostic logging
 
 `src/audio/VSTTrace.h` defines a `VST_TRACE(...)` macro the addon, the VST
-host code, and the sandbox subprocess all use to emit lines into
+host code, and the sandbox subprocess all use to emit timestamped lines into
 `%TEMP%\slopsmith-vst-trace.log` (Linux/macOS: `/tmp/slopsmith-vst-trace.log`)
 and stderr. It's compiled into every build but no-ops at runtime unless the
 `SLOPSMITH_SANDBOX_DEBUG` environment variable is set to a non-empty value

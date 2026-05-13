@@ -381,26 +381,12 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         {
             dispatchRequest(st, id, op, args);
         });
-    // Start the audio thread BEFORE control.start so that any pause-guarded
-    // request (kPrepare, kSetBlockSize, kGetState, kSetState) dispatched on
-    // the control I/O thread always has a worker to ack the pause flag.
-    // Otherwise an early kPrepare would deadlock in AudioPauseGuard waiting
-    // forever on audioPausedAck.
-    st.audioThread = std::thread([&st] { runAudioThread(st); });
-
     if (!st.control.start({}, [&st](const juce::String&)
     {
         st.running.store(false, std::memory_order_release);
-        // Wake the audio worker so it observes running=false promptly and
-        // exits — and signals audioPausedAck on the way out so a pending
-        // pause-guarded op can't wait forever.
-        st.audio.signalSandboxWake();
     }))
     {
         hostLogf("control channel start failed");
-        st.running.store(false, std::memory_order_release);
-        st.audio.signalSandboxWake();
-        if (st.audioThread.joinable()) st.audioThread.join();
         return 6;
     }
 
@@ -408,25 +394,18 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
     if (!st.control.sendEvent(event::kReady, pluginMetadata(*st.plugin)))
     {
         hostLogf("failed to send ready event — host won't see us as ready");
-        st.running.store(false, std::memory_order_release);
-        st.audio.signalSandboxWake();
         st.control.stop();
-        if (st.audioThread.joinable()) st.audioThread.join();
         return 7;
     }
     hostLogf("ready event sent");
 
+    st.audioThread = std::thread([&st] { runAudioThread(st); });
+
     // Pump the main message loop. JUCE's MessageManager is bound to this
     // thread (the OS main thread), which is the key correctness property
-    // for Qt-using plugins per the diag PoC. We also exit when JUCE sees a
-    // stop message — SubprocessHandle::shutdown sends WM_QUIT to this
-    // thread, and the JUCE handler treats it as a stop request; without
-    // this check the loop would keep going until `st.running` is also
-    // cleared by some other path.
-    auto* mm = juce::MessageManager::getInstance();
-    while (st.running.load(std::memory_order_acquire)
-           && !mm->hasStopMessageBeenSent())
-        mm->runDispatchLoopUntil(20);
+    // for Qt-using plugins per the diag PoC.
+    while (st.running.load(std::memory_order_acquire))
+        juce::MessageManager::getInstance()->runDispatchLoopUntil(20);
 
     st.audioThread.join();
     st.editorWindow.reset();
