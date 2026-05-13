@@ -140,7 +140,7 @@ std::unique_ptr<juce::AudioProcessor> tryLoadSandboxed(
     // and silently accepting 0 / negative / overflow makes a bad caller surface
     // as a late sandbox-spawn failure instead of a clear errorOut here.
     if (! std::isfinite(sampleRate) || sampleRate <= 0.0
-        || sampleRate > (double)std::numeric_limits<uint32_t>::max())
+        || sampleRate > (double)(std::numeric_limits<uint32_t>::max)())
     {
         errorOut = "invalid sampleRate: " + juce::String(sampleRate);
         return nullptr;
