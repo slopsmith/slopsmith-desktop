@@ -143,6 +143,12 @@ static bool overlappedTransfer(HANDLE pipe, bool isWrite, void* buf, DWORD bytes
 {
     OVERLAPPED ov{};
     ov.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (ov.hEvent == nullptr)
+    {
+        // Out of handle quota / kernel resources. GetLastError() is preserved
+        // for the caller — no synthetic code to mask the real reason.
+        return false;
+    }
     BOOL ok = isWrite
         ? WriteFile(pipe, buf, bytesPerOp, nullptr, &ov)
         : ReadFile (pipe, buf, bytesPerOp, nullptr, &ov);
