@@ -157,6 +157,9 @@ juce::var pluginMetadata(juce::AudioPluginInstance& p)
 void runAudioThread(HostState& st)
 {
     juce::AudioBuffer<float> buffer(st.channels, st.blockSize);
+    // `midi` stays empty in v1 — MIDI is moving to an inline per-block shm
+    // queue in the audio-shm follow-up PR. The control-channel op::kMidiEvent
+    // path is a no-op deprecation stub; nothing populates this buffer today.
     juce::MidiBuffer midi;
     while (st.running.load(std::memory_order_acquire))
     {
@@ -357,7 +360,11 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
             const DWORD up = GetEnvironmentVariableA("USERPROFILE",
                                                      userprofile,
                                                      sizeof(userprofile));
-            if (up > 0 && up < sizeof(userprofile) - sizeof(suffix))
+            // up < sizeof(userprofile) → got the value (not truncated);
+            // up + suffixLen < sizeof(path) → concatenation fits. Two
+            // separate predicates so the intent is obvious.
+            if (up > 0 && up < sizeof(userprofile)
+                       && (size_t)up + (size_t)suffixLen < sizeof(path))
                 std::snprintf(path, sizeof(path), "%s%s", userprofile, suffix);
             else
                 std::snprintf(path, sizeof(path),

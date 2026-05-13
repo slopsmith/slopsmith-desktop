@@ -52,7 +52,9 @@ target_compile_definitions(slopsmith-vst-host PRIVATE
 if(MSVC)
     # /EHa for SEH-aware catch in VSTHost.cpp (matches src/audio/CMakeLists.txt).
     target_compile_options(slopsmith-vst-host PRIVATE /EHa)
-    target_link_options(slopsmith-vst-host PRIVATE /SUBSYSTEM:WINDOWS /ENTRY:WinMainCRTStartup)
+    # `add_executable(... WIN32 ...)` already implies /SUBSYSTEM:WINDOWS and
+    # the matching entry point (WinMainCRTStartup, or wWinMainCRTStartup if
+    # the toolchain ever picks up _UNICODE). No need to pin them explicitly.
 endif()
 
 # Drop the binary next to the addon for easy lookup by SandboxFactory_win.cpp.

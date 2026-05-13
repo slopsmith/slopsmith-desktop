@@ -2,6 +2,7 @@
 #include "ControlChannel.h"
 #include "AudioChannel.h"
 #include "SubprocessHandle.h"
+#include "../VSTTrace.h"
 
 #if JUCE_WINDOWS
  #include <windows.h>
@@ -216,6 +217,11 @@ bool SandboxedProcessor::initialise(juce::String& errorOut)
         != std::future_status::ready)
     {
         errorOut = "sandbox did not become ready within timeout";
+        // Explicit teardown so all the resource-release wiring lives in
+        // one place. The destructor would otherwise pick this up when the
+        // outer unique_ptr drops, but it's clearer to tear down on the
+        // failure edge and not rely on destruction order.
+        teardown("ready timeout");
         return false;
     }
     if (!readyF.get())
@@ -292,6 +298,9 @@ void SandboxedProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     juce::String err;
     control->request(op::kPrepare, juce::var(args.get()),
                      kDefaultReplyTimeoutMs, &err);
+    if (err.isNotEmpty())
+        VST_TRACE("[sandbox] prepareToPlay sr=%.0f bs=%d failed: %s",
+                  sampleRate, samplesPerBlock, err.toRawUTF8());
 }
 
 void SandboxedProcessor::releaseResources()
@@ -383,6 +392,17 @@ void SandboxedProcessor::getStateInformation(juce::MemoryBlock& destData)
     if (!isAlive()) return;
     juce::String err;
     auto reply = control->request(op::kGetState, {}, kDefaultReplyTimeoutMs, &err);
+    if (err.isNotEmpty())
+    {
+        // Otherwise a failed round-trip would silently emit an empty blob —
+        // JUCE writes that to the host's preset, which then round-trips to
+        // setStateInformation later and resets the plugin to defaults.
+        // Until the state-cache work lands (PR-body checklist), at least
+        // make the failure visible.
+        VST_TRACE("[sandbox] getStateInformation request failed: %s",
+                  err.toRawUTF8());
+        return;
+    }
     auto b64 = reply.getProperty("stateBase64", "").toString();
     juce::MemoryOutputStream mo(destData, false);
     juce::Base64::convertFromBase64(mo, b64);
@@ -396,6 +416,9 @@ void SandboxedProcessor::setStateInformation(const void* data, int sizeInBytes)
     juce::String err;
     control->request(op::kSetState, juce::var(args.get()),
                      kDefaultReplyTimeoutMs, &err);
+    if (err.isNotEmpty())
+        VST_TRACE("[sandbox] setStateInformation request failed (%d bytes): %s",
+                  sizeInBytes, err.toRawUTF8());
 }
 
 } // namespace slopsmith::sandbox
