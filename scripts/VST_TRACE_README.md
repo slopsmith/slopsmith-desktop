@@ -2,8 +2,10 @@
 
 `src/audio/VSTTrace.h` defines a `VST_TRACE(...)` macro the addon, the VST
 host code, and the sandbox subprocess all use to emit lines into
-`%TEMP%\slopsmith-vst-trace.log` (Linux/macOS: `/tmp/slopsmith-vst-trace.log`)
-and stderr. It's compiled into every build but no-ops at runtime unless the
+`%TEMP%\slopsmith-vst-trace-<pid>.log` (Linux/macOS:
+`/tmp/slopsmith-vst-trace-<pid>.log`) and stderr. The filename is per-PID
+so concurrent runs (e.g. addon spawning a sandbox subprocess) each get
+their own log without interleaving. It's compiled into every build but no-ops at runtime unless the
 `SLOPSMITH_SANDBOX_DEBUG` environment variable is set to a non-empty value
 other than `"0"`.
 
@@ -47,15 +49,21 @@ SLOPSMITH_SANDBOX_DEBUG=1 node load-gr6.js
 
 ## Reading the log
 
+The `<pid>` portion is the OS process ID of the writer — find your most
+recent run via `dir %TEMP%\slopsmith-vst-trace-*.log` (Windows) or
+`ls -t /tmp/slopsmith-vst-trace-*.log | head` (POSIX).
+
 ```cmd
-:: Windows
-type %TEMP%\slopsmith-vst-trace.log
+:: Windows — view the most recently modified trace file:
+for /f "delims=" %f in ('dir /b /o-d %%TEMP%%\slopsmith-vst-trace-*.log') do @type "%%TEMP%%\%f" & exit /b
 ```
 
 ```bash
 # macOS / Linux
-cat /tmp/slopsmith-vst-trace.log
+cat "$(ls -t /tmp/slopsmith-vst-trace-*.log | head -1)"
 ```
 
-The file is appended to across runs; truncate it (or `del`) between sessions
-when bisecting.
+Per-PID naming means files accumulate over time. Clean up periodically
+with `del %TEMP%\slopsmith-vst-trace-*.log` (Windows) or
+`rm /tmp/slopsmith-vst-trace-*.log` (POSIX) when they're no longer
+needed.

@@ -471,6 +471,14 @@ void SandboxedProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 juce::AudioProcessorEditor* SandboxedProcessor::createEditor()
 {
     if (!isAlive() || !hasEditor()) return nullptr;
+    // If a previous editor is still alive (JUCE didn't destroy it before
+    // this createEditor call — atypical but legal), short-circuit with
+    // nullptr rather than firing a second kOpenEditor that would queue
+    // behind the first inside vst-host's dispatchRequest editor-request
+    // serializer (10s wait + redundant editor creation in the sandbox).
+    // JUCE's contract permits returning nullptr; callers handle it.
+    if (editorOpen.load(std::memory_order_acquire))
+        return nullptr;
     juce::String err;
     auto result = control->request(op::kOpenEditor, {}, kDefaultReplyTimeoutMs, &err);
     if (!result.isObject()) return nullptr;

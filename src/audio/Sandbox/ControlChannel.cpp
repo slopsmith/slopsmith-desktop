@@ -121,6 +121,20 @@ bool ControlChannel::start(EventCallback evCb,
 
 void ControlChannel::stop()
 {
+    // Callback lifetime invariant: by the time stop() returns, both
+    // `onEvent` and `onDisconnect` have been observed for the last time —
+    // the I/O thread is either joined (non-self path) or has already
+    // returned from its last dispatch (self-detach path; see below).
+    // Owners therefore MUST call stop() before destroying any state
+    // captured by-reference into onEvent/onDisconnect.
+    //
+    // We deliberately do NOT clear `onEvent` here: clearing under a lock
+    // before joining doesn't help (the I/O thread can be mid-invocation
+    // and read the std::function while we're clearing it), and clearing
+    // after joining is unnecessary (no more callers). Owners that need
+    // tighter callback teardown should use a shared_ptr indirection or
+    // weak_ptr capture in the lambda — same pattern the dispatchOnMessageThread
+    // WaitableEvent fix uses for the same UAF class.
     alive.store(false, std::memory_order_release);
 
     // Signal stop BEFORE CancelIoEx. The race we're guarding against is

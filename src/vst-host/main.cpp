@@ -495,6 +495,7 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
         if (! std::isfinite(idxd)
             || idxd < 0.0
             || idxd > (double)(std::numeric_limits<int>::max)()
+            || std::floor(idxd) != idxd   // reject fractional indices: 1.9 → 1 would silently mutate the wrong parameter
             || ! std::isfinite(vald))
         {
             reply(false, {}, "invalid parameter index/value");
@@ -581,24 +582,28 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         }
         else
         {
-            // Fall back to USERPROFILE — writing into C:\ requires admin
-            // and a non-admin install just loses the diagnostic file. The
-            // user profile path is always writable by the calling user.
-            char userprofile[1024]{};
-            const DWORD up = GetEnvironmentVariableA("USERPROFILE",
-                                                     userprofile,
-                                                     sizeof(userprofile));
-            // up < sizeof(userprofile) → got the value (not truncated);
-            // up + suffixLen < sizeof(path) → concatenation fits. Two
-            // separate predicates so the intent is obvious.
-            if (up > 0 && up < sizeof(userprofile)
-                       && (size_t)up + (size_t)suffixLen < sizeof(path))
-                std::snprintf(path, sizeof(path), "%s%s", userprofile, suffix);
-            // No C:\ fallback — writing to the drive root requires admin on
-            // a default Windows install, so the previous fallback would
-            // silently lose the diagnostic anyway. Leaving `path` empty
-            // makes fopen return NULL, which the call below handles cleanly
-            // (g_hostLog stays null, hostLogf becomes a no-op).
+            // Fall back to %LOCALAPPDATA%\Temp — the canonical per-user
+            // temp directory that %TEMP% normally resolves to. Writing
+            // into USERPROFILE root would clutter the user's home with
+            // per-PID files; LOCALAPPDATA\Temp is where these files
+            // *belong* on the standard Windows layout. If LOCALAPPDATA
+            // is also missing/oversized we leave `path` empty and the
+            // diagnostic file just doesn't open (hostLogf no-ops). The
+            // C:\ drive-root fallback is gone for the same reason as
+            // the VSTTrace.h trace path: drive-root writes need admin
+            // on default installs.
+            char localAppData[1024]{};
+            const DWORD la = GetEnvironmentVariableA("LOCALAPPDATA",
+                                                     localAppData,
+                                                     sizeof(localAppData));
+            constexpr const char* kTempSubdir = "\\Temp";
+            const size_t kTempSubdirLen = std::strlen(kTempSubdir);
+            if (la > 0 && la < sizeof(localAppData)
+                       && (size_t)la + kTempSubdirLen + (size_t)suffixLen < sizeof(path))
+            {
+                std::snprintf(path, sizeof(path), "%s%s%s",
+                              localAppData, kTempSubdir, suffix);
+            }
         }
         // Open the per-PID host log with "w" (truncate) rather than "a"
         // (append). The filename includes the PID and is single-writer,
