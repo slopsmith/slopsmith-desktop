@@ -495,7 +495,6 @@ void runAudioThread(HostState& st)
     {
         if (st.audioPauseRequested.load(std::memory_order_acquire))
         {
-            st.audioPausedAck.signal();
             // Bounded wait + re-check loop, not wait(-1), so we self-recover
             // if the matching AudioPauseGuard never gets to its destructor:
             //   - shutdown bail (running flips false in the constructor's
@@ -506,10 +505,30 @@ void runAudioThread(HostState& st)
             // Auto-reset WaitableEvent (default ctor) clears on successful
             // wait(), so we don't need an explicit reset() — that
             // assumption is documented at the audioResume field too.
+            //
+            // CRITICAL: re-ack on every pause cycle, not just once at entry.
+            // If guard A's destructor clears pauseRequested + signals
+            // resume, and guard B sets pauseRequested true *before* the
+            // worker exits this branch, the worker stays in the loop
+            // (pauseRequested still true) but never sends a fresh ack —
+            // guard B would wait forever. `ackedThisPause` is reset
+            // whenever resume fires so the next iteration re-acks.
+            bool ackedThisPause = false;
             while (st.audioPauseRequested.load(std::memory_order_acquire)
                    && st.running.load(std::memory_order_acquire))
             {
-                st.audioResume.wait(50);
+                if (!ackedThisPause)
+                {
+                    st.audioPausedAck.signal();
+                    ackedThisPause = true;
+                }
+                if (st.audioResume.wait(50))
+                {
+                    // Resume signaled. The next loop iteration re-checks
+                    // pauseRequested; if a new guard already flipped it
+                    // back to true, force a fresh ack on that pass.
+                    ackedThisPause = false;
+                }
             }
             // Re-sync block size in case the control op widened it.
             const int bs = juce::jlimit(1, bufferCap,
