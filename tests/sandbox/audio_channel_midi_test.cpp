@@ -68,8 +68,23 @@ struct ChannelPair
     explicit ChannelPair(const AudioDimensions& d) : dims(d)
     {
         ok = host.createHostSide(dims, names, err);
-        if (!ok) return;
+        if (!ok)
+        {
+            std::fprintf(stderr, "  ChannelPair: createHostSide failed: %s\n",
+                         err.toRawUTF8());
+            return;
+        }
         ok = sandbox.openSandboxSide(names, err);
+        if (!ok)
+        {
+            std::fprintf(stderr, "  ChannelPair: openSandboxSide failed: %s\n",
+                         err.toRawUTF8());
+            // host's named mapping + events are released by AudioChannel's
+            // destructor when this ChannelPair goes out of scope (sandbox
+            // first, then host, per reverse-declaration-order rules).
+            // Names are randomised per ChannelPair so an aborted construct
+            // doesn't leak into a subsequent test in the same run.
+        }
     }
 };
 

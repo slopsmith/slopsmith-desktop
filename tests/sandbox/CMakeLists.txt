@@ -45,8 +45,12 @@ target_compile_definitions(audio_channel_midi_test PRIVATE
 )
 
 # Drop into the same Release/ folder as slopsmith-vst-host so the smoke
-# script can find it without juggling per-config paths.
+# script + ctest find it without juggling per-config paths. The base
+# RUNTIME_OUTPUT_DIRECTORY covers single-config generators (e.g. Ninja);
+# multi-config generators (Visual Studio's MSBuild) consult the per-config
+# *_DEBUG/*_RELEASE/etc. variants instead.
 set_target_properties(audio_channel_midi_test PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY                "${CMAKE_BINARY_DIR}/Release"
     RUNTIME_OUTPUT_DIRECTORY_DEBUG          "${CMAKE_BINARY_DIR}/Release"
     RUNTIME_OUTPUT_DIRECTORY_RELEASE        "${CMAKE_BINARY_DIR}/Release"
     RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_BINARY_DIR}/Release"
