@@ -217,16 +217,19 @@ bool AudioChannel::openSandboxSide(const Names& names, juce::String& errorOut)
     // against that. Anything beyond would be a stale/incompatible host
     // header that survived magic+version validation (unlikely but cheap
     // to catch — and the alternative is an out-of-bounds memcpy on the
-    // first pushBlock/popBlock).
+    // first push/popBlock or popInputBlock MIDI drain).
     const uint64_t expectedTotal = sizeof(AudioShmHeader)
-        + 2 * uint64_t(impl->header->maxBlocks) * impl->header->ringBytesPerSlot;
+        + 2 * uint64_t(impl->header->maxBlocks) * impl->header->ringBytesPerSlot
+        + uint64_t(impl->header->maxBlocks) * sizeof(MidiQueue);
     const uint64_t inEnd  = impl->header->inputRingOffset
         + uint64_t(impl->header->maxBlocks) * impl->header->ringBytesPerSlot;
     const uint64_t outEnd = impl->header->outputRingOffset
         + uint64_t(impl->header->maxBlocks) * impl->header->ringBytesPerSlot;
-    if (inEnd > expectedTotal || outEnd > expectedTotal)
+    const uint64_t midiEnd = impl->header->midiQueueOffset
+        + uint64_t(impl->header->maxBlocks) * sizeof(MidiQueue);
+    if (inEnd > expectedTotal || outEnd > expectedTotal || midiEnd > expectedTotal)
     {
-        errorOut = "audio shm ring offsets out of bounds";
+        errorOut = "audio shm ring/MIDI offsets out of bounds";
         close();
         return false;
     }
