@@ -576,9 +576,14 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
             return;
         }
         st.blockSize.store(bs, std::memory_order_release);
-        // prepareToPlay rebuilds JUCE's processing pipeline at the new
-        // block size; cheap for most plugins and the only universally
-        // supported way to change buffer size in the JUCE wrapper.
+        // Mirror kPrepare's pre-amble so block-size changes don't subtly
+        // differ from full prepares for plugins that key off
+        // setNonRealtime (e.g. some sample-streamers gate background loads
+        // behind it). prepareToPlay then rebuilds JUCE's processing
+        // pipeline at the new block size — cheap for most plugins and the
+        // only universally supported way to change buffer size in the
+        // JUCE wrapper.
+        st.plugin->setNonRealtime(false);
         st.plugin->prepareToPlay((double)st.sampleRate.load(std::memory_order_acquire),
                                  bs);
         reply(true, {});
@@ -772,16 +777,17 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
     }
     else if (op == op::kMidiEvent)
     {
-        // Removed in protocol v2: MIDI is now bundled inline in the audio
-        // shm's per-slot MidiQueue. A v1 host shouldn't be able to reach this
-        // path because the version handshake rejects mismatches; warn-and-drop
-        // here is a paranoid fallback for one release.
+        // Removed since protocol v2: MIDI is now bundled inline in the audio
+        // shm's per-slot MidiQueue. The version handshake (now v3) rejects
+        // any v1 host before it can reach this path, so this branch is a
+        // paranoid fallback. Drop it when v1 host binaries are no longer
+        // in circulation.
         static std::atomic<bool> warned{false};
         bool expected = false;
         if (warned.compare_exchange_strong(expected, true,
                                            std::memory_order_acq_rel))
-            hostLogf("warn: control-pipe op::kMidiEvent is removed in protocol "
-                     "v2 — host is sending MIDI on the wrong channel");
+            hostLogf("warn: control-pipe op::kMidiEvent is removed since "
+                     "protocol v2 — host is sending MIDI on the wrong channel");
         // Fire-and-forget; deliberately no reply.
     }
     else

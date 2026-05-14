@@ -444,17 +444,22 @@ void SandboxedProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
     // v2: MIDI rides inline in the input slot's MidiQueue. Zero control-pipe
     // I/O on the audio thread (was the deferred Copilot finding from PR #63).
+    //
+    // We deliberately do NOT clear `midiMessages` after pushInputBlock — the
+    // host has only published a *snapshot* into the slot's queue, the
+    // original buffer still belongs to the SignalChain. Downstream
+    // processors (e.g. a synth after a sandboxed effect) need to see the
+    // same MIDI events the chain delivered to us. Mirrors the early-return
+    // branch above which leaves midiMessages untouched for the same reason.
     if (!audio->pushInputBlock(buffer, midiMessages, n))
     {
         // Input ring full — sandbox isn't keeping up. Don't wait the full
         // pop timeout (which would extend the dropout); zero output and
         // exit. xruns was incremented inside pushInputBlock.
         VST_TRACE("[sandbox] processBlock: input ring full, dropping (xruns++)");
-        midiMessages.clear();
         buffer.clear();
         return;
     }
-    midiMessages.clear();
 
     // Pop timeout = 4× the block period, floored at 2 ms so very high
     // sample rates / small blocks don't end up with sub-millisecond budgets.

@@ -1,4 +1,5 @@
 #include "AudioChannel.h"
+#include "../VSTTrace.h"
 
 #if JUCE_WINDOWS
  #include <windows.h>
@@ -429,6 +430,23 @@ bool AudioChannel::popBlock(bool isOutputRing, juce::AudioBuffer<float>& dst,
     const int dstCh      = dst.getNumChannels();
     const int channels   = juce::jmin((int)impl->header->maxChannels, dstCh);
     const int samples    = juce::jmin(maxSamples, numSamples);
+    if (numSamples > maxSamples)
+    {
+        // One-shot warn: caller passed more samples than the spawn-time cap
+        // allows, so we'll truncate to maxSamples and zero-fill the tail.
+        // Producer-side push paths apply the same clamp, so this fires only
+        // if a misconfigured consumer asks for too much (kPrepare /
+        // kSetBlockSize spawn-cap validation should have prevented it).
+        static std::atomic<bool> warned{false};
+        bool expected = false;
+        if (warned.compare_exchange_strong(expected, true,
+                                           std::memory_order_acq_rel))
+        {
+            VST_TRACE("[audio-shm] popBlock: caller numSamples=%d > spawn cap "
+                      "maxBlockSamples=%d — truncating, tail zeroed",
+                      numSamples, maxSamples);
+        }
+    }
     for (int ch = 0; ch < channels; ++ch)
     {
         std::memcpy(dst.getWritePointer(ch),
@@ -608,6 +626,21 @@ bool AudioChannel::popInputBlock(juce::AudioBuffer<float>& dst,
     const int dstCh      = dst.getNumChannels();
     const int channels   = juce::jmin((int)impl->header->maxChannels, dstCh);
     const int samples    = juce::jmin(maxSamples, numSamples);
+    if (numSamples > maxSamples)
+    {
+        // One-shot warn — same rationale as popBlock above: spawn-cap
+        // validation in kPrepare / kSetBlockSize should have prevented
+        // this; if we hit it the host has misconfigured the worker.
+        static std::atomic<bool> warned{false};
+        bool expected = false;
+        if (warned.compare_exchange_strong(expected, true,
+                                           std::memory_order_acq_rel))
+        {
+            VST_TRACE("[audio-shm] popInputBlock: caller numSamples=%d > spawn "
+                      "cap maxBlockSamples=%d — truncating, tail zeroed",
+                      numSamples, maxSamples);
+        }
+    }
     for (int ch = 0; ch < channels; ++ch)
     {
         std::memcpy(dst.getWritePointer(ch),

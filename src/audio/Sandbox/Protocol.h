@@ -95,9 +95,11 @@ namespace op {
     inline constexpr const char* kListParameters = "listParameters";
     inline constexpr const char* kGetState       = "getState";
     inline constexpr const char* kSetState       = "setState";
-    // Deprecated as of protocol v2: MIDI now flows inline in the audio shm
-    // (see MidiQueue below). The sandbox keeps a warning-log no-op handler
-    // for one release so a stale host doesn't crash; remove next release.
+    // Removed as of protocol v2: MIDI now flows inline in the audio shm
+    // (see MidiQueue below). The version handshake rejects v1 hosts before
+    // they can reach this op, but the sandbox keeps a warn-log no-op
+    // handler as a paranoid fallback. Drop the handler when v1 host
+    // binaries are no longer in circulation.
     inline constexpr const char* kMidiEvent      = "midiEvent";
     inline constexpr const char* kOpenEditor     = "openEditor";
     inline constexpr const char* kResizeEditor   = "resizeEditor";
