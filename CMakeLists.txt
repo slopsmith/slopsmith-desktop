@@ -50,6 +50,9 @@ if(WIN32)
 endif()
 
 # Tests (Win32-only; gated on SLOPSMITH_BUILD_TESTS, default ON).
+# enable_testing() must be at the top level so `ctest` from the root build
+# directory discovers tests registered via add_test() in subdirectories.
 if(EXISTS "${CMAKE_SOURCE_DIR}/tests/CMakeLists.txt")
+    enable_testing()
     add_subdirectory(tests)
 endif()

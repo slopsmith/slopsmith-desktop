@@ -160,9 +160,11 @@ void testSysExBumpsOverflow()
     juce::AudioBuffer<float> srcAudio((int)dims.maxChannels, 256);
     srcAudio.clear();
     juce::MidiBuffer midi;
-    // Real SysEx — 5 bytes (F0 ... F7). > kMidiEventMaxBytes (4) so dropped.
-    const juce::uint8 sysex[] = { 0xF0, 0x7E, 0x7F, 0x06, 0xF7 };
-    midi.addEvent(juce::MidiMessage::createSysExMessage(sysex + 1, 3), 32);
+    // SysEx — JUCE wraps the payload with F0/F7 framing, so a 3-byte
+    // payload becomes a 5-byte raw message (> kMidiEventMaxBytes = 4),
+    // which pushInputBlock should drop and bump midiOverflows.
+    const juce::uint8 sysexPayload[] = { 0x7E, 0x7F, 0x06 };
+    midi.addEvent(juce::MidiMessage::createSysExMessage(sysexPayload, 3), 32);
     // Plus a normal CC event at frame 100 — should round-trip.
     midi.addEvent(juce::MidiMessage::controllerEvent(1, 7, 64), 100);
 

@@ -333,13 +333,21 @@ struct AudioPauseGuard
             using namespace std::chrono;
             const long long elapsedMs = duration_cast<milliseconds>(
                 steady_clock::now() - waitStart).count();
-            while (elapsedMs >= nextWarnMs)
+            // Single-step advance per wait tick. Using `while` here would
+            // emit multiple back-to-back log lines reporting the SAME
+            // elapsedMs value if a long stall (OS hiccup, debugger pause)
+            // jumped past several thresholds at once — partly defeating the
+            // backoff. Stepping one threshold per outer iteration means the
+            // worst case is a few extra wait-ticks before catching up,
+            // which is the right trade.
+            if (elapsedMs >= nextWarnMs)
             {
                 hostLogf("AudioPauseGuard: ack still pending after %lld ms"
                          " — heavy processBlock or stuck worker?", elapsedMs);
                 everWarned = true;
                 // Geometric backoff so a multi-second stall doesn't spam
-                // the log: 250ms, 1s, 5s, 30s, 5min, 30min, ...
+                // the log. Actual sequence with the multiplier-by-10 past
+                // 30s: 250ms → 1s → 5s → 30s → 5min → 50min → ~8h → ...
                 if      (nextWarnMs < 1000)    nextWarnMs = 1000;
                 else if (nextWarnMs < 5000)    nextWarnMs = 5000;
                 else if (nextWarnMs < 30000)   nextWarnMs = 30000;
@@ -686,8 +694,7 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
             // dispatches so the in-flight window is unreachable from this
             // dispatch; the error message reflects the practically-reachable
             // case. If a future dispatch model parallelises this, revisit.
-            reply(false, {}, "prepare not called — kSetBlockSize would use "
-                             "stale cached sampleRate");
+            reply(false, {}, "prepare not called");
             return;
         }
         // Read as double first then narrow — JSON-deserialised juce::var could

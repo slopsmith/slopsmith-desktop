@@ -53,3 +53,11 @@ set_target_properties(audio_channel_midi_test PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL     "${CMAKE_BINARY_DIR}/Release"
     OUTPUT_NAME "audio_channel_midi_test"
 )
+
+# Register with CTest so `ctest --output-on-failure -C Release` from the
+# build directory runs the test as part of the standard test suite. The
+# enable_testing() call lives one level up in tests/CMakeLists.txt.
+add_test(
+    NAME audio_channel_midi_test
+    COMMAND audio_channel_midi_test
+)

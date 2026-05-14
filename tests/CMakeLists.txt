@@ -22,4 +22,8 @@ if(NOT SLOPSMITH_BUILD_TESTS)
     return()
 endif()
 
+# Note: enable_testing() lives in the top-level CMakeLists.txt — calling it
+# only here would register tests in build/tests/CTestTestfile.cmake but
+# `ctest` from the root build directory wouldn't discover them.
+
 add_subdirectory(sandbox)

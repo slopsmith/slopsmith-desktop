@@ -675,11 +675,16 @@ bool AudioChannel::popInputBlock(juce::AudioBuffer<float>& dst,
 
     const auto slot = r % impl->header->maxBlocks;
 
-    // 1. Drain MIDI from the slot. Acquire on `count` pairs with the host's
-    //    release on inWriteIdx, so the events[] payload is visible.
+    // 1. Drain MIDI from the slot. Relaxed-load on `count` is sufficient:
+    //    the synchronisation that publishes count + events[] is the
+    //    acquire-load on inWriteIdx above (paired with the producer's
+    //    release-store on inWriteIdx in pushInputBlock), and the producer
+    //    writes count itself with relaxed semantics. The acquire here
+    //    would be redundant overhead and slightly misleading about the
+    //    actual sync model.
     auto& queue = impl->midiQueues[slot];
     const uint32_t count = atomicAt32(queue.count)
-                                .load(std::memory_order_acquire);
+                                .load(std::memory_order_relaxed);
     const uint32_t safeCount = juce::jmin(count, kMidiEventsPerSlot);
     for (uint32_t i = 0; i < safeCount; ++i)
     {
