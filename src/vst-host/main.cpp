@@ -87,6 +87,14 @@ bool parseArgs(int argc, wchar_t** argv, Args& out, juce::String& whyFailed)
     // Track which flags have been set so a duplicate (e.g. from a future
     // spawn-args refactor with a copy-paste bug) errors loudly instead of
     // silently using the last-wins value.
+    //
+    // Limitations for external callers (not in scope today — binary is
+    // host-spawned with controlled args):
+    //  - Flag matching is case-sensitive (`--SAMPLE-RATE` would route
+    //    through the unknown-flag path).
+    //  - On an unrecognized key, the i+=2 stepping consumes the next
+    //    arg as `val` before erroring, so the diagnostic line number
+    //    points at the value position rather than the flag itself.
     std::set<juce::String> seenKeys;
     for (int i = 1; i < argc; i += 2)
     {
@@ -268,6 +276,11 @@ juce::var pluginMetadata(juce::AudioPluginInstance& p)
     // differently than the caller passed in) instead of inferring.
     obj->setProperty("fileOrIdentifier", desc.fileOrIdentifier);
     obj->setProperty("pluginFormatName", desc.pluginFormatName);
+    // uniqueId + deprecatedUid let SignalChain round-trip the plugin
+    // identity across sessions. Without these, a persisted session
+    // can't re-locate a sandboxed plugin by ID — only by file path.
+    obj->setProperty("uniqueId", (int)desc.uniqueId);
+    obj->setProperty("deprecatedUid", (int)desc.deprecatedUid);
     obj->setProperty("hasEditor", p.hasEditor());
     obj->setProperty("acceptsMidi", p.acceptsMidi());
     obj->setProperty("producesMidi", p.producesMidi());

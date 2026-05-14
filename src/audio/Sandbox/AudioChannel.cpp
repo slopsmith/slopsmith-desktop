@@ -303,6 +303,11 @@ bool AudioChannel::pushBlock(bool isOutputRing, const juce::AudioBuffer<float>& 
     uint64_t r = readIdx.load(std::memory_order_acquire);
     if (w - r >= impl->header->maxBlocks)
     {
+        // v1 shared writeIdx/readIdx pair means this counter is shared
+        // across both rings — a host-side input-push xrun and a sandbox-
+        // side output-push xrun both increment the same value. PR #2's
+        // per-direction indices split will give us per-ring counters so
+        // diagnosis can pin back-pressure to the upstream side.
         atomicAt(impl->header->xruns).fetch_add(1, std::memory_order_relaxed);
         return false;
     }

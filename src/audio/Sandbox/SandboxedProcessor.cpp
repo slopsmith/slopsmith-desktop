@@ -247,6 +247,15 @@ bool SandboxedProcessor::initialise(juce::String& errorOut)
                         wireFOI.isNotEmpty() ? wireFOI : spawnConfig.pluginPath;
                     descriptionCached.pluginFormatName =
                         wireFmt.isNotEmpty() ? wireFmt : juce::String("VST3");
+                    // uniqueId + deprecatedUid are critical for SignalChain
+                    // persistence: a saved session re-locates plugins by
+                    // identity, not by file path. Without these, sandboxed
+                    // plugins wouldn't survive a session save/load round-
+                    // trip across host machines (where file paths differ).
+                    descriptionCached.uniqueId =
+                        (int)data.getProperty("uniqueId", 0);
+                    descriptionCached.deprecatedUid =
+                        (int)data.getProperty("deprecatedUid", 0);
                 }
                 hasEditorCached    = (bool)data.getProperty("hasEditor", false);
                 acceptsMidiCached  = (bool)data.getProperty("acceptsMidi", false);
