@@ -227,9 +227,20 @@ bool AudioChannel::openSandboxSide(const Names& names, juce::String& errorOut)
         + uint64_t(impl->header->maxBlocks) * impl->header->ringBytesPerSlot;
     const uint64_t midiEnd = impl->header->midiQueueOffset
         + uint64_t(impl->header->maxBlocks) * sizeof(MidiQueue);
-    if (inEnd > expectedTotal || outEnd > expectedTotal || midiEnd > expectedTotal)
+    // Bounds check: each region must fit within the mapping. Ordering
+    // check: regions must not overlap each other or the header. A
+    // malformed host header that satisfies magic + version + caps but
+    // reports e.g. midiQueueOffset == inputRingOffset would otherwise
+    // pass bounds yet silently corrupt audio/MIDI on every block. The
+    // canonical layout from createHostSide is: [header][input][output][midi].
+    if (inEnd > expectedTotal
+        || outEnd > expectedTotal
+        || midiEnd > expectedTotal
+        || impl->header->inputRingOffset  < sizeof(AudioShmHeader)
+        || impl->header->outputRingOffset < inEnd
+        || impl->header->midiQueueOffset  < outEnd)
     {
-        errorOut = "audio shm ring/MIDI offsets out of bounds";
+        errorOut = "audio shm ring/MIDI offsets out of bounds or overlapping";
         close();
         return false;
     }
@@ -495,13 +506,12 @@ bool AudioChannel::pushInputBlock(const juce::AudioBuffer<float>& src,
     // than silently truncating audio + dropping MIDI in [maxSamples,
     // numSamples) into midiOverflows. Spawn-cap validation in kPrepare /
     // kSetBlockSize should prevent this; if it ever fires the caller
-    // gets a `false` return (xruns is the wrong counter — bump dropouts
-    // so this misuse is visible without conflating with ring-full).
+    // gets a `false` return — that's the diagnostic. Don't bump dropouts
+    // (it means "real audio dropout / missed deadline") or xruns (means
+    // "destination ring was full"); caller misuse is its own class and
+    // conflating them muddles operator-facing metrics.
     if (numSamples > (int)impl->header->maxBlockSamples)
-    {
-        atomicAt(impl->header->dropouts).fetch_add(1, std::memory_order_relaxed);
         return false;
-    }
 
     auto writeIdx = atomicAt(impl->header->inWriteIdx);
     auto readIdx  = atomicAt(impl->header->inReadIdx);
@@ -643,12 +653,10 @@ bool AudioChannel::popInputBlock(juce::AudioBuffer<float>& dst,
     // about the misuse via the false return rather than getting silently
     // truncated audio. Don't advance inReadIdx — the producer's slot
     // stays full until the consumer corrects its numSamples (or the host
-    // tears down). bumps dropouts so the misuse is visible.
+    // tears down). Don't bump dropouts — caller misuse is its own class;
+    // see the matching comment in pushInputBlock.
     if (numSamples > (int)impl->header->maxBlockSamples)
-    {
-        atomicAt(impl->header->dropouts).fetch_add(1, std::memory_order_relaxed);
         return false;
-    }
 
     HANDLE evt = impl->evtToSandbox;
     auto writeIdx = atomicAt(impl->header->inWriteIdx);

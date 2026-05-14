@@ -49,6 +49,9 @@ using namespace slopsmith::sandbox;
 
 // Forward decl so the dispatchRequest anonymous-namespace block can log; the
 // real definition lives at the bottom of the file with the FILE* it owns.
+// `static` (TU-local) is intentional — keep the declaration AND the
+// definition in sync if hostLogf ever gets pulled into a separate header
+// (drop both `static` qualifiers, then declare in the header instead).
 static void hostLogf(const char* fmt, ...);
 
 namespace {
@@ -699,9 +702,10 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
             // and prepared.store(true) of an in-flight kPrepare /
             // kSetBlockSize. Today the control I/O thread serialises
             // dispatches so the in-flight window is unreachable from this
-            // dispatch; the error message reflects the practically-reachable
-            // case. If a future dispatch model parallelises this, revisit.
-            reply(false, {}, "prepare not called");
+            // dispatch — but using "plugin not prepared" rather than
+            // "prepare not called" keeps the message accurate in both
+            // regimes if a future dispatch model parallelises requests.
+            reply(false, {}, "plugin not prepared");
             return;
         }
         // Read as double first then narrow — JSON-deserialised juce::var could

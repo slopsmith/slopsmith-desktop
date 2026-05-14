@@ -287,22 +287,13 @@ void testNumSamplesOverCapRejected()
     juce::MidiBuffer midi;
     midi.addEvent(juce::MidiMessage::noteOn(1, 60, (juce::uint8)100), 50);
 
-    HeaderPeek peek{pair.names.shm};
-    REQUIRE(peek.hdr != nullptr);
-    const uint64_t dropoutsBefore = std::atomic_ref<uint64_t>(
-        const_cast<uint64_t&>(peek.hdr->dropouts))
-            .load(std::memory_order_relaxed);
-
     // Caller passes numSamples=256 but spawn cap is 128. Old behavior was
     // silently truncate audio + drop MIDI in [128, 256). New behavior:
-    // return false up front, bump dropouts, so the misuse is visible to
-    // the caller instead of silently lossy.
+    // return false up front so the misuse is visible to the caller. No
+    // shm counter is bumped (caller misuse is a distinct class from
+    // real-dropout / ring-full, and dropouts/xruns are reserved for
+    // those — see the comment in pushInputBlock).
     CHECK(! pair.host.pushInputBlock(srcAudio, midi, 256));
-
-    const uint64_t dropoutsAfter = std::atomic_ref<uint64_t>(
-        const_cast<uint64_t&>(peek.hdr->dropouts))
-            .load(std::memory_order_relaxed);
-    CHECK(dropoutsAfter == dropoutsBefore + 1);
 }
 
 void testSlotReuseAcrossWraparound()
@@ -338,10 +329,20 @@ void testSlotReuseAcrossWraparound()
     // test). 5 is coprime with 4: slot 0 across cycles 0/4/8/12 sees
     // counts 0/4/3/2, so a stale count from the prior visit would mismatch.
     constexpr int kEventCountModulus = 5;
-    static_assert(kRingSize == 4 && (kEventCountModulus % 2) == 1,
-                  "kEventCountModulus must stay coprime with kRingSize "
-                  "(both these constants gate the test's ability to detect "
-                  "stale-count regressions)");
+    // Real coprimality check (not just oddness — those happen to coincide for
+    // kRingSize=4 because 4 = 2², but a future bump to e.g. 6 would let
+    // odd-but-not-coprime values like 9 silently slip through and defeat the
+    // stale-count detection).
+    constexpr auto gcd = [](int a, int b)
+    {
+        while (b != 0) { a %= b; auto t = a; a = b; b = t; }
+        return a;
+    };
+    static_assert(gcd((int)kRingSize, kEventCountModulus) == 1,
+                  "kEventCountModulus must stay coprime with kRingSize — "
+                  "otherwise each ring slot sees the same MIDI-event count "
+                  "on every wrap and the stale-count regression test "
+                  "becomes trivially-passing.");
     for (int i = 0; i < kCycles; ++i)
     {
         juce::MidiBuffer midi;
