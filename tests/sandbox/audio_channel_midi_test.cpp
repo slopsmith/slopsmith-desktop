@@ -145,7 +145,7 @@ void testRoundtripSmallBuffer()
     int n = 0;
     int frames[3] = {-1, -1, -1};
     juce::uint8 firstByte[3] = {0, 0, 0};
-    for (const auto meta : drained)
+    for (const auto& meta : drained)
     {
         if (n < 3) { frames[n] = meta.samplePosition;
                      firstByte[n] = meta.getMessage().getRawData()[0]; }
@@ -194,7 +194,7 @@ void testSysExBumpsOverflow()
     REQUIRE(pair.sandbox.popInputBlock(dstAudio, drained, 256, 1000));
 
     int n = 0;
-    for ([[maybe_unused]] const auto meta : drained) ++n;
+    for ([[maybe_unused]] const auto& meta : drained) ++n;
     CHECK(n == 1);  // SysEx dropped, CC survives.
 
     const uint64_t overflowsAfter = readMidiOverflows(peek.hdr);
@@ -228,7 +228,7 @@ void testOverCapBumpsOverflow()
     REQUIRE(pair.sandbox.popInputBlock(dstAudio, drained, 256, 1000));
 
     int n = 0;
-    for ([[maybe_unused]] const auto meta : drained) ++n;
+    for ([[maybe_unused]] const auto& meta : drained) ++n;
     CHECK(n == (int)kMidiEventsPerSlot);
 
     const uint64_t overflowsAfter = readMidiOverflows(peek.hdr);
@@ -266,7 +266,7 @@ void testFramePastSamplesDropped()
 
     int n = 0;
     int lastFrame = -1;
-    for (const auto meta : drained) { ++n; lastFrame = meta.samplePosition; }
+    for (const auto& meta : drained) { ++n; lastFrame = meta.samplePosition; }
     CHECK(n == 2);                    // events at 50 and 127
     CHECK(lastFrame == 127);          // 128 and 200 dropped, NOT clamped to 127
 
@@ -356,7 +356,7 @@ void testSlotReuseAcrossWraparound()
         REQUIRE(pair.sandbox.popInputBlock(dstAudio, drained, 256, 1000));
 
         int n = 0;
-        for ([[maybe_unused]] const auto meta : drained) ++n;
+        for ([[maybe_unused]] const auto& meta : drained) ++n;
         CHECK(n == eventCount);
     }
 }

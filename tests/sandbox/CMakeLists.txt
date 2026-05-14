@@ -61,7 +61,10 @@ set_target_properties(audio_channel_midi_test PROPERTIES
 # Register with CTest so `ctest --output-on-failure -C Release` from the
 # build directory runs the test as part of the standard test suite. The
 # enable_testing() call lives one level up in tests/CMakeLists.txt.
+# Pin WORKING_DIRECTORY to the binary's home so a future test that reads
+# fixtures from disk has a known cwd to resolve relative paths against.
 add_test(
     NAME audio_channel_midi_test
     COMMAND audio_channel_midi_test
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:audio_channel_midi_test>"
 )
