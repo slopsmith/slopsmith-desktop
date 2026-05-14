@@ -36,6 +36,13 @@ void check(bool cond, const char* what, const char* file, int line)
 
 #define CHECK(cond) check((cond), #cond, __FILE__, __LINE__)
 
+// REQUIRE = fatal CHECK: bails the current test on failure so a busted
+// setup precondition (e.g., HeaderPeek failing to open the mapping) doesn't
+// cascade into a NULL deref + a barrage of misleading follow-on failures.
+// Use for everything that subsequent test lines dereference / depend on.
+#define REQUIRE(cond) \
+    do { if (!(cond)) { check(false, #cond, __FILE__, __LINE__); return; } } while (0)
+
 // Reach into the shm header via the host's createHostSide-time mapping name
 // to read midiOverflows. Both ends of the AudioChannel point at the same
 // shared mapping, so any read off either side gives the same value — we use
@@ -103,7 +110,7 @@ void testRoundtripSmallBuffer()
     std::printf("test: roundtrip small MidiBuffer (count, frames, bytes)\n");
     AudioDimensions dims;            // defaults: 4 blocks × 1024 samples × 2 ch
     ChannelPair pair{dims};
-    CHECK(pair.ok);
+    REQUIRE(pair.ok);
 
     juce::AudioBuffer<float> srcAudio((int)dims.maxChannels, 256);
     srcAudio.clear();
@@ -114,8 +121,8 @@ void testRoundtripSmallBuffer()
     midi.addEvent(juce::MidiMessage::noteOff(1, 60), 200);
 
     HeaderPeek peek{pair.names.shm};
-    CHECK(peek.hdr != nullptr);
-    const uint64_t overflowsBefore = peek.hdr ? readMidiOverflows(peek.hdr) : 0;
+    REQUIRE(peek.hdr != nullptr);
+    const uint64_t overflowsBefore = readMidiOverflows(peek.hdr);
 
     CHECK(pair.host.pushInputBlock(srcAudio, midi, 256));
 
@@ -151,7 +158,7 @@ void testSysExBumpsOverflow()
     std::printf("test: SysEx-sized event drops + bumps midiOverflows\n");
     AudioDimensions dims;
     ChannelPair pair{dims};
-    CHECK(pair.ok);
+    REQUIRE(pair.ok);
 
     juce::AudioBuffer<float> srcAudio((int)dims.maxChannels, 256);
     srcAudio.clear();
@@ -163,6 +170,7 @@ void testSysExBumpsOverflow()
     midi.addEvent(juce::MidiMessage::controllerEvent(1, 7, 64), 100);
 
     HeaderPeek peek{pair.names.shm};
+    REQUIRE(peek.hdr != nullptr);
     const uint64_t overflowsBefore = readMidiOverflows(peek.hdr);
 
     CHECK(pair.host.pushInputBlock(srcAudio, midi, 256));
@@ -184,7 +192,7 @@ void testOverCapBumpsOverflow()
     std::printf("test: events past kMidiEventsPerSlot drop + bump overflows\n");
     AudioDimensions dims;
     ChannelPair pair{dims};
-    CHECK(pair.ok);
+    REQUIRE(pair.ok);
 
     juce::AudioBuffer<float> srcAudio((int)dims.maxChannels, 256);
     srcAudio.clear();
@@ -196,6 +204,7 @@ void testOverCapBumpsOverflow()
         midi.addEvent(juce::MidiMessage::controllerEvent(1, 7, i & 0x7F), i % 256);
 
     HeaderPeek peek{pair.names.shm};
+    REQUIRE(peek.hdr != nullptr);
     const uint64_t overflowsBefore = readMidiOverflows(peek.hdr);
 
     CHECK(pair.host.pushInputBlock(srcAudio, midi, 256));
@@ -218,7 +227,7 @@ void testFramePastSamplesDropped()
     AudioDimensions dims;
     dims.maxBlockSamples = 128;       // tighter cap to make the truncation real
     ChannelPair pair{dims};
-    CHECK(pair.ok);
+    REQUIRE(pair.ok);
 
     juce::AudioBuffer<float> srcAudio((int)dims.maxChannels, 256);
     srcAudio.clear();
@@ -232,6 +241,7 @@ void testFramePastSamplesDropped()
     midi.addEvent(juce::MidiMessage::noteOn(1, 63, (juce::uint8)100), 200);  // out-of-range
 
     HeaderPeek peek{pair.names.shm};
+    REQUIRE(peek.hdr != nullptr);
     const uint64_t overflowsBefore = readMidiOverflows(peek.hdr);
 
     CHECK(pair.host.pushInputBlock(srcAudio, midi, 256));
