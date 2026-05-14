@@ -121,11 +121,11 @@ void testRoundtripSmallBuffer()
     REQUIRE(peek.hdr != nullptr);
     const uint64_t overflowsBefore = readMidiOverflows(peek.hdr);
 
-    CHECK(pair.host.pushInputBlock(srcAudio, midi, 256));
+    REQUIRE(pair.host.pushInputBlock(srcAudio, midi, 256));
 
     juce::AudioBuffer<float> dstAudio((int)dims.maxChannels, 256);
     juce::MidiBuffer drained;
-    CHECK(pair.sandbox.popInputBlock(dstAudio, drained, 256, /*timeoutMs*/ 1000));
+    REQUIRE(pair.sandbox.popInputBlock(dstAudio, drained, 256, /*timeoutMs*/ 1000));
 
     int n = 0;
     int frames[3] = {-1, -1, -1};
@@ -172,11 +172,11 @@ void testSysExBumpsOverflow()
     REQUIRE(peek.hdr != nullptr);
     const uint64_t overflowsBefore = readMidiOverflows(peek.hdr);
 
-    CHECK(pair.host.pushInputBlock(srcAudio, midi, 256));
+    REQUIRE(pair.host.pushInputBlock(srcAudio, midi, 256));
 
     juce::AudioBuffer<float> dstAudio((int)dims.maxChannels, 256);
     juce::MidiBuffer drained;
-    CHECK(pair.sandbox.popInputBlock(dstAudio, drained, 256, 1000));
+    REQUIRE(pair.sandbox.popInputBlock(dstAudio, drained, 256, 1000));
 
     int n = 0;
     for ([[maybe_unused]] const auto meta : drained) ++n;
@@ -206,11 +206,11 @@ void testOverCapBumpsOverflow()
     REQUIRE(peek.hdr != nullptr);
     const uint64_t overflowsBefore = readMidiOverflows(peek.hdr);
 
-    CHECK(pair.host.pushInputBlock(srcAudio, midi, 256));
+    REQUIRE(pair.host.pushInputBlock(srcAudio, midi, 256));
 
     juce::AudioBuffer<float> dstAudio((int)dims.maxChannels, 256);
     juce::MidiBuffer drained;
-    CHECK(pair.sandbox.popInputBlock(dstAudio, drained, 256, 1000));
+    REQUIRE(pair.sandbox.popInputBlock(dstAudio, drained, 256, 1000));
 
     int n = 0;
     for ([[maybe_unused]] const auto meta : drained) ++n;
@@ -243,11 +243,11 @@ void testFramePastSamplesDropped()
     REQUIRE(peek.hdr != nullptr);
     const uint64_t overflowsBefore = readMidiOverflows(peek.hdr);
 
-    CHECK(pair.host.pushInputBlock(srcAudio, midi, 128));
+    REQUIRE(pair.host.pushInputBlock(srcAudio, midi, 128));
 
     juce::AudioBuffer<float> dstAudio((int)dims.maxChannels, 128);
     juce::MidiBuffer drained;
-    CHECK(pair.sandbox.popInputBlock(dstAudio, drained, 128, 1000));
+    REQUIRE(pair.sandbox.popInputBlock(dstAudio, drained, 128, 1000));
 
     int n = 0;
     int lastFrame = -1;
@@ -298,7 +298,12 @@ void testSlotReuseAcrossWraparound()
     // count store on a slot whose prior cycle had MIDI events, the next
     // pop would replay those stale events against the fresh audio.
     std::printf("test: slot reuse across ring wrap-around (no MIDI leakage)\n");
-    AudioDimensions dims;             // defaults: 4 blocks × 1024 samples × 2 ch
+    AudioDimensions dims;
+    // Pin maxBlocks explicitly: the modulus-coprime reasoning below depends
+    // on it. If AudioDimensions{}'s default ever changes, this test would
+    // silently stop exercising the slot-reuse-with-different-counts property.
+    constexpr uint32_t kRingSize = 4;
+    dims.maxBlocks = kRingSize;
     ChannelPair pair{dims};
     REQUIRE(pair.ok);
 
@@ -317,8 +322,11 @@ void testSlotReuseAcrossWraparound()
     // make each slot see the same count on every wrap (defeating the
     // test). 5 is coprime with 4: slot 0 across cycles 0/4/8/12 sees
     // counts 0/4/3/2, so a stale count from the prior visit would mismatch.
-    static_assert(5 > 0, "modulus must be > 0");  // sanity
     constexpr int kEventCountModulus = 5;
+    static_assert(kRingSize == 4 && (kEventCountModulus % 2) == 1,
+                  "kEventCountModulus must stay coprime with kRingSize "
+                  "(both these constants gate the test's ability to detect "
+                  "stale-count regressions)");
     for (int i = 0; i < kCycles; ++i)
     {
         juce::MidiBuffer midi;
