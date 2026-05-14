@@ -590,10 +590,17 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
     if (op == op::kPrepare)
     {
         // Require a loaded plugin so a misordered host call (kPrepare before
-        // anything is loaded — today loadPlugin happens at WinMain and is
-        // mandatory before control.start, so this should never happen) is
-        // loud rather than a silent ok with skipped prepareToPlay. Mirrors
-        // the no-plugin guards in kSetBlockSize / kSetState / kSetParameter.
+        // anything is loaded) is loud rather than a silent ok with skipped
+        // prepareToPlay. Mirrors the no-plugin guards in kSetBlockSize /
+        // kSetState / kSetParameter.
+        //
+        // Today this branch is unreachable: WinMain runs loadPlugin BEFORE
+        // control.start, and dispatchRequest only fires after the I/O
+        // thread is alive. The "no plugin loaded" wording is the same as
+        // the other ops for consistency; the more accurate description for
+        // a future-reachable path would be "loadPlugin failed before
+        // kPrepare". If a future code path detaches plugin loading from
+        // spawn (e.g. lazy-load on first kPrepare), revisit the message.
         if (!st.plugin)
         {
             reply(false, {}, "no plugin loaded");

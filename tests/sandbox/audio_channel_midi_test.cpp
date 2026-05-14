@@ -290,6 +290,54 @@ void testNumSamplesOverCapRejected()
     CHECK(dropoutsAfter == dropoutsBefore + 1);
 }
 
+void testSlotReuseAcrossWraparound()
+{
+    // Push/pop more blocks than the ring has slots so each slot is used
+    // multiple times. Catches a regression in the "count is always
+    // overwritten on push" invariant — if pushInputBlock ever skipped the
+    // count store on a slot whose prior cycle had MIDI events, the next
+    // pop would replay those stale events against the fresh audio.
+    std::printf("test: slot reuse across ring wrap-around (no MIDI leakage)\n");
+    AudioDimensions dims;             // defaults: 4 blocks × 1024 samples × 2 ch
+    ChannelPair pair{dims};
+    REQUIRE(pair.ok);
+
+    juce::AudioBuffer<float> srcAudio((int)dims.maxChannels, 256);
+    srcAudio.clear();
+    juce::AudioBuffer<float> dstAudio((int)dims.maxChannels, 256);
+
+    // Run enough cycles for every slot to be reused multiple times.
+    // 3*maxBlocks + 2 = 14 cycles with maxBlocks=4 means each slot is hit
+    // 3 or 4 times.
+    const int kCycles = 3 * (int)dims.maxBlocks + 2;
+
+    // Vary the MIDI count per block so a leaked stale count from a prior
+    // cycle on the SAME slot would show up as a wrong-count assertion.
+    // Modulus must be COPRIME with maxBlocks (4) — using `i % 4` would
+    // make each slot see the same count on every wrap (defeating the
+    // test). 5 is coprime with 4: slot 0 across cycles 0/4/8/12 sees
+    // counts 0/4/3/2, so a stale count from the prior visit would mismatch.
+    static_assert(5 > 0, "modulus must be > 0");  // sanity
+    constexpr int kEventCountModulus = 5;
+    for (int i = 0; i < kCycles; ++i)
+    {
+        juce::MidiBuffer midi;
+        const int eventCount = i % kEventCountModulus;   // 0, 1, 2, 3, 4, 0, 1, ...
+        for (int e = 0; e < eventCount; ++e)
+            midi.addEvent(juce::MidiMessage::controllerEvent(1, 7, e * 16),
+                          e * 32);
+
+        REQUIRE(pair.host.pushInputBlock(srcAudio, midi, 256));
+
+        juce::MidiBuffer drained;
+        REQUIRE(pair.sandbox.popInputBlock(dstAudio, drained, 256, 1000));
+
+        int n = 0;
+        for ([[maybe_unused]] const auto meta : drained) ++n;
+        CHECK(n == eventCount);
+    }
+}
+
 } // namespace
 
 int main()
@@ -300,6 +348,7 @@ int main()
     testOverCapBumpsOverflow();
     testFramePastSamplesDropped();
     testNumSamplesOverCapRejected();
+    testSlotReuseAcrossWraparound();
     std::printf("\n%d passed, %d failed\n", g_passed, g_failed);
     return g_failed == 0 ? 0 : 1;
 }
