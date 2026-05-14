@@ -510,6 +510,14 @@ bool AudioChannel::pushInputBlock(const juce::AudioBuffer<float>& src,
     // (it means "real audio dropout / missed deadline") or xruns (means
     // "destination ring was full"); caller misuse is its own class and
     // conflating them muddles operator-facing metrics.
+    //
+    // jassert in debug + return false in release — same fail-fast pattern
+    // as pushBlock(isOutputRing). Today the only producer
+    // (SandboxedProcessor::processBlock) bounds numSamples to JUCE's
+    // negotiated block size, so this branch is unreachable in practice;
+    // the assert flags any future caller that introduces a path where it
+    // becomes reachable.
+    jassert(numSamples <= (int)impl->header->maxBlockSamples);
     if (numSamples > (int)impl->header->maxBlockSamples)
         return false;
 
@@ -655,6 +663,12 @@ bool AudioChannel::popInputBlock(juce::AudioBuffer<float>& dst,
     // stays full until the consumer corrects its numSamples (or the host
     // tears down). Don't bump dropouts — caller misuse is its own class;
     // see the matching comment in pushInputBlock.
+    //
+    // jassert + return false: today's only consumer (runAudioThread
+    // calls with currentBlockSize = jlimit(1, bufferCap, ...)) makes
+    // this branch unreachable; the assert flags any future caller that
+    // changes that.
+    jassert(numSamples <= (int)impl->header->maxBlockSamples);
     if (numSamples > (int)impl->header->maxBlockSamples)
         return false;
 
@@ -731,6 +745,16 @@ bool AudioChannel::popInputBlock(juce::AudioBuffer<float>& dst,
 
 void AudioChannel::signalSandboxWake()
 {
+    // The `if (impl->evtToSandbox)` guard is non-atomic, so a concurrent
+    // close() racing this call could in principle observe a freed handle.
+    // Today's call paths (AudioPauseGuard ctor + dispatchRequest's
+    // kShutdown / disconnect callback) all run on the control thread, and
+    // close() runs on the WinMain thread only after audioThread.join() +
+    // control.stop() — both of which guarantee no in-flight signalSandboxWake
+    // can be racing. If a future caller invokes signalSandboxWake from a
+    // path that doesn't hold those teardown invariants, this guard needs
+    // upgrading (e.g. an atomic<HANDLE> swapped to nullptr by close()
+    // before CloseHandle, with the SetEvent guarded by the swap result).
     if (impl->evtToSandbox) SetEvent(impl->evtToSandbox);
 }
 

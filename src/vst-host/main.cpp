@@ -381,6 +381,20 @@ struct AudioPauseGuard
             return;
         }
         active = true;
+        // Synchronisation invariant: this constructor + the destructor
+        // each clear `audioPauseRequested` exactly once and signal
+        // `audioResume` once. The two-level loop in runAudioThread (outer
+        // `while (running)` + inner `while (audioPauseRequested && running)`)
+        // tolerates that pattern because the inner loop's `ackedThisPause`
+        // flag re-acks on every fresh request — a back-to-back guard B
+        // arriving while the worker is still in the inner loop just sets
+        // the flag back to true, and the worker re-acks on the next pass.
+        // The two transient flag flips on the control thread and the
+        // worker's two-level loop synchronise correctly only because the
+        // control I/O thread serialises dispatches today (no two guards
+        // ever race). A future parallel-dispatch refactor would need to
+        // serialise pause-guarded ops some other way (a control-thread
+        // mutex, request batching, etc.) before this assumption holds.
     }
     ~AudioPauseGuard()
     {
@@ -670,6 +684,13 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
         // processBlock fires. Acceptable failure mode; document but don't
         // wrap in try/catch (which would mask the bug).
         st.plugin->prepareToPlay(sr, bs);
+        // Read latencySamples while still inside the pause window — some
+        // plugins recompute it inside prepareToPlay AND mutate it from
+        // their processBlock hot path; reading before `prepared=true` (so
+        // the worker can't yet enter processBlock) is the strict-safe
+        // ordering. JUCE's getter is generally thread-safe, but we have
+        // exclusive access here regardless.
+        const int latency = st.plugin->getLatencySamples();
         // Order matters: republish `prepared=true` AFTER prepareToPlay
         // returns so the audio worker (which gates on `prepared`) never
         // sees the flag before the plugin is actually ready. release-store
@@ -679,7 +700,7 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
         // off the result object so the schema stays uniform across ops
         // (kOpenEditor/kGetState/etc. don't double up either).
         juce::DynamicObject::Ptr res(new juce::DynamicObject());
-        res->setProperty("latencySamples", st.plugin->getLatencySamples());
+        res->setProperty("latencySamples", latency);
         reply(true, juce::var(res.get()));
     }
     else if (op == op::kSetBlockSize)
