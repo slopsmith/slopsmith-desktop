@@ -736,15 +736,28 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         const int pIn  = st.plugin->getTotalNumInputChannels();
         const int pOut = st.plugin->getTotalNumOutputChannels();
         const int pMax = juce::jmax(pIn, pOut);
+        // The SHM ring width is fixed at spawn time by the host
+        // (SandboxFactory_win::tryLoadSandboxed currently hardcodes 2).
+        // If the plugin reports more channels than the ring can carry,
+        // pushBlock/popBlock would silently truncate (capping at
+        // header->maxChannels), so the plugin would see zero-padded
+        // input on its extra channels and the host would never see the
+        // extra output. Fail closed instead. The proper fix is the
+        // BusesProperties refactor where the host learns the plugin's
+        // channel count BEFORE allocating the SHM (deferred).
+        const int shmCh = (int)st.audio.dims().maxChannels;
+        if (pMax > shmCh)
+        {
+            hostLogf("plugin reports %d channels (max in/out), exceeding "
+                     "SHM ring width %d — refusing to start (deferred: "
+                     "BusesProperties refactor sizes SHM from plugin)",
+                     pMax, shmCh);
+            st.control.sendEvent(event::kGoodbye, {});
+            return 5;
+        }
         if (pMax > (int)kAudioMaxChannels)
         {
-            // Fail closed rather than truncating. Starting the audio
-            // worker with fewer channels than the plugin declared would
-            // misalign the processBlock buffer vs the plugin's expected
-            // topology — extra channels get dropped at best, and some
-            // plugins assert / crash on the mismatch.
-            hostLogf("plugin reports %d channels (max in/out), exceeding "
-                     "sandbox protocol cap %d — refusing to start",
+            hostLogf("plugin reports %d channels, exceeding protocol cap %d",
                      pMax, (int)kAudioMaxChannels);
             st.control.sendEvent(event::kGoodbye, {});
             return 5;
