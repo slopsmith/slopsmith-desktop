@@ -485,17 +485,30 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
             reply(false, {}, "no plugin loaded");
             return;
         }
-        const int idx = (int)args.getProperty("index", -1);
-        const float val = (float)(double)args.getProperty("value", 0.0);
+        // Read as double + validate finiteness/range BEFORE narrowing to
+        // int/float. Same UB class as the kPrepare sampleRate/blockSize
+        // fix — JSON-derived NaN or out-of-int-range double would invoke
+        // UB at the `(int)` / `(float)` cast before any bounds check.
+        const double idxd = (double)args.getProperty("index", -1);
+        const double vald = (double)args.getProperty("value", 0.0);
         auto params = st.plugin->getParameters();
-        if (idx < 0 || idx >= params.size() || !std::isfinite(val))
+        if (! std::isfinite(idxd)
+            || idxd < 0.0
+            || idxd > (double)(std::numeric_limits<int>::max)()
+            || ! std::isfinite(vald))
+        {
+            reply(false, {}, "invalid parameter index/value");
+            return;
+        }
+        const int idx = (int)idxd;
+        if (idx >= params.size())
         {
             reply(false, {}, "invalid parameter index/value");
             return;
         }
         // JUCE parameters expect [0, 1] — clamp rather than reject so a
         // slightly-out-of-range automation curve doesn't fail the request.
-        params[idx]->setValue(juce::jlimit(0.0f, 1.0f, val));
+        params[idx]->setValue((float)juce::jlimit(0.0, 1.0, vald));
         reply(true, {});
     }
     else if (op == op::kShutdown)
