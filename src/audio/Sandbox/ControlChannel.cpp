@@ -95,18 +95,29 @@ bool ControlChannel::connectClientSide(const juce::String& pipeName,
 bool ControlChannel::start(EventCallback evCb,
                             std::function<void(const juce::String&)> disconnectCb)
 {
+    lastStartError.clear();
     // Reassigning a joinable std::thread aborts via std::terminate, so refuse
     // a second start. Callers should stop() then re-create the channel.
     if (ioThread.joinable() || alive.load(std::memory_order_acquire))
+    {
+        lastStartError = "channel already started";
         return false;
+    }
     if (!impl || impl->pipe == INVALID_HANDLE_VALUE)
+    {
+        lastStartError = "no pipe handle (createServerSide/connectClientSide not called or failed)";
         return false;
+    }
 
     // Manual-reset so once stop() signals it, every subsequent wait inside
     // ioLoop returns immediately.
     impl->stopEvent = CreateEventW(nullptr, /*manualReset*/TRUE, FALSE, nullptr);
     if (impl->stopEvent == nullptr)
+    {
+        lastStartError = "CreateEventW(stopEvent) failed: GetLastError="
+                       + juce::String((int)GetLastError());
         return false;
+    }
 
     onEvent = std::move(evCb);
     onDisconnect = std::move(disconnectCb);

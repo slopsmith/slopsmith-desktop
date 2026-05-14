@@ -289,7 +289,7 @@ bool SandboxedProcessor::initialise(juce::String& errorOut)
 
     if (!control->start(eventCb, disconnectCb))
     {
-        errorOut = "control->start failed";
+        errorOut = "control->start failed: " + control->getLastStartError();
         return false;
     }
     if (!subprocess->start(spawnConfig.sandboxExePath, args,
@@ -344,12 +344,18 @@ bool SandboxedProcessor::initialise(juce::String& errorOut)
 
 void SandboxedProcessor::teardown(const juce::String& reason)
 {
-    const bool wasAlive = alive.exchange(false, std::memory_order_acq_rel);
+    alive.exchange(false, std::memory_order_acq_rel);
     // Copy under the mutex so a concurrent setOnCrash() can't race with
     // std::function's internals. Invoking happens later (outside the lock)
     // so a callback that re-enters setOnCrash doesn't deadlock.
+    //
+    // Invoke regardless of `wasAlive`: pre-ready failures (subprocess
+    // exits before handshake, plugin DLL fails to load → exit code 5)
+    // are exactly the case where an async caller most needs to know
+    // the sandbox died. Today initialise() also surfaces such failures
+    // via errorOut, but a future async-spawn caller that registers
+    // setOnCrash and then waits asynchronously needs the callback.
     CrashCallback cb;
-    if (wasAlive)
     {
         std::lock_guard<std::mutex> lock(onCrashMutex);
         cb = onCrash;
@@ -481,7 +487,17 @@ juce::AudioProcessorEditor* SandboxedProcessor::createEditor()
         return nullptr;
     juce::String err;
     auto result = control->request(op::kOpenEditor, {}, kDefaultReplyTimeoutMs, &err);
-    if (!result.isObject()) return nullptr;
+    if (!result.isObject())
+    {
+        // The request could have failed for a benign reason (timeout, channel
+        // disconnect, sandbox replied ok=false), but the sandbox may have
+        // completed the open on its side after we gave up. Mirror the
+        // null-HWND branch's best-effort cleanup so a sandbox-side editor
+        // isn't orphaned until the next successful open / kShutdown.
+        if (control)
+            control->postNoReply(op::kCloseEditor, {});
+        return nullptr;
+    }
 
     // The sandbox returns the HWND as a string ("0x...") because juce::var
     // doesn't carry 64-bit ints portably.

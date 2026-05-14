@@ -174,9 +174,14 @@ public:
     {
         // No buttons: the window is reparented into the Electron renderer
         // and the host controls open/close via op::kOpenEditor /
-        // op::kCloseEditor. A user-visible close button with a no-op
-        // handler would just look broken.
-        setUsingNativeTitleBar(true);
+        // op::kCloseEditor. JUCE-drawn title bar (NOT native) so
+        // buttonsNeeded=0 in the DocumentWindow ctor above actually takes
+        // effect — Windows' native title bar always renders min/max/close
+        // regardless of the buttonsNeeded flag, and a user click on the
+        // native close would fire closeButtonPressed() (default no-op
+        // here), producing the "looks broken" UX this class is trying to
+        // avoid.
+        setUsingNativeTitleBar(false);
         setResizable(true, false);
         setContentNonOwned(ed, true);
         // Size first, then move offscreen. centreWithSize() would otherwise
@@ -338,6 +343,7 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
             || sr > (double)(std::numeric_limits<int>::max)()
             || ! std::isfinite(bsd)
             || bsd <= 0.0
+            || std::floor(bsd) != bsd  // reject fractional: 256.5 → 256 silently changes effective size
             || bsd > (double)kAudioMaxBlockSamples)
         {
             reply(false, {}, "invalid prepare args: sr=" + juce::String(sr)
@@ -711,11 +717,24 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         const int pIn  = st.plugin->getTotalNumInputChannels();
         const int pOut = st.plugin->getTotalNumOutputChannels();
         const int pMax = juce::jmax(pIn, pOut);
+        if (pMax > (int)kAudioMaxChannels)
+        {
+            // Fail closed rather than truncating. Starting the audio
+            // worker with fewer channels than the plugin declared would
+            // misalign the processBlock buffer vs the plugin's expected
+            // topology — extra channels get dropped at best, and some
+            // plugins assert / crash on the mismatch.
+            hostLogf("plugin reports %d channels (max in/out), exceeding "
+                     "sandbox protocol cap %d — refusing to start",
+                     pMax, (int)kAudioMaxChannels);
+            st.control.sendEvent(event::kGoodbye, {});
+            return 5;
+        }
         if (pMax > 0 && pMax != st.channels)
         {
             hostLogf("channel count: spawn-arg=%d plugin-reported=%d (max in/out) — using plugin",
                      st.channels, pMax);
-            st.channels = juce::jmin(pMax, (int)kAudioMaxChannels);
+            st.channels = pMax;
         }
     }
     // Don't eagerly prepareToPlay here. The host always sends op::kPrepare
@@ -741,7 +760,8 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         teardownGuiOnMessageThread(st, /*postQuit=*/true);
     }))
     {
-        hostLogf("control channel start failed");
+        hostLogf("control channel start failed: %s",
+                 st.control.getLastStartError().toRawUTF8());
         // Same fast-fail signal as the loadPlugin failure path: best-effort
         // goodbye so the host doesn't burn its 30s handshake timeout.
         st.control.sendEvent(event::kGoodbye, {});

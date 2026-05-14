@@ -130,6 +130,20 @@ static Napi::Value Init(const Napi::CallbackInfo& info)
 
 static void doShutdown()
 {
+    // The latch is flipped at the TOP rather than the bottom so a
+    // re-entrant call (e.g. env-cleanup-hook firing while a JS-level
+    // shutdown is mid-flight) bails immediately rather than racing on
+    // the same teardown sequence. Assumed serialisation invariants:
+    //   - dispatchOnMessageThread is single-writer to engine/vstHost
+    //     (both unique_ptrs touched only here or from Init);
+    //   - stopJuceMessageThread is idempotent and safe to call when the
+    //     thread was never started (defensive checks inside).
+    // If a future caller mutates engine/vstHost between this latch and
+    // the dispatch (or the dispatch's 15s wait times out), THIS call's
+    // body may not finish before returning — but the re-entrant
+    // cleanup-hook will then no-op via the latch and the dispatch
+    // queue itself unwinds whatever's pending. Net result: at-most-
+    // once execution of the gated body, even under teardown races.
     bool expected = false;
     if (!alreadyShutDown.compare_exchange_strong(expected, true)) return;
 

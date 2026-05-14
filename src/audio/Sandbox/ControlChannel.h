@@ -55,9 +55,15 @@ public:
     bool connectClientSide(const juce::String& pipeName, juce::String& errorOut);
 
     // Start the background I/O thread. Must be called after either
-    // createServerSide() or connectClientSide().
+    // createServerSide() or connectClientSide(). Returns false on error;
+    // callers can read getLastStartError() for a diagnostic string.
     bool start(EventCallback onEvent,
                std::function<void(const juce::String& reason)> onDisconnect);
+
+    // Diagnostic reason for the most recent start() failure (re-start
+    // attempted, no pipe, CreateEventW failure). Empty if start succeeded
+    // or has not been called.
+    juce::String getLastStartError() const { return lastStartError; }
 
     void stop();
     bool isAlive() const noexcept { return alive.load(std::memory_order_acquire); }
@@ -119,6 +125,7 @@ private:
 
     std::mutex writeMutex;     // serialises outbound writes
     std::thread ioThread;
+    juce::String lastStartError;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ControlChannel)
 };
