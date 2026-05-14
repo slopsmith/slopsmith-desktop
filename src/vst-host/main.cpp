@@ -736,37 +736,43 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         const int pIn  = st.plugin->getTotalNumInputChannels();
         const int pOut = st.plugin->getTotalNumOutputChannels();
         const int pMax = juce::jmax(pIn, pOut);
-        // The SHM ring width is fixed at spawn time by the host
-        // (SandboxFactory_win::tryLoadSandboxed currently hardcodes 2).
-        // If the plugin reports more channels than the ring can carry,
-        // pushBlock/popBlock would silently truncate (capping at
-        // header->maxChannels), so the plugin would see zero-padded
-        // input on its extra channels and the host would never see the
-        // extra output. Fail closed instead. The proper fix is the
-        // BusesProperties refactor where the host learns the plugin's
-        // channel count BEFORE allocating the SHM (deferred).
         const int shmCh = (int)st.audio.dims().maxChannels;
-        if (pMax > shmCh)
-        {
-            hostLogf("plugin reports %d channels (max in/out), exceeding "
-                     "SHM ring width %d — refusing to start (deferred: "
-                     "BusesProperties refactor sizes SHM from plugin)",
-                     pMax, shmCh);
-            st.control.sendEvent(event::kGoodbye, {});
-            return 5;
-        }
         if (pMax > (int)kAudioMaxChannels)
         {
+            // Fail closed against the absolute protocol cap. A plugin
+            // reporting >kAudioMaxChannels means our protocol literally
+            // can't represent its topology.
             hostLogf("plugin reports %d channels, exceeding protocol cap %d",
                      pMax, (int)kAudioMaxChannels);
             st.control.sendEvent(event::kGoodbye, {});
             return 5;
         }
-        if (pMax > 0 && pMax != st.channels)
+        // The SHM ring width is fixed at spawn time (SandboxFactory_win
+        // currently hardcodes 2; cf. the deferred BusesProperties
+        // refactor that would size SHM from the plugin's reported
+        // topology). If the plugin reports more channels than the ring
+        // can carry, the audio worker runs with a clamped buffer:
+        // pushBlock/popBlock cap at header->maxChannels and the plugin
+        // sees zero-padded input on its extra channels. Today's only
+        // sandboxed plugin (Guitar Rig 6) reports 4-channel topology
+        // (sidechain) but works fine on 2-channel buffers, so clamping
+        // is the pragmatic choice — loudly logged so the limitation is
+        // visible in the diagnostic trail.
+        const int effective = juce::jmin(pMax, shmCh);
+        if (pMax > shmCh)
         {
-            hostLogf("channel count: spawn-arg=%d plugin-reported=%d (max in/out) — using plugin",
-                     st.channels, pMax);
-            st.channels = pMax;
+            hostLogf("WARNING: plugin reports %d channels but SHM ring width "
+                     "is %d — clamping to %d. Plugin's extra channels will "
+                     "see zero-padded input and their output will be dropped. "
+                     "Deferred fix: BusesProperties refactor sizes SHM from "
+                     "plugin topology.", pMax, shmCh, effective);
+        }
+        if (effective > 0 && effective != st.channels)
+        {
+            hostLogf("channel count: spawn-arg=%d effective=%d "
+                     "(plugin=%d, shm=%d)",
+                     st.channels, effective, pMax, shmCh);
+            st.channels = effective;
         }
     }
     // Don't eagerly prepareToPlay here. The host always sends op::kPrepare
