@@ -450,9 +450,15 @@ void SandboxedProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         // exit. xruns was incremented inside pushBlock. WARNING: with the
         // v1 shared writeIdx/readIdx pair (see SANDBOX-DESIGN §4 v2 split),
         // skipping the corresponding pop leaves the two rings phase-shifted
-        // for subsequent blocks. The per-direction-indices refactor in
-        // PR #2 fixes this cleanly; a v1 sandbox hitting back-pressure
-        // here will produce one block of stale output before recovering.
+        // by one block. Recovery is NOT automatic — `readIdx` keeps
+        // advancing on each successful pop, so the input/output streams
+        // stay desynchronised by one block until the next dropped push
+        // happens to re-align them (or a teardown re-initialises both
+        // indices). v1 sandbox under steady back-pressure will therefore
+        // produce persistently stale-by-one-block output, not just "one
+        // block of stale output before recovering" as previously
+        // documented. The per-direction-indices refactor in PR #2 splits
+        // input/output indices and fixes the alignment cleanly.
         VST_TRACE("[sandbox] processBlock: input ring full, dropping (xruns++)");
         buffer.clear();
         return;
@@ -482,7 +488,15 @@ juce::AudioProcessorEditor* SandboxedProcessor::createEditor()
     // nullptr rather than firing a second kOpenEditor that would queue
     // behind the first inside vst-host's dispatchRequest editor-request
     // serializer (10s wait + redundant editor creation in the sandbox).
-    // JUCE's contract permits returning nullptr; callers handle it.
+    //
+    // Caller contract: JUCE's AudioProcessor::createEditor may return
+    // nullptr at any time per its docs; SignalChain treats that as
+    // "this slot has no UI right now" and disables the slot's editor
+    // control. A nullptr return AFTER hasEditor() returned true is
+    // unusual but legal — callers must not crash on it. If a future
+    // host treats `createEditor() == nullptr` after `hasEditor() ==
+    // true` as a hard error, the right fix is to close the existing
+    // editor first via notifyEditorClosing(); revisit then.
     if (editorOpen.load(std::memory_order_acquire))
         return nullptr;
     juce::String err;

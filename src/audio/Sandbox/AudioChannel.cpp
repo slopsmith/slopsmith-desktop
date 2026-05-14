@@ -12,7 +12,6 @@ struct AudioChannel::Impl
 {
     HANDLE mapping = nullptr;
     void*  view = nullptr;
-    size_t viewBytes = 0;
     HANDLE evtToHost = nullptr;
     HANDLE evtToSandbox = nullptr;
     AudioShmHeader* header = nullptr;
@@ -54,7 +53,6 @@ bool AudioChannel::createHostSide(const AudioDimensions& dims, Names& namesOut,
         close();
         return false;
     }
-    impl->viewBytes = (size_t)totalBytes;
     impl->header = reinterpret_cast<AudioShmHeader*>(impl->view);
 
     // Initialise the header on the host side.

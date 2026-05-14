@@ -333,7 +333,17 @@ bool ControlChannel::readFrame(juce::MemoryBlock& out)
     }
     out.setSize(lenLE, false);
     if (lenLE == 0) return true;
-    if (!overlappedTransfer(impl->pipe, false, out.getData(), (DWORD)lenLE))
+    // Finite body timeout. Once the 4-byte length prefix has arrived, the
+    // peer is committed to sending lenLE more bytes; INFINITE on the body
+    // read would wedge the I/O thread indefinitely if a buggy/malicious
+    // peer wrote the prefix and stalled. 30s is generous for the largest
+    // legitimate frame (state-restore can be a few MB through a slow link)
+    // while bounding the DoS window. On timeout, GetLastError surfaces as
+    // ERROR_OPERATION_ABORTED via the helper's CancelIoEx path → ioLoop
+    // maps that to kReasonReadError and tears down the channel cleanly.
+    constexpr DWORD kBodyReadTimeoutMs = 30000;
+    if (!overlappedTransfer(impl->pipe, false, out.getData(),
+                            (DWORD)lenLE, kBodyReadTimeoutMs))
     {
         lastReadError = GetLastError();
         CTL_TRACE("readFrame: ReadFile(body len=%lu) failed err=%lu",

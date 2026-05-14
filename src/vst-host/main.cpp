@@ -154,14 +154,29 @@ bool parseArgs(int argc, wchar_t** argv, Args& out, juce::String& whyFailed)
     if (out.audio.shm.isEmpty())         { whyFailed = "missing --audio-shm"; return false; }
     if (out.audio.evtToHost.isEmpty())   { whyFailed = "missing --audio-event-out"; return false; }
     if (out.audio.evtToSandbox.isEmpty()){ whyFailed = "missing --audio-event-in"; return false; }
-    if (out.sampleRate <= 0) { whyFailed = "invalid --sample-rate=" + juce::String(out.sampleRate); return false; }
-    if (out.maxBlock <= 0 || out.maxBlock > (int)kAudioMaxBlockSamples)
+    // parseStrictPositiveInt above already rejects zero/negative values, so
+    // the `<= 0` checks would never fire — strengthen to sane minimums
+    // instead. A `--max-block 1` spawn would technically pass the >0
+    // check and produce a 1-sample audio buffer; require at least 16
+    // samples (the smallest block size any DAW realistically uses).
+    if (out.sampleRate < 8000)
     {
-        whyFailed = "invalid --max-block=" + juce::String(out.maxBlock)
-                  + " (cap=" + juce::String((int)kAudioMaxBlockSamples) + ")";
+        whyFailed = "invalid --sample-rate=" + juce::String(out.sampleRate)
+                  + " (min=8000)";
         return false;
     }
-    if (out.channels   <= 0) { whyFailed = "invalid --channels="    + juce::String(out.channels);   return false; }
+    if (out.maxBlock < 16 || out.maxBlock > (int)kAudioMaxBlockSamples)
+    {
+        whyFailed = "invalid --max-block=" + juce::String(out.maxBlock)
+                  + " (min=16 cap=" + juce::String((int)kAudioMaxBlockSamples) + ")";
+        return false;
+    }
+    if (out.channels > (int)kAudioMaxChannels)
+    {
+        whyFailed = "invalid --channels=" + juce::String(out.channels)
+                  + " (cap=" + juce::String((int)kAudioMaxChannels) + ")";
+        return false;
+    }
     return true;
 }
 
@@ -504,13 +519,17 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
             || std::floor(idxd) != idxd   // reject fractional indices: 1.9 → 1 would silently mutate the wrong parameter
             || ! std::isfinite(vald))
         {
-            reply(false, {}, "invalid parameter index/value");
+            reply(false, {}, "non-finite or non-integer parameter index/value: "
+                             "idx=" + juce::String(idxd)
+                           + " val=" + juce::String(vald));
             return;
         }
         const int idx = (int)idxd;
         if (idx >= params.size())
         {
-            reply(false, {}, "invalid parameter index/value");
+            reply(false, {}, "parameter index out of range: idx="
+                           + juce::String(idx)
+                           + " size=" + juce::String(params.size()));
             return;
         }
         // JUCE parameters expect [0, 1] — clamp rather than reject so a

@@ -32,8 +32,19 @@ const watchdog = setTimeout(() => {
 
 function failExit(msg) {
     if (msg) console.log('[test] FAIL:', msg);
+    // addon.shutdown blocks on dispatchOnMessageThread (up to 15s) if
+    // JUCE init partially succeeded; an init-failure path that triggered
+    // *because* the message thread never came up would then time out
+    // before the process exits. Cap with a hard process.exit timer so a
+    // hung shutdown can't extend the failure window beyond 3s.
+    const hardKill = setTimeout(() => {
+        console.error('[test] FAIL: addon.shutdown hung, force-exiting');
+        process.exit(2);
+    }, 3000);
+    hardKill.unref();
     try { addon.shutdown(); } catch (_) {}
     try { clearTimeout(watchdog); } catch (_) {}
+    try { clearTimeout(hardKill); } catch (_) {}
     process.exit(1);
 }
 

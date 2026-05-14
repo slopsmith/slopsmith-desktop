@@ -831,9 +831,14 @@ static Napi::Value LoadVST(const Napi::CallbackInfo& info)
         juce::PluginDescription probeDesc;
         probeDesc.fileOrIdentifier = juce::String(pluginPath);
         // We haven't scanned the plugin yet, so manufacturer/UID matching
-        // isn't available. shouldSandbox() falls back to a filename heuristic
-        // for the NI denylist (Guitar Rig / Massive / Kontakt / …).
-        probeDesc.name = juce::File(juce::String(pluginPath)).getFileNameWithoutExtension();
+        // isn't available. shouldSandbox() inspects fileOrIdentifier and
+        // falls back to a filename heuristic for the NI denylist (Guitar
+        // Rig / Massive / Kontakt / …). `name` here is synthesised from
+        // the path: it's NOT what shouldSandbox checks today, but it
+        // does flow through `tryLoadSandboxed` into the spawn config's
+        // pluginName (used for diagnostic logging). Once the post-scan
+        // path lands and we have a real PluginDescription with the
+        // plugin's reported name, this synthetic value goes away.
         if (slopsmith::sandbox::shouldSandbox(probeDesc))
         {
             sandboxRequired = true;
