@@ -172,6 +172,18 @@ bundle_binaries_impl() {
     fi
     cp "$ffmpeg_bin" "$PROJECT_DIR/resources/bin/"
 
+    # Sloppak conversion encodes .ogg with -c:a libvorbis. Fail the
+    # build now rather than ship an ffmpeg that produces "Unknown
+    # encoder 'libvorbis'" at runtime on user machines. The
+    # lib/sloppak_convert.py fallback to the built-in `vorbis -strict
+    # experimental` encoder is a safety net for unbundled installs, not
+    # a license to ship a libvorbis-less binary.
+    if ! "$PROJECT_DIR/resources/bin/ffmpeg" -hide_banner -encoders 2>/dev/null | grep -wq libvorbis; then
+        echo "Error: bundled ffmpeg lacks libvorbis encoder. Sloppak conversion would fall back to the lower-quality built-in vorbis encoder on user machines." >&2
+        echo "brew's default ffmpeg formula ships --enable-libvorbis. If this fails, you may be on a custom tap or stale install — try \`brew reinstall ffmpeg\`." >&2
+        exit 1
+    fi
+
     # ffprobe - demucs spawns ffprobe before ffmpeg to read stream
     # metadata. brew's ffmpeg formula installs both binaries; bundle
     # ffprobe so the desktop app doesn't fall through to a host-installed

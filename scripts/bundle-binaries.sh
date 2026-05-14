@@ -34,6 +34,17 @@ else
     exit 1
 fi
 
+# Sloppak conversion encodes .ogg with -c:a libvorbis. Fail the build now
+# rather than ship an ffmpeg that produces "Unknown encoder 'libvorbis'"
+# at runtime on user machines. The lib/sloppak_convert.py fallback to
+# the built-in `vorbis -strict experimental` encoder is a safety net for
+# unbundled installs, not a license to ship a libvorbis-less binary.
+if ! "$BIN_DIR/ffmpeg" -hide_banner -encoders 2>/dev/null | grep -wq libvorbis; then
+    echo "ERROR: bundled ffmpeg lacks libvorbis encoder. Sloppak conversion would fall back to the lower-quality built-in vorbis encoder on user machines." >&2
+    echo "Install an ffmpeg built with --enable-libvorbis (apt's ffmpeg ships it by default; check your distro's package if this fails)." >&2
+    exit 1
+fi
+
 # ffprobe - demucs's audio loader spawns ffprobe before ffmpeg to read
 # stream metadata; falling through to a host-installed ffprobe (or none
 # at all) means the desktop bundle behaves differently on each user's

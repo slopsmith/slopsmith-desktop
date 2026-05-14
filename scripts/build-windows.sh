@@ -194,6 +194,17 @@ bundle_binaries_impl() {
     fi
     cp "$FFMPEG_BIN" "$PROJECT_DIR/resources/bin/"
 
+    # Sloppak conversion encodes .ogg with -c:a libvorbis. The BtbN GPL
+    # build typically ships libvorbis, but verify so a future upstream
+    # change doesn't silently degrade users to the built-in vorbis
+    # encoder. The lib/sloppak_convert.py fallback is a safety net for
+    # unbundled installs, not a license to ship a libvorbis-less binary.
+    if ! "$PROJECT_DIR/resources/bin/ffmpeg.exe" -hide_banner -encoders 2>/dev/null | grep -wq libvorbis; then
+        echo_error "bundled ffmpeg lacks libvorbis encoder. Sloppak conversion would fall back to the lower-quality built-in vorbis encoder on user machines."
+        echo_error "Upstream BtbN ffmpeg-master-latest-win64-gpl.zip layout may have changed; pick a different release asset that includes --enable-libvorbis."
+        exit 1
+    fi
+
     # ffprobe ships in the same BtbN zip as ffmpeg. demucs's audio loader
     # spawns ffprobe before ffmpeg to read stream metadata; without it the
     # loader dies with FileNotFoundError before ffmpeg is ever invoked.
