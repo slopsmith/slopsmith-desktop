@@ -215,13 +215,21 @@ bool SandboxedProcessor::initialise(juce::String& errorOut)
                 descriptionCached.name = data.getProperty("pluginName", "").toString();
                 descriptionCached.manufacturerName =
                     data.getProperty("manufacturer", "").toString();
-                // Populate identifiers known at spawn time so the
-                // description survives a SignalChain round-trip — every
-                // other code path uses fileOrIdentifier to re-locate the
-                // plugin, and pluginFormatName == "VST3" is fixed for
-                // this sandbox binary.
-                descriptionCached.fileOrIdentifier = spawnConfig.pluginPath;
-                descriptionCached.pluginFormatName = "VST3";
+                // Prefer the plugin's own reported fileOrIdentifier /
+                // pluginFormatName (from desc.* on the sandbox side) when
+                // the ready event carries them — some VST3s normalise the
+                // path differently than the caller passed in. Fall back
+                // to the spawn-time hardcodes when the wire field is
+                // empty so the description always has _something_ usable
+                // for a SignalChain round-trip.
+                {
+                    juce::String wireFOI = data.getProperty("fileOrIdentifier", "").toString();
+                    juce::String wireFmt = data.getProperty("pluginFormatName", "").toString();
+                    descriptionCached.fileOrIdentifier =
+                        wireFOI.isNotEmpty() ? wireFOI : spawnConfig.pluginPath;
+                    descriptionCached.pluginFormatName =
+                        wireFmt.isNotEmpty() ? wireFmt : juce::String("VST3");
+                }
                 hasEditorCached    = (bool)data.getProperty("hasEditor", false);
                 acceptsMidiCached  = (bool)data.getProperty("acceptsMidi", false);
                 producesMidiCached = (bool)data.getProperty("producesMidi", false);

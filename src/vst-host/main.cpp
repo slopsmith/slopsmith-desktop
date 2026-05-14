@@ -202,6 +202,12 @@ juce::var pluginMetadata(juce::AudioPluginInstance& p)
     obj->setProperty("pluginName", p.getName());
     auto desc = p.getPluginDescription();
     obj->setProperty("manufacturer", desc.manufacturerName);
+    // fileOrIdentifier + pluginFormatName from the plugin's actual
+    // description, not the spawn-config hardcode. Lets the host cache
+    // what the plugin reports (e.g. some VST3s normalise the path
+    // differently than the caller passed in) instead of inferring.
+    obj->setProperty("fileOrIdentifier", desc.fileOrIdentifier);
+    obj->setProperty("pluginFormatName", desc.pluginFormatName);
     obj->setProperty("hasEditor", p.hasEditor());
     obj->setProperty("acceptsMidi", p.acceptsMidi());
     obj->setProperty("producesMidi", p.producesMidi());
