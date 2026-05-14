@@ -118,7 +118,7 @@ midiQueueOffset  maxBlocks × sizeof(MidiQueue)        One MidiQueue per input s
 ```c
 struct Header {
     uint32_t magic;              // kAudioShmMagic
-    uint32_t version;            // kProtocolVersion (= 2)
+    uint32_t version;            // kProtocolVersion (= 3)
     uint32_t maxBlocks;          // typically 4
     uint32_t maxBlockSamples;    // capped at e.g. 1024
     uint32_t maxChannels;        // 2 for stereo
@@ -133,6 +133,7 @@ struct Header {
     // diagnostic — direction-agnostic
     uint64_t xruns;
     uint64_t dropouts;
+    uint64_t midiOverflows;     // events dropped by pushInputBlock for being SysEx-sized or past kMidiEventsPerSlot
     // Byte offsets into the mapping (computed at spawn time)
     uint64_t inputRingOffset;
     uint64_t outputRingOffset;
@@ -162,14 +163,13 @@ struct MidiEvent {
 };
 struct MidiQueue {
     uint32_t count;                       // valid events for the upcoming block
-    uint32_t overflow;                    // host-only diagnostic
     MidiEvent events[kMidiEventsPerSlot]; // 64 events @ ≤ 4 bytes each
 };
 ```
 
 Caps in `Protocol.h`: `kMidiEventMaxBytes = 4`, `kMidiEventsPerSlot = 64`.
-Lossy-by-design: events past the cap (or larger than 4 bytes) bump the queue's
-`overflow` counter and are dropped. Audio-thread safety is non-negotiable;
+Lossy-by-design: events past the cap (or larger than 4 bytes) bump the global
+`AudioShmHeader.midiOverflows` counter and are dropped. Audio-thread safety is non-negotiable;
 back-pressure on a real-time path would be the wrong trade-off. SysEx delivery,
 if a real workload ever needs it, is a v3 op carried via the control channel
 rather than the audio fast path.

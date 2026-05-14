@@ -4,10 +4,15 @@
 // the host creates it before spawning the subprocess and passes the mapping
 // name on the command line.
 //
-// Threading: the host's audio thread calls `pushInput()` / `popOutput()`. The
-// sandbox's audio thread runs the mirrored loop in slopsmith-vst-host. Both
-// sides are blocking on the partner OS event with a short timeout, so dropouts
-// are detectable.
+// Threading: the host's audio thread calls `pushInputBlock()` (publishes a
+// block of audio + the per-block MIDI queue together) and `popBlock(true,…)`
+// (drains the matching processed-output block). The sandbox's audio thread
+// runs the mirror: `popInputBlock()` → plugin->processBlock → `pushBlock(true,
+// …)`. Both sides block on the partner's OS event with a short timeout, so
+// dropouts are detectable. `signalSandboxWake()` lets the host break the
+// sandbox out of its popInputBlock wait without publishing a real block —
+// used by the audio-thread pause/drain protocol around non-realtime control
+// ops (kPrepare / kSetBlockSize / kGetState / kSetState).
 
 #pragma once
 

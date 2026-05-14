@@ -69,6 +69,7 @@ bool AudioChannel::createHostSide(const AudioDimensions& dims, Names& namesOut,
     impl->header->outReadIdx  = 0;
     impl->header->xruns = 0;
     impl->header->dropouts = 0;
+    impl->header->midiOverflows = 0;
     impl->header->ringBytesPerSlot = dims.bytesPerSlot();
     impl->header->inputRingOffset  = sizeof(AudioShmHeader);
     impl->header->outputRingOffset = impl->header->inputRingOffset
@@ -470,14 +471,20 @@ bool AudioChannel::pushInputBlock(const juce::AudioBuffer<float>& src,
     const auto slot = w % impl->header->maxBlocks;
     auto& queue = impl->midiQueues[slot];
 
-    // 1. Pack MIDI into the slot's queue. `count` is left at 0 until the
-    //    events[] entries are written, then published with release semantics.
-    atomicAt32(queue.count).store(0, std::memory_order_relaxed);
+    // 1. Pack MIDI into the slot's queue. The slot is owned by the host
+    //    until we publish the new inWriteIdx below, so writes here are
+    //    private — no need for the relaxed-clear-then-release-store on
+    //    `count`, the release on inWriteIdx publishes both `count` and
+    //    `events[]` together. Using atomic_ref for the count store anyway
+    //    so the layout stays consistent for the sandbox-side acquire load.
     uint32_t written = 0;
-    auto bumpOverflow = [&queue]
+    auto bumpMidiOverflow = [&]()
     {
-        // Atomic-ref so a sandbox-side reader sees a coherent counter.
-        atomicAt32(queue.overflow).fetch_add(1, std::memory_order_relaxed);
+        // Global cumulative counter — per-slot was confusing because slots
+        // round-robin (the per-slot value would mix counts from many
+        // different blocks rather than answering "did THIS block
+        // overflow?").
+        atomicAt(impl->header->midiOverflows).fetch_add(1, std::memory_order_relaxed);
     };
     for (const auto meta : midi)
     {
@@ -487,12 +494,12 @@ bool AudioChannel::pushInputBlock(const juce::AudioBuffer<float>& src,
         {
             // Doesn't fit (SysEx etc.). Audio thread never blocks; the
             // lossy policy is documented in PR #2.
-            bumpOverflow();
+            bumpMidiOverflow();
             continue;
         }
         if (written >= kMidiEventsPerSlot)
         {
-            bumpOverflow();
+            bumpMidiOverflow();
             continue;
         }
         auto& ev = queue.events[written];
@@ -507,7 +514,11 @@ bool AudioChannel::pushInputBlock(const juce::AudioBuffer<float>& src,
         std::memcpy(ev.bytes, msg.getRawData(), (size_t)rawSize);
         ++written;
     }
-    atomicAt32(queue.count).store(written, std::memory_order_release);
+    // Relaxed: the inWriteIdx release-store below synchronises this write
+    // with the sandbox's acquire-load of inWriteIdx in popInputBlock, so
+    // when the consumer observes the new write index it also observes
+    // count + events[].
+    atomicAt32(queue.count).store(written, std::memory_order_relaxed);
 
     // 2. Copy audio into the same slot of the input ring.
     auto bytesPerSlot = impl->header->ringBytesPerSlot;

@@ -262,6 +262,12 @@ struct HostState
     std::atomic<bool>    audioPauseRequested{false};
     juce::WaitableEvent  audioPausedAck;    // audio thread → control thread
     juce::WaitableEvent  audioResume;       // control thread → audio thread
+    // ^ Both default-constructed = auto-reset (manualReset=false), so a
+    //   successful wait() clears the signaled state on the waiter side; no
+    //   explicit reset() needed. The pause-loop in runAudioThread + the
+    //   defensive resume signal in AudioPauseGuard's bail path both rely on
+    //   this — manualReset=true would require explicit resets and break the
+    //   self-recovery story.
 };
 
 // RAII pause/drain/resume around non-realtime ops. Construct on the control
@@ -273,7 +279,8 @@ struct AudioPauseGuard
     explicit AudioPauseGuard(HostState& s) : st(s)
     {
         // Short-circuit if the worker is already shutting down so we don't
-        // wait on an ack that won't come.
+        // wait on an ack that won't come. Leaves active=false; callers MUST
+        // check that before mutating plugin state.
         if (!st.running.load(std::memory_order_acquire))
             return;
         st.audioPauseRequested.store(true, std::memory_order_release);
@@ -287,7 +294,17 @@ struct AudioPauseGuard
         while (!st.audioPausedAck.wait(50))
         {
             if (!st.running.load(std::memory_order_acquire))
-                return;  // shutdown — leave active=false so dtor is a no-op
+            {
+                // Bail-out path: the worker may already be in (or about to
+                // enter) its pause branch. Clear the flag and signal resume
+                // defensively so the worker doesn't block on
+                // audioResume.wait(...) indefinitely after we leave; the
+                // worker's bounded wait + running re-check is the
+                // self-recovery belt, this is the suspenders.
+                st.audioPauseRequested.store(false, std::memory_order_release);
+                st.audioResume.signal();
+                return;  // active=false → dtor is a no-op, callers skip mutation
+            }
         }
         active = true;
     }
@@ -416,8 +433,21 @@ void runAudioThread(HostState& st)
         if (st.audioPauseRequested.load(std::memory_order_acquire))
         {
             st.audioPausedAck.signal();
-            st.audioResume.wait(-1);
-            st.audioResume.reset();
+            // Bounded wait + re-check loop, not wait(-1), so we self-recover
+            // if the matching AudioPauseGuard never gets to its destructor:
+            //   - shutdown bail (running flips false in the constructor's
+            //     poll loop) — guard now defensively signals resume + clears
+            //     the request, but this loop is the safety net in case any
+            //     future caller construction path forgets to.
+            //   - exception/early return between guard ctor and dtor.
+            // Auto-reset WaitableEvent (default ctor) clears on successful
+            // wait(), so we don't need an explicit reset() — that
+            // assumption is documented at the audioResume field too.
+            while (st.audioPauseRequested.load(std::memory_order_acquire)
+                   && st.running.load(std::memory_order_acquire))
+            {
+                st.audioResume.wait(50);
+            }
             // Re-sync block size in case the control op widened it.
             const int bs = juce::jlimit(1, bufferCap,
                                         st.blockSize.load(std::memory_order_acquire));
@@ -488,6 +518,15 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
         // Pause the audio worker before mutating shared blockSize / calling
         // prepareToPlay — otherwise processBlock can race the reconfigure.
         AudioPauseGuard pause(st);
+        if (!pause.active)
+        {
+            // Worker is shutting down (or shut down). Don't mutate plugin
+            // state without exclusive access — a final processBlock could
+            // still be in flight on the audio thread between running.store
+            // (false) and audioThread.join().
+            reply(false, {}, "audio worker not paused (shutting down)");
+            return;
+        }
         st.sampleRate.store((int)sr, std::memory_order_release);
         st.blockSize.store(bs,       std::memory_order_release);
         if (st.plugin)
@@ -505,6 +544,14 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
     }
     else if (op == op::kSetBlockSize)
     {
+        // Require a loaded plugin: kSetBlockSize is meaningless before
+        // kPrepare loads + prepares one. Mirrors the no-plugin guards on
+        // kSetState / kSetParameter so a misordered host call is loud.
+        if (!st.plugin)
+        {
+            reply(false, {}, "no plugin loaded");
+            return;
+        }
         // Read as double first then narrow — JSON-deserialised juce::var could
         // be NaN/±inf/out-of-int-range; (int)NaN and out-of-range double cast
         // are UB. Same pattern as kPrepare / kSetParameter.
@@ -523,15 +570,17 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
         }
         const int bs = (int)bsd;
         AudioPauseGuard pause(st);
-        st.blockSize.store(bs, std::memory_order_release);
-        if (st.plugin)
+        if (!pause.active)
         {
-            // prepareToPlay rebuilds JUCE's processing pipeline at the new
-            // block size; cheap for most plugins and the only universally
-            // supported way to change buffer size in the JUCE wrapper.
-            st.plugin->prepareToPlay((double)st.sampleRate.load(std::memory_order_acquire),
-                                     bs);
+            reply(false, {}, "audio worker not paused (shutting down)");
+            return;
         }
+        st.blockSize.store(bs, std::memory_order_release);
+        // prepareToPlay rebuilds JUCE's processing pipeline at the new
+        // block size; cheap for most plugins and the only universally
+        // supported way to change buffer size in the JUCE wrapper.
+        st.plugin->prepareToPlay((double)st.sampleRate.load(std::memory_order_acquire),
+                                 bs);
         reply(true, {});
     }
     else if (op == op::kOpenEditor)
@@ -634,6 +683,11 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
         // processBlock against the plugin's state serialisation.
         {
             AudioPauseGuard pause(st);
+            if (!pause.active)
+            {
+                reply(false, {}, "audio worker not paused (shutting down)");
+                return;
+            }
             if (st.plugin) st.plugin->getStateInformation(mb);
         }
         juce::DynamicObject::Ptr res(new juce::DynamicObject());
@@ -656,6 +710,11 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
             return;
         }
         AudioPauseGuard pause(st);
+        if (!pause.active)
+        {
+            reply(false, {}, "audio worker not paused (shutting down)");
+            return;
+        }
         st.plugin->setStateInformation(mo.getData(), (int)mo.getDataSize());
         reply(true, {});
     }

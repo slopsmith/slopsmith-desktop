@@ -32,7 +32,14 @@ namespace slopsmith::sandbox {
 //     sandbox keeps a deprecation-warning no-op handler for one release).
 //   * setBlockSize is no longer "planned" — it's a real op gated by the
 //     audio-thread pause/drain/resume protocol described in vst-host/main.cpp.
-inline constexpr uint32_t kProtocolVersion = 2;
+//
+// v3 (this PR, post-review):
+//   * SHM ABI cleanup — the per-slot MidiQueue.overflow field was promoted to
+//     a single AudioShmHeader.midiOverflows counter (per-slot was confusing
+//     under round-robin slot reuse). Bumped because mixed v2/v3 binaries
+//     would interpret different offsets for the MIDI queue and the trailing
+//     header counters and silently corrupt ring data.
+inline constexpr uint32_t kProtocolVersion = 3;
 
 // Magic number stamped at the head of the audio shared memory so a stale
 // mapping from a crashed sandbox can be detected.
@@ -138,9 +145,13 @@ struct MidiQueue
     // matching `events[]` entries are written; sandbox loads with acquire
     // semantics. Accessed via std::atomic_ref<uint32_t> from .cpp so the
     // shm layout stays trivially copyable.
-    alignas(8) uint32_t count    = 0;
-    uint32_t            overflow = 0;            // host-only diagnostic
+    alignas(8) uint32_t count = 0;
     MidiEvent           events[kMidiEventsPerSlot] = {};
+    // Per-slot overflow was here in the first v2 cut, but slots are reused
+    // round-robin and the value would accumulate across all uses of that
+    // slot — confusing for any "did this block overflow?" reader, redundant
+    // for any "lifetime total" reader. Cumulative count lives in
+    // AudioShmHeader.midiOverflows.
 };
 
 // Shared-memory layout for the audio fast path.
@@ -173,9 +184,12 @@ struct AudioShmHeader
 
     // Direction-agnostic diagnostic counters. xruns covers any pushBlock
     // where the destination ring was full; dropouts covers any popBlock that
-    // timed out waiting for the partner.
-    alignas(8) uint64_t xruns    = 0;
-    alignas(8) uint64_t dropouts = 0;
+    // timed out waiting for the partner; midiOverflows covers any MIDI event
+    // dropped by pushInputBlock for being SysEx-sized or because the slot's
+    // MidiQueue already held kMidiEventsPerSlot entries.
+    alignas(8) uint64_t xruns         = 0;
+    alignas(8) uint64_t dropouts      = 0;
+    alignas(8) uint64_t midiOverflows = 0;
 
     // Byte offsets of the two rings + per-slot MIDI region inside the mapping.
     // Convenient for tools and asserts; computed at spawn time.
