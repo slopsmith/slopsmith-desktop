@@ -561,24 +561,25 @@ static void hostLogf(const char* fmt, ...)
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
 {
     {
-        char path[1024]{};
-        DWORD n = GetEnvironmentVariableA("TEMP", path, sizeof(path));
+        // Use wide-char env + fopen so non-ASCII profile paths (e.g.
+        // a user named with CJK or extended-Latin characters in
+        // C:\Users\...) don't drop the diagnostic log silently —
+        // GetEnvironmentVariableA loses bytes that don't map to the
+        // current ANSI codepage, and fopen(narrow path) on Windows
+        // applies the same lossy conversion.
+        wchar_t path[1024]{};
+        DWORD n = GetEnvironmentVariableW(L"TEMP", path, (DWORD)std::size(path));
         const unsigned long pid = (unsigned long)GetCurrentProcessId();
-        char suffix[64];
-        const int suffixLen = std::snprintf(
-            suffix, sizeof(suffix), "\\slopsmith-vst-host-%lu.log", pid);
-        // strlen of the formatted suffix, NOT sizeof(suffix) — the array is
-        // 64 bytes but the actual content is typically ~30 bytes, and using
-        // sizeof would over-reserve room and falsely fall back for moderately
-        // long TEMP paths.
-        //
-        // n < sizeof(path) → got the actual value, not the truncation
-        // sentinel (GetEnvironmentVariableA returns required-buf-size if
-        // the buffer was too small). Mirrors the USERPROFILE branch below.
-        if (n > 0 && n < sizeof(path) && suffixLen > 0
-                  && (size_t)n + (size_t)suffixLen < sizeof(path))
+        wchar_t suffix[64]{};
+        const int suffixLen = std::swprintf(
+            suffix, std::size(suffix), L"\\slopsmith-vst-host-%lu.log", pid);
+        // n < std::size(path) → got the actual length, not the truncation
+        // sentinel (GetEnvironmentVariableW returns required-wchar-count
+        // including NUL if the buffer was too small).
+        if (n > 0 && n < std::size(path) && suffixLen > 0
+                  && (size_t)n + (size_t)suffixLen < std::size(path))
         {
-            std::strncat(path, suffix, sizeof(path) - n - 1);
+            std::wcscat(path, suffix);
         }
         else
         {
@@ -592,16 +593,16 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
             // C:\ drive-root fallback is gone for the same reason as
             // the VSTTrace.h trace path: drive-root writes need admin
             // on default installs.
-            char localAppData[1024]{};
-            const DWORD la = GetEnvironmentVariableA("LOCALAPPDATA",
+            wchar_t localAppData[1024]{};
+            const DWORD la = GetEnvironmentVariableW(L"LOCALAPPDATA",
                                                      localAppData,
-                                                     sizeof(localAppData));
-            constexpr const char* kTempSubdir = "\\Temp";
-            const size_t kTempSubdirLen = std::strlen(kTempSubdir);
-            if (la > 0 && la < sizeof(localAppData)
-                       && (size_t)la + kTempSubdirLen + (size_t)suffixLen < sizeof(path))
+                                                     (DWORD)std::size(localAppData));
+            constexpr const wchar_t* kTempSubdir = L"\\Temp";
+            const size_t kTempSubdirLen = std::wcslen(kTempSubdir);
+            if (la > 0 && la < std::size(localAppData)
+                       && (size_t)la + kTempSubdirLen + (size_t)suffixLen < std::size(path))
             {
-                std::snprintf(path, sizeof(path), "%s%s%s",
+                std::swprintf(path, std::size(path), L"%ls%ls%ls",
                               localAppData, kTempSubdir, suffix);
             }
         }
@@ -613,7 +614,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         // file is recreated fresh on every spawn). Long-term cleanup of
         // *historical* per-PID logs from prior installs is a separate
         // janitor pass not in scope here.
-        g_hostLog = path[0] ? std::fopen(path, "w") : nullptr;
+        g_hostLog = path[0] ? _wfopen(path, L"w") : nullptr;
         if (g_hostLog)
             hostLogf("\n==== slopsmith-vst-host pid=%lu starting ====", pid);
     }
