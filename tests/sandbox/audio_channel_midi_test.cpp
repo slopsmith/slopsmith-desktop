@@ -73,16 +73,9 @@ struct ChannelPair
     }
 };
 
-// Get a non-mutating pointer to the shared header (host side).
-// AudioChannel doesn't expose this; we cheat via the dims accessor + a
-// synthetic peek via a one-block round-trip-counter of midiOverflows. Since
-// we don't have a public accessor and don't want to bloat the public API
-// just for tests, we read midiOverflows BEFORE and AFTER each push and
-// assert the delta. ChannelPair carries dims for the math.
-//
-// Actually, simpler: the host instance has `dims()` accessor and the
-// underlying header is mapped at the top of the SHM. We can re-open the
-// mapping by name to peek the header without going through AudioChannel.
+// Re-open the shm mapping read-only to peek at AudioShmHeader directly.
+// Avoids bloating the public AudioChannel API with a header accessor that
+// only the test needs.
 struct HeaderPeek
 {
     HANDLE mapping = nullptr;
@@ -153,7 +146,7 @@ void testRoundtripSmallBuffer()
     CHECK((firstByte[2] & 0xF0) == 0x80);
 
     // No overflows expected on the happy path.
-    const uint64_t overflowsAfter = peek.hdr ? readMidiOverflows(peek.hdr) : 0;
+    const uint64_t overflowsAfter = readMidiOverflows(peek.hdr);
     CHECK(overflowsAfter == overflowsBefore);
 }
 

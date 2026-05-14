@@ -541,8 +541,24 @@ bool AudioChannel::pushInputBlock(const juce::AudioBuffer<float>& src,
     };
     int scanned = 0;
     const int totalEvents = midi.getNumEvents();
+    // Hard cap on iterations regardless of accept/reject ratio. The
+    // cap-overflow break below bounds the loop when events are valid-and-
+    // fit (written climbs to kMidiEventsPerSlot quickly), but a flood of
+    // pure SysEx would never increment `written` and could otherwise
+    // iterate the entire buffer one event at a time on the RT thread.
+    // 2× kMidiEventsPerSlot leaves headroom for normal mixed-in
+    // SysEx-among-CCs blocks while still bounding the worst case.
+    constexpr int kMaxScanIterations = 2 * (int)kMidiEventsPerSlot;
     for (const auto meta : midi)
     {
+        if (scanned >= kMaxScanIterations)
+        {
+            // Hit the per-block scan cap. Bulk-bump remaining and break;
+            // per-event accuracy past the cap is not a documented
+            // contract, the bound matters more on the audio thread.
+            bumpMidiOverflow((uint64_t)(totalEvents - scanned));
+            break;
+        }
         ++scanned;
         const auto& msg = meta.getMessage();
         const int rawSize = msg.getRawDataSize();
@@ -556,11 +572,10 @@ bool AudioChannel::pushInputBlock(const juce::AudioBuffer<float>& src,
         if (written >= kMidiEventsPerSlot)
         {
             // Bulk-bump for THIS event + every remaining event the
-            // iterator would visit, then break. Bounds the audio-thread
-            // work at kMidiEventsPerSlot iterations regardless of how
-            // bloated the inbound MidiBuffer is — important on the RT
-            // path; a misbehaving upstream that floods (dense CC, stuck
-            // SysEx stream) can't pin the audio thread.
+            // iterator would visit, then break. Together with the
+            // scan-cap above, total audio-thread MIDI work is bounded
+            // at 2× kMidiEventsPerSlot iterations regardless of how
+            // bloated or pathological the inbound buffer is.
             bumpMidiOverflow((uint64_t)(totalEvents - scanned + 1));
             break;
         }

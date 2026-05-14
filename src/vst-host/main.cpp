@@ -263,6 +263,12 @@ struct HostState
     std::atomic<bool>    audioPauseRequested{false};
     juce::WaitableEvent  audioPausedAck;    // audio thread → control thread
     juce::WaitableEvent  audioResume;       // control thread → audio thread
+    // ^ Both default-constructed = auto-reset (manualReset=false), so a
+    //   successful wait() clears the signaled state on the waiter side; no
+    //   explicit reset() needed. The pause-loop in runAudioThread + the
+    //   defensive resume signal in AudioPauseGuard's bail path both rely on
+    //   this — manualReset=true would require explicit resets and break the
+    //   self-recovery story.
 
     // Set by kPrepare on success. Gates two things:
     //   1. the audio worker's pop→processBlock loop — JUCE's contract is that
@@ -273,12 +279,6 @@ struct HostState
     //      spawn; if a host calls kSetBlockSize before kPrepare, prepareToPlay
     //      would silently run at the wrong rate. Better to reject loudly.
     std::atomic<bool> prepared{false};
-    // ^ Both default-constructed = auto-reset (manualReset=false), so a
-    //   successful wait() clears the signaled state on the waiter side; no
-    //   explicit reset() needed. The pause-loop in runAudioThread + the
-    //   defensive resume signal in AudioPauseGuard's bail path both rely on
-    //   this — manualReset=true would require explicit resets and break the
-    //   self-recovery story.
 };
 
 // RAII pause/drain/resume around non-realtime ops. Construct on the control
@@ -679,6 +679,13 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
         }
         if (!st.prepared.load(std::memory_order_acquire))
         {
+            // `prepared=false` here means either kPrepare was never called
+            // OR we're inside the brief window between prepared.store(false)
+            // and prepared.store(true) of an in-flight kPrepare /
+            // kSetBlockSize. Today the control I/O thread serialises
+            // dispatches so the in-flight window is unreachable from this
+            // dispatch; the error message reflects the practically-reachable
+            // case. If a future dispatch model parallelises this, revisit.
             reply(false, {}, "prepare not called — kSetBlockSize would use "
                              "stale cached sampleRate");
             return;
@@ -819,8 +826,18 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
     {
         juce::MemoryBlock mb;
         // get/setStateInformation can mutate plugin internals (presets,
-        // parameter trees). Pause the audio worker to avoid racing
-        // processBlock against the plugin's state serialisation.
+        // parameter trees, plugin-internal allocations). Pause the audio
+        // worker to avoid racing processBlock against the plugin's state
+        // serialisation.
+        //
+        // Shutdown semantics: if the worker has already exited, we reject
+        // with "shutting down" rather than running getStateInformation
+        // unguarded. That IS a behavior change from pre-v3 (where
+        // kGetState was best-effort callable any time); a host needing
+        // last-moment crash-recovery state must kGetState BEFORE
+        // initiating shutdown. The trade-off is intentional — racing a
+        // final processBlock at shutdown to grab state is exactly the
+        // class of UB this guard was added to prevent.
         {
             AudioPauseGuard pause(st);
             if (!pause.active)

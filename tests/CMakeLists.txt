@@ -9,6 +9,12 @@
 option(SLOPSMITH_BUILD_TESTS "Build sandbox unit tests" ON)
 
 if(NOT WIN32)
+    # Surface the no-op so a user setting -DSLOPSMITH_BUILD_TESTS=ON on
+    # macOS/Linux doesn't silently get no tests.
+    if(SLOPSMITH_BUILD_TESTS)
+        message(STATUS "Sandbox tests are Win32-only; SLOPSMITH_BUILD_TESTS=ON "
+                       "has no effect on this platform.")
+    endif()
     return()
 endif()
 
