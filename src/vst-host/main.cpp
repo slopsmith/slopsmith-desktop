@@ -18,6 +18,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <atomic>
 #include <charconv>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <cstdarg>
@@ -262,6 +263,16 @@ struct HostState
     std::atomic<bool>    audioPauseRequested{false};
     juce::WaitableEvent  audioPausedAck;    // audio thread → control thread
     juce::WaitableEvent  audioResume;       // control thread → audio thread
+
+    // Set by kPrepare on success. Gates two things:
+    //   1. the audio worker's pop→processBlock loop — JUCE's contract is that
+    //      processBlock must not be called before prepareToPlay, and the
+    //      worker now starts BEFORE control.start so the spawn-to-first-
+    //      kPrepare window is real.
+    //   2. kSetBlockSize — the cached `sampleRate` defaults to 48000 at
+    //      spawn; if a host calls kSetBlockSize before kPrepare, prepareToPlay
+    //      would silently run at the wrong rate. Better to reject loudly.
+    std::atomic<bool> prepared{false};
     // ^ Both default-constructed = auto-reset (manualReset=false), so a
     //   successful wait() clears the signaled state on the waiter side; no
     //   explicit reset() needed. The pause-loop in runAudioThread + the
@@ -291,6 +302,13 @@ struct AudioPauseGuard
         // the worker exits between our `running` check and this wait (or if
         // a back-to-back pause guard already consumed the worker's
         // exit-time signal), we still notice and bail without deadlocking.
+        // No upper bound on the wait — a heavy plugin's processBlock can
+        // legitimately run for tens of ms — but log if it's surprisingly
+        // long so a future "control op feels stuck" investigation has a
+        // breadcrumb.
+        const auto waitStart = std::chrono::steady_clock::now();
+        constexpr int kWarnThresholdMs = 250;
+        bool warned = false;
         while (!st.audioPausedAck.wait(50))
         {
             if (!st.running.load(std::memory_order_acquire))
@@ -305,6 +323,32 @@ struct AudioPauseGuard
                 st.audioResume.signal();
                 return;  // active=false → dtor is a no-op, callers skip mutation
             }
+            if (!warned)
+            {
+                using namespace std::chrono;
+                const auto elapsedMs = duration_cast<milliseconds>(
+                    steady_clock::now() - waitStart).count();
+                if (elapsedMs >= kWarnThresholdMs)
+                {
+                    hostLogf("AudioPauseGuard: ack still pending after %lld ms"
+                             " — heavy processBlock or stuck worker?",
+                             (long long)elapsedMs);
+                    warned = true;
+                }
+            }
+        }
+        // Re-check running AFTER the ack succeeds. If `running` flipped to
+        // false during the wait (worker exited, signaled audioPausedAck on
+        // its way out per the runAudioThread bottom), the ack we just
+        // consumed is a stale exit-time signal — the worker is gone, not
+        // paused. Mutating plugin state would still be safe (no concurrent
+        // processBlock) but `active=true` would misleadingly tell callers
+        // the worker is alive. Treat as bail; signal resume defensively.
+        if (!st.running.load(std::memory_order_acquire))
+        {
+            st.audioPauseRequested.store(false, std::memory_order_release);
+            st.audioResume.signal();
+            return;
         }
         active = true;
     }
@@ -462,6 +506,14 @@ void runAudioThread(HostState& st)
         midi.clear();
         if (!st.audio.popInputBlock(buffer, midi, currentBlockSize, /*timeoutMs=*/200))
             continue;
+        // JUCE contract: processBlock must not be called before prepareToPlay.
+        // The worker now starts BEFORE control.start (so pause-guarded ops
+        // always have an acker), so the spawn-to-first-kPrepare window is
+        // real. If a host pushes audio before kPrepare returns, drop the
+        // input block silently; xruns / dropouts already cover the
+        // diagnostic side. acquire-load pairs with kPrepare's release-store.
+        if (!st.prepared.load(std::memory_order_acquire))
+            continue;
         if (auto* p = st.plugin.get())
             p->processBlock(buffer, midi);
         st.audio.pushBlock(/*isOutputRing=*/true, buffer, currentBlockSize);
@@ -541,6 +593,11 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
         st.blockSize.store(bs,       std::memory_order_release);
         st.plugin->setNonRealtime(false);
         st.plugin->prepareToPlay(sr, bs);
+        // Order matters: publish `prepared=true` AFTER prepareToPlay returns
+        // so the audio worker (which gates on `prepared`) never sees the
+        // flag before the plugin is actually ready. release-store pairs with
+        // the worker's acquire-load.
+        st.prepared.store(true, std::memory_order_release);
         // `ok` is already on the envelope via wire::makeReply — keeping it
         // off the result object so the schema stays uniform across ops
         // (kOpenEditor/kGetState/etc. don't double up either).
@@ -550,12 +607,21 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
     }
     else if (op == op::kSetBlockSize)
     {
-        // Require a loaded plugin: kSetBlockSize is meaningless before
-        // kPrepare loads + prepares one. Mirrors the no-plugin guards on
-        // kSetState / kSetParameter so a misordered host call is loud.
+        // Require a loaded AND prepared plugin: kSetBlockSize calls
+        // prepareToPlay using the cached `sampleRate`, which defaults to
+        // 48000 at spawn. A kSetBlockSize before kPrepare with a loaded
+        // plugin would silently prepare at the wrong rate. Mirrors the
+        // no-plugin guards on kSetState / kSetParameter and adds the
+        // not-prepared guard for the cached-rate hazard.
         if (!st.plugin)
         {
             reply(false, {}, "no plugin loaded");
+            return;
+        }
+        if (!st.prepared.load(std::memory_order_acquire))
+        {
+            reply(false, {}, "prepare not called — kSetBlockSize would use "
+                             "stale cached sampleRate");
             return;
         }
         // Read as double first then narrow — JSON-deserialised juce::var could

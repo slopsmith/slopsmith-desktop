@@ -48,3 +48,8 @@ add_subdirectory(src/audio)
 if(WIN32)
     add_subdirectory(src/vst-host)
 endif()
+
+# Tests (Win32-only; gated on SLOPSMITH_BUILD_TESTS, default ON).
+if(EXISTS "${CMAKE_SOURCE_DIR}/tests/CMakeLists.txt")
+    add_subdirectory(tests)
+endif()

@@ -334,11 +334,14 @@ bool AudioChannel::pushBlock(bool isOutputRing, const juce::AudioBuffer<float>& 
     // the slot's MidiQueue alongside the audio). Calling pushBlock(false,…)
     // directly would leave whatever MIDI count was in the slot from a prior
     // pushInputBlock and the next popInputBlock would replay those stale
-    // events against fresh audio. Today the only input producer is
-    // SandboxedProcessor::processBlock and it always calls pushInputBlock;
-    // assert here so a future regression that swaps in pushBlock fails loudly
-    // in debug rather than silently corrupting MIDI delivery.
+    // events against fresh audio.
+    //
+    // jassert in debug + return false in release: a release-build regression
+    // would otherwise silently corrupt MIDI delivery rather than failing
+    // loudly. Today the only input producer is
+    // SandboxedProcessor::processBlock and it always calls pushInputBlock.
     jassert(isOutputRing);
+    if (!isOutputRing) return false;
     if (!impl->header) return false;
     auto idx = indicesFor(*impl->header, isOutputRing);
     auto writeIdx = atomicAt(idx.write);
@@ -539,15 +542,19 @@ bool AudioChannel::pushInputBlock(const juce::AudioBuffer<float>& src,
             bumpMidiOverflow();
             continue;
         }
+        // Reject events whose frame is past the truncated audio (samples
+        // ≤ numSamples — see the comment on the maxSamples computation
+        // above). Clamping would silently re-time the event into the
+        // audible portion, which is a worse failure mode than dropping it.
+        // samplePosition < 0 is an invalid input; treat it as out-of-range
+        // and drop too.
+        if (meta.samplePosition < 0 || meta.samplePosition >= samples)
+        {
+            bumpMidiOverflow();
+            continue;
+        }
         auto& ev = queue.events[written];
-        // Clamp frame to [0, samples-1] — `samples` is the truncated audio
-        // count, so a MIDI event past it would point past the block the
-        // plugin actually receives. The sandbox passes ev.frame to
-        // juce::MidiBuffer::addEvent.
-        const int clampedFrame = juce::jlimit(0,
-                                              juce::jmax(0, samples - 1),
-                                              meta.samplePosition);
-        ev.frame = (uint32_t)clampedFrame;
+        ev.frame = (uint32_t)meta.samplePosition;
         ev.size  = (uint32_t)rawSize;
         std::memcpy(ev.bytes, msg.getRawData(), (size_t)rawSize);
         ++written;
