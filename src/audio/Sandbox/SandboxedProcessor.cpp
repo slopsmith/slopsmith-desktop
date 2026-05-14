@@ -392,21 +392,24 @@ void SandboxedProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 {
     if (!isAlive() || !audio)
     {
-        // Sandbox is gone — pass silence through so the chain keeps flowing.
+        // Sandbox is gone — pass silence through so the chain keeps
+        // flowing. Leave midiMessages untouched: downstream processors
+        // in a SignalChain expect to see MIDI we can't deliver to our
+        // own sandbox, but they may still consume it themselves.
         buffer.clear();
-        midiMessages.clear();
         return;
     }
     const int n = buffer.getNumSamples();
 
-    // Drop MIDI entirely until the audio-shm inline-MIDI follow-up lands.
-    // vst-host's op::kMidiEvent dispatcher is a no-op stub today, so
-    // serializing every event from the realtime audio thread through
-    // base64 + JSON + the control pipe was pure heap pressure with no
-    // observable effect at the sandbox. The inline-per-block shm queue
-    // covered by the audio-shm follow-up is the right shape (lock-free,
-    // bounded ring); this branch is a deliberate v1 silence.
-    midiMessages.clear();
+    // Pass MIDI through unchanged for now. The sandbox can't receive
+    // MIDI in v1 (vst-host's op::kMidiEvent dispatcher is a no-op stub
+    // and the control-channel forwarding was pure allocator pressure
+    // on the audio thread), but clearing the buffer here would also
+    // swallow MIDI for any DOWNSTREAM processors in a SignalChain —
+    // e.g. a sandboxed effect would silently break a synth that
+    // follows it. Inline-per-block shm covered by the audio-shm
+    // follow-up will give us a path to deliver MIDI to the sandbox
+    // without taking it away from the chain.
 
     if (!audio->pushBlock(/*isOutputRing=*/false, buffer, n))
     {

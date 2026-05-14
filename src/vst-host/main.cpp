@@ -23,6 +23,7 @@
 #include <cstdio>
 #include <cstring>
 #include <mutex>
+#include <set>
 #include <thread>
 
 // `CommandLineToArgvW` / `LocalFree` from shellapi.h come in via JUCE's
@@ -65,6 +66,10 @@ struct Args
 // misparsing.
 bool parseArgs(int argc, wchar_t** argv, Args& out, juce::String& whyFailed)
 {
+    // Track which flags have been set so a duplicate (e.g. from a future
+    // spawn-args refactor with a copy-paste bug) errors loudly instead of
+    // silently using the last-wins value.
+    std::set<juce::String> seenKeys;
     for (int i = 1; i < argc; i += 2)
     {
         if (i + 1 >= argc)
@@ -90,6 +95,11 @@ bool parseArgs(int argc, wchar_t** argv, Args& out, juce::String& whyFailed)
         {
             whyFailed = "missing value for " + key + " (next token '"
                       + val + "' looks like a flag)";
+            return false;
+        }
+        if (!seenKeys.insert(key).second)
+        {
+            whyFailed = "duplicate flag '" + key + "'";
             return false;
         }
         if      (key == "--plugin-path")     out.pluginPath = val;
@@ -611,7 +621,13 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
         return 5;
     }
     hostLogf("plugin loaded: %s", st.plugin->getName().toRawUTF8());
-    st.plugin->prepareToPlay((double)parsed.sampleRate, parsed.maxBlock);
+    // Don't eagerly prepareToPlay here. The host always sends op::kPrepare
+    // immediately after the ready handshake (SignalChain::addProcessor
+    // calls prepare on every newly-added processor), which reruns
+    // prepareToPlay with the actual session sample-rate/block-size.
+    // Some plugins allocate or reset internal state on each prepare —
+    // doing it twice (spawn-time + first kPrepare) is wasteful at best
+    // and visibly disruptive at worst.
 
     st.control.setRequestHandler(
         [&st](int id, const juce::String& op, const juce::var& args)
