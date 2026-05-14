@@ -267,6 +267,16 @@ void AudioChannel::close()
     impl->outputRing = nullptr;
 }
 
+// std::atomic_ref needs C++20 (P0019, finalised in libstdc++ 11+ and recent
+// MSVC). The repo's CMAKE_CXX_STANDARD is set to 20, but a contributor
+// building this TU under an older toolchain would get a confusing template
+// lookup error rather than a clear "your compiler is too old" message —
+// the feature-test macro converts that into a fast compile-time signal.
+#ifndef __cpp_lib_atomic_ref
+#  error "std::atomic_ref<uint64_t> requires C++20 + libstdc++ 11+ / recent MSVC; \
+upgrade the toolchain or guard this file behind an alternate atomic strategy."
+#endif
+
 // Header indices are written by the host side and read by the sandbox side
 // over shared memory. std::atomic_ref gives us atomic access without UB from
 // reinterpret_casting the uint64_t storage to std::atomic<uint64_t>* (the
@@ -323,6 +333,15 @@ bool AudioChannel::pushBlock(bool isOutputRing, const juce::AudioBuffer<float>& 
         std::memset(dst + ch * maxSamples, 0,
                     sizeof(float) * (size_t)maxSamples);
 
+    // The release store on writeIdx pairs with the consumer's acquire load
+    // in popBlock, so the slot memcpy/memset above are happens-before any
+    // read of writeIdx >= w+1. On x86/x64 (today's only target) plain
+    // memory ops are ordered enough that this pairing alone is sufficient.
+    // On the deferred macOS/Linux ports — and ARM specifically — slot
+    // writes happen via plain memcpy/memset (not atomic) and weakly
+    // ordered architectures may need an explicit `atomic_thread_fence
+    // (memory_order_release)` immediately before the store. Track with
+    // the macOS/Linux sandbox follow-up PRs.
     writeIdx.store(w + 1, std::memory_order_release);
     SetEvent(isOutputRing ? impl->evtToHost : impl->evtToSandbox);
     return true;

@@ -655,6 +655,10 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
     if (!st.control.connectClientSide(parsed.controlPipe, err))
     {
         hostLogf("control pipe connect failed: %s", err.toRawUTF8());
+        // No control thread to stop here (connect failed), but no
+        // explicit disconnect signal possible either — the host's pipe
+        // server will detect the close when our HANDLE goes through the
+        // process exit.
         return 4;
     }
     hostLogf("control pipe connected");
@@ -668,9 +672,33 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
     if (!st.plugin)
     {
         hostLogf("loadPlugin failed: %s", err.toRawUTF8());
+        // Control channel is connected (no I/O thread yet — start() hasn't
+        // been called), so a sendEvent(kGoodbye) is the cheapest way to
+        // tell the host "fast-fail" instead of letting it wait out the
+        // 30s handshake timeout. Best-effort; ignore failures.
+        st.control.sendEvent(event::kGoodbye, {});
         return 5;
     }
     hostLogf("plugin loaded: %s", st.plugin->getName().toRawUTF8());
+    // Clamp the audio worker's channel count to what the plugin actually
+    // reports. spawn-time --channels is a hint (the host doesn't know the
+    // real topology until the plugin loads); using the plugin's
+    // getTotalNumIn/OutChannels prevents undersized buffers being passed
+    // to a mono effect or extra silent channels for a >stereo synth.
+    // BusesProperties-aware buffer sizing is the deferred follow-up;
+    // until then take the max of in/out so the buffer is at least big
+    // enough for either direction.
+    {
+        const int pIn  = st.plugin->getTotalNumInputChannels();
+        const int pOut = st.plugin->getTotalNumOutputChannels();
+        const int pMax = juce::jmax(pIn, pOut);
+        if (pMax > 0 && pMax != st.channels)
+        {
+            hostLogf("channel count: spawn-arg=%d plugin-reported=%d (max in/out) — using plugin",
+                     st.channels, pMax);
+            st.channels = juce::jmin(pMax, (int)kAudioMaxChannels);
+        }
+    }
     // Don't eagerly prepareToPlay here. The host always sends op::kPrepare
     // immediately after the ready handshake (SignalChain::addProcessor
     // calls prepare on every newly-added processor), which reruns
@@ -695,6 +723,9 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
     }))
     {
         hostLogf("control channel start failed");
+        // Same fast-fail signal as the loadPlugin failure path: best-effort
+        // goodbye so the host doesn't burn its 30s handshake timeout.
+        st.control.sendEvent(event::kGoodbye, {});
         return 6;
     }
 

@@ -49,10 +49,24 @@ juce::File resolveSandboxExe()
                            &selfModule)
         && selfModule != nullptr)
     {
-        wchar_t buf[MAX_PATH + 1] = {};
-        const DWORD n = GetModuleFileNameW(selfModule, buf, MAX_PATH);
-        if (n > 0 && n < MAX_PATH)
-            addonDir = juce::File(juce::String(buf)).getParentDirectory();
+        // Grow the buffer until GetModuleFileNameW returns < capacity
+        // (success). On truncation it returns == capacity with
+        // ERROR_INSUFFICIENT_BUFFER. MAX_PATH is the floor for back-compat,
+        // but long-paths-enabled installs / deep dev trees can blow past
+        // it. Cap at 32K to mirror the Windows long-path ceiling.
+        std::vector<wchar_t> buf(MAX_PATH + 1);
+        for (;;)
+        {
+            const DWORD n = GetModuleFileNameW(selfModule, buf.data(),
+                                               (DWORD)buf.size());
+            if (n > 0 && n < buf.size())
+            {
+                addonDir = juce::File(juce::String(buf.data())).getParentDirectory();
+                break;
+            }
+            if (buf.size() >= 32768) break;
+            buf.resize(buf.size() * 2);
+        }
     }
 
     // Dev: build/Release/slopsmith-vst-host.exe next to the addon .node.
