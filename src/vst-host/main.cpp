@@ -614,6 +614,14 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
             reply(false, {}, "audio worker not paused (shutting down)");
             return;
         }
+        // Make the "worker never sees `prepared=true` while plugin is
+        // half-configured" invariant load-bearing rather than implicit:
+        // explicitly clear `prepared` while we're holding the pause guard,
+        // then republish after prepareToPlay returns. Today the worker is
+        // paused throughout the reconfigure window so it never reads the
+        // stale-true value, but a future code path that mutates plugin
+        // state without holding the guard would otherwise be at risk.
+        st.prepared.store(false, std::memory_order_release);
         st.sampleRate.store((int)sr, std::memory_order_release);
         st.blockSize.store(bs,       std::memory_order_release);
         st.plugin->setNonRealtime(false);
@@ -625,10 +633,10 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
         // processBlock fires. Acceptable failure mode; document but don't
         // wrap in try/catch (which would mask the bug).
         st.plugin->prepareToPlay(sr, bs);
-        // Order matters: publish `prepared=true` AFTER prepareToPlay returns
-        // so the audio worker (which gates on `prepared`) never sees the
-        // flag before the plugin is actually ready. release-store pairs with
-        // the worker's acquire-load.
+        // Order matters: republish `prepared=true` AFTER prepareToPlay
+        // returns so the audio worker (which gates on `prepared`) never
+        // sees the flag before the plugin is actually ready. release-store
+        // pairs with the worker's acquire-load.
         st.prepared.store(true, std::memory_order_release);
         // `ok` is already on the envelope via wire::makeReply — keeping it
         // off the result object so the schema stays uniform across ops
@@ -679,6 +687,9 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
             reply(false, {}, "audio worker not paused (shutting down)");
             return;
         }
+        // Same load-bearing-invariant pattern as kPrepare: clear `prepared`
+        // under the pause guard, do the reconfigure, republish.
+        st.prepared.store(false, std::memory_order_release);
         st.blockSize.store(bs, std::memory_order_release);
         // Mirror kPrepare's pre-amble so block-size changes don't subtly
         // differ from full prepares for plugins that key off
@@ -690,6 +701,7 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
         st.plugin->setNonRealtime(false);
         st.plugin->prepareToPlay((double)st.sampleRate.load(std::memory_order_acquire),
                                  bs);
+        st.prepared.store(true, std::memory_order_release);
         reply(true, {});
     }
     else if (op == op::kOpenEditor)

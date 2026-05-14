@@ -529,16 +529,21 @@ bool AudioChannel::pushInputBlock(const juce::AudioBuffer<float>& src,
     //    `events[]` together. Using atomic_ref for the count store anyway
     //    so the layout stays consistent for the sandbox-side acquire load.
     uint32_t written = 0;
-    auto bumpMidiOverflow = [&]()
+    auto bumpMidiOverflow = [&](uint64_t n = 1)
     {
         // Global cumulative counter — per-slot was confusing because slots
         // round-robin (the per-slot value would mix counts from many
         // different blocks rather than answering "did THIS block
-        // overflow?").
-        atomicAt(impl->header->midiOverflows).fetch_add(1, std::memory_order_relaxed);
+        // overflow?"). Per-event accuracy past the cap is not a documented
+        // contract — the bulk-bump on cap-overflow keeps the audio thread
+        // from iterating arbitrarily many events on a real-time path.
+        atomicAt(impl->header->midiOverflows).fetch_add(n, std::memory_order_relaxed);
     };
+    int scanned = 0;
+    const int totalEvents = midi.getNumEvents();
     for (const auto meta : midi)
     {
+        ++scanned;
         const auto& msg = meta.getMessage();
         const int rawSize = msg.getRawDataSize();
         if (rawSize <= 0 || rawSize > (int)kMidiEventMaxBytes)
@@ -550,8 +555,14 @@ bool AudioChannel::pushInputBlock(const juce::AudioBuffer<float>& src,
         }
         if (written >= kMidiEventsPerSlot)
         {
-            bumpMidiOverflow();
-            continue;
+            // Bulk-bump for THIS event + every remaining event the
+            // iterator would visit, then break. Bounds the audio-thread
+            // work at kMidiEventsPerSlot iterations regardless of how
+            // bloated the inbound MidiBuffer is — important on the RT
+            // path; a misbehaving upstream that floods (dense CC, stuck
+            // SysEx stream) can't pin the audio thread.
+            bumpMidiOverflow((uint64_t)(totalEvents - scanned + 1));
+            break;
         }
         // Reject events whose frame is past the truncated audio (samples
         // ≤ numSamples — see the comment on the maxSamples computation
@@ -609,6 +620,17 @@ bool AudioChannel::popInputBlock(juce::AudioBuffer<float>& dst,
     // inReadIdx before the MIDI was drained — the host could then immediately
     // reuse the slot and overwrite the queue we were still reading.
     if (!impl->header || !impl->midiQueues) return false;
+    // Symmetric with pushInputBlock: reject up front when the caller
+    // exceeds the spawn-time cap, so a misconfigured consumer learns
+    // about the misuse via the false return rather than getting silently
+    // truncated audio. Don't advance inReadIdx — the producer's slot
+    // stays full until the consumer corrects its numSamples (or the host
+    // tears down). bumps dropouts so the misuse is visible.
+    if (numSamples > (int)impl->header->maxBlockSamples)
+    {
+        atomicAt(impl->header->dropouts).fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
 
     HANDLE evt = impl->evtToSandbox;
     auto writeIdx = atomicAt(impl->header->inWriteIdx);
@@ -656,34 +678,17 @@ bool AudioChannel::popInputBlock(juce::AudioBuffer<float>& dst,
     // 2. Copy audio out of the slot.
     auto bytesPerSlot = impl->header->ringBytesPerSlot;
     auto* src = impl->inputRing + slot * (bytesPerSlot / sizeof(float));
+    // numSamples ≤ maxSamples here (cap enforced by the early-return guard
+    // at the top of this function), so samples == numSamples and no
+    // tail-zero / one-shot warn is needed — both belonged to the old
+    // truncate-and-continue path.
     const int maxSamples = (int)impl->header->maxBlockSamples;
     const int dstCh      = dst.getNumChannels();
     const int channels   = juce::jmin((int)impl->header->maxChannels, dstCh);
-    const int samples    = juce::jmin(maxSamples, numSamples);
-    if (numSamples > maxSamples)
-    {
-        // One-shot warn — same rationale as popBlock above: spawn-cap
-        // validation in kPrepare / kSetBlockSize should have prevented
-        // this; if we hit it the host has misconfigured the worker.
-        static std::atomic<bool> warned{false};
-        bool expected = false;
-        if (warned.compare_exchange_strong(expected, true,
-                                           std::memory_order_acq_rel))
-        {
-            VST_TRACE("[audio-shm] popInputBlock: caller numSamples=%d > spawn "
-                      "cap maxBlockSamples=%d — truncating, tail zeroed",
-                      numSamples, maxSamples);
-        }
-    }
     for (int ch = 0; ch < channels; ++ch)
-    {
         std::memcpy(dst.getWritePointer(ch),
                     src + ch * maxSamples,
-                    sizeof(float) * (size_t)samples);
-        if (samples < numSamples)
-            std::memset(dst.getWritePointer(ch) + samples, 0,
-                        sizeof(float) * (size_t)(numSamples - samples));
-    }
+                    sizeof(float) * (size_t)numSamples);
     for (int ch = channels; ch < dstCh; ++ch)
         dst.clear(ch, 0, numSamples);
 
