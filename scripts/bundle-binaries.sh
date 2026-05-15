@@ -168,20 +168,30 @@ fi
 
 bundle_with_deps "$BIN_DIR/fluidsynth"
 
-# Final patchelf sweep: every bundled binary gets RPATH=$ORIGIN, and
-# every .so does too so transitive deps also load from resources/bin/.
-# Done once at the end so the order in which binaries contribute their
-# libs doesn't matter.
+# Final patchelf sweep: every dynamic binary gets RPATH=$ORIGIN, and
+# every dynamic .so does too so transitive deps also load from
+# resources/bin/. Done once at the end so the order in which binaries
+# contribute their libs doesn't matter.
+#
+# Be strict about patchelf success on dynamic binaries. The downstream
+# audit only checks lib *presence*, not RPATH — so a silent patchelf
+# failure here would ship a binary whose loader falls back to /usr/lib
+# at runtime, exactly the issue #68 regression. Detect static-vs-dynamic
+# explicitly via NEEDED entries in the .dynamic section and only skip
+# patchelf on the static case (e.g. the vgmstream-cli GitHub release).
 for bin in ffmpeg ffprobe vgmstream-cli fluidsynth; do
-    # Statically linked binaries (e.g. the vgmstream-cli GitHub release)
-    # have no .dynamic section and don't need an RPATH — patchelf fails
-    # on them, which is fine. Dynamic binaries that genuinely fail to
-    # patch are caught downstream by verify_bundled_binaries' readelf
-    # NEEDED audit.
-    patchelf --set-rpath '$ORIGIN' "$BIN_DIR/$bin" 2>/dev/null || true
+    bin_path="$BIN_DIR/$bin"
+    if readelf -d "$bin_path" 2>/dev/null | grep -q '(NEEDED)'; then
+        patchelf --set-rpath '$ORIGIN' "$bin_path"
+    else
+        echo " $bin: statically linked, RPATH not applicable"
+    fi
 done
 for so in "$BIN_DIR"/*.so*; do
-    [ -f "$so" ] && patchelf --set-rpath '$ORIGIN' "$so" 2>/dev/null || true
+    [ -f "$so" ] || continue
+    if readelf -d "$so" 2>/dev/null | grep -q '(NEEDED)'; then
+        patchelf --set-rpath '$ORIGIN' "$so"
+    fi
 done
 
 echo " Total resources/bin/: $(du -sh "$BIN_DIR" | cut -f1)"

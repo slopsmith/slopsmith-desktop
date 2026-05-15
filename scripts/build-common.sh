@@ -385,6 +385,14 @@ verify_bundled_binaries() {
     for bin in fluidsynth ffmpeg ffprobe vgmstream-cli; do
       audit_bundled_deps "$bin_dir/$bin" "$bin_dir" || exit 1
     done
+    # Also audit each bundled .so's own NEEDED entries. ldd-on-the-top-
+    # level-binary usually resolves the full transitive closure, but
+    # dlopen-resolved deps and interposer libs can slip through that
+    # traversal. Auditing every bundled .so closes the gap.
+    for so in "$bin_dir"/*.so*; do
+      [ -f "$so" ] || continue
+      audit_bundled_deps "$so" "$bin_dir" || exit 1
+    done
     echo "  ✓ shared-library audit"
   fi
 
