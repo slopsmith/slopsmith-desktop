@@ -159,42 +159,96 @@ get_expected_artifacts() {
 bundle_binaries_impl() {
     # macOS: copy existing binaries and bundle dependencies
 
-    # ffmpeg
-    # ffmpeg + fluidsynth are required by verify_bundled_binaries
-    # downstream and by the runtime app. Fail here with a clear message
-    # rather than silently producing an incomplete bundle that fails
-    # later (or at runtime on the user's machine).
-    local ffmpeg_bin
-    ffmpeg_bin="$(command -v ffmpeg || true)"
-    if [[ -z "$ffmpeg_bin" ]]; then
-        echo "Error: ffmpeg not found on PATH. Install it with \`brew install ffmpeg\` (and ensure /opt/homebrew/bin is on PATH)." >&2
-        exit 1
-    fi
-    cp "$ffmpeg_bin" "$PROJECT_DIR/resources/bin/"
+    # ffmpeg + ffprobe (static builds, NOT brew's ffmpeg).
+    #
+    # Homebrew's stock `ffmpeg` formula (8.1.1+) no longer ships
+    # --enable-libvorbis. Sloppak conversion encodes .ogg with
+    # `-c:a libvorbis`, so a brew-ffmpeg-bundled desktop app silently
+    # degrades to the built-in `vorbis -strict experimental` encoder on
+    # user machines. Pull the matching arch's static build instead:
+    #   - osxexperts.net for arm64 (Apple Silicon)
+    #   - evermeet.cx   for x86_64 (Intel)
+    # Both ship with --enable-libvorbis; URLs + SHA256 pins live in
+    # .build-config.json so an upstream rebuild surfaces as a SHA
+    # mismatch rather than a silent codec change. demucs needs ffprobe
+    # alongside ffmpeg (it reads stream metadata before invoking the
+    # encoder), so we download both from the same provider.
+    local arch ff_key fp_key
+    arch=$(uname -m)
+    case "$arch" in
+        arm64|aarch64) ff_key="ffmpeg_macos_arm64";  fp_key="ffprobe_macos_arm64" ;;
+        x86_64)        ff_key="ffmpeg_macos_x64";    fp_key="ffprobe_macos_x64"   ;;
+        *)
+            echo "Error: unsupported macOS arch: $arch" >&2
+            exit 1
+            ;;
+    esac
 
-    # Sloppak conversion encodes .ogg with -c:a libvorbis. Fail the
-    # build now rather than ship an ffmpeg that produces "Unknown
-    # encoder 'libvorbis'" at runtime on user machines. The
-    # lib/sloppak_convert.py fallback to the built-in `vorbis -strict
-    # experimental` encoder is a safety net for unbundled installs, not
-    # a license to ship a libvorbis-less binary.
-    if ! "$PROJECT_DIR/resources/bin/ffmpeg" -hide_banner -encoders 2>/dev/null | grep -wq libvorbis; then
+    local bin_dir="$PROJECT_DIR/resources/bin"
+    mkdir -p "$bin_dir"
+
+    download_and_install_macos_ffmpeg_tool() {
+        # $1 = tool name (ffmpeg|ffprobe), $2 = config key
+        local tool="$1" key="$2"
+        local url sha tarball
+        url=$(python3 "$SCRIPT_DIR/parse-build-config.py" "$CONFIG" ".external.${key}.url")
+        sha=$(python3 "$SCRIPT_DIR/parse-build-config.py" "$CONFIG" ".external.${key}.sha256")
+        tarball="/tmp/${tool}-macos-${arch}.zip"
+
+        if [[ ! -f "$tarball" ]] || ! shasum -a 256 "$tarball" | awk '{print $1}' | grep -qx "$sha"; then
+            echo "  Downloading $tool from $url"
+            curl -sL --fail --retry 5 --retry-delay 5 --retry-all-errors "$url" -o "$tarball"
+        fi
+        local actual_sha
+        actual_sha=$(shasum -a 256 "$tarball" | awk '{print $1}')
+        if [[ "$actual_sha" != "$sha" ]]; then
+            echo "Error: $tool zip SHA256 mismatch — upstream rebuilt under the same URL" >&2
+            echo "  expected: $sha" >&2
+            echo "  got:      $actual_sha" >&2
+            echo "  url:      $url" >&2
+            echo "Update .external.${key}.sha256 in .build-config.json after verifying the new binary." >&2
+            exit 1
+        fi
+
+        local extract_dir="/tmp/${tool}-extract-$$"
+        rm -rf "$extract_dir"
+        mkdir -p "$extract_dir"
+        # `find` after unzip tolerates either layout (osxexperts puts
+        # the binary at the zip root, evermeet does too at the moment,
+        # but the spec doesn't promise it). The osxexperts zip also
+        # ships __MACOSX/._* resource forks alongside the binary; the
+        # path filter avoids picking those up as the result.
+        unzip -q -o "$tarball" -d "$extract_dir"
+        local found
+        found=$(find "$extract_dir" -type f -name "$tool" -not -path '*/__MACOSX/*' | head -1)
+        if [[ -z "$found" ]]; then
+            echo "Error: '$tool' binary not found after unzipping $tarball — upstream layout may have changed." >&2
+            exit 1
+        fi
+        cp "$found" "$bin_dir/$tool"
+        chmod +x "$bin_dir/$tool"
+        # Static builds from third-party sites carry the macOS quarantine
+        # xattr by default; clear it so the binary can be exec'd by the
+        # build steps that follow (sign-macos-binaries.sh would also
+        # strip this, but verify_bundled_binaries runs the binary first).
+        xattr -d com.apple.quarantine "$bin_dir/$tool" 2>/dev/null || true
+        rm -rf "$extract_dir"
+    }
+
+    download_and_install_macos_ffmpeg_tool ffmpeg  "$ff_key"
+    download_and_install_macos_ffmpeg_tool ffprobe "$fp_key"
+
+    # Sloppak conversion encodes .ogg with -c:a libvorbis. Verify the
+    # downloaded ffmpeg actually has the encoder — both osxexperts and
+    # evermeet build with --enable-libvorbis today, but pinning by SHA
+    # already catches binary drift; this is the runtime guarantee. The
+    # lib/sloppak_convert.py fallback is a safety net for unbundled
+    # installs, not a license to ship a libvorbis-less binary.
+    if ! "$bin_dir/ffmpeg" -hide_banner -encoders 2>/dev/null | grep -wq libvorbis; then
         echo "Error: bundled ffmpeg lacks libvorbis encoder. Sloppak conversion would fall back to the lower-quality built-in vorbis encoder on user machines." >&2
-        echo "brew's default ffmpeg formula ships --enable-libvorbis. If this fails, you may be on a custom tap or stale install — try \`brew reinstall ffmpeg\`." >&2
+        echo "The pinned static build for arch=$arch ($ff_key) should include --enable-libvorbis; if it doesn't, pick a different upstream and update .build-config.json." >&2
         exit 1
     fi
-
-    # ffprobe - demucs spawns ffprobe before ffmpeg to read stream
-    # metadata. brew's ffmpeg formula installs both binaries; bundle
-    # ffprobe so the desktop app doesn't fall through to a host-installed
-    # binary that may or may not exist.
-    local ffprobe_bin
-    ffprobe_bin="$(command -v ffprobe || true)"
-    if [[ -z "$ffprobe_bin" ]]; then
-        echo "Error: ffprobe not found on PATH. Install ffmpeg with \`brew install ffmpeg\` (it ships ffprobe alongside; ensure /opt/homebrew/bin is on PATH)." >&2
-        exit 1
-    fi
-    cp "$ffprobe_bin" "$PROJECT_DIR/resources/bin/"
 
     local fluidsynth_bin
     fluidsynth_bin="$(command -v fluidsynth || true)"

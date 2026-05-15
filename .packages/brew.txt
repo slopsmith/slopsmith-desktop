@@ -5,8 +5,11 @@
 cmake
 pkg-config
 
-# Media tools
-ffmpeg
+# Note: ffmpeg + ffprobe are NOT installed via brew. Homebrew's stock
+# ffmpeg formula (8.1.1+) no longer ships --enable-libvorbis, which
+# sloppak conversion requires (`-c:a libvorbis`). build-macos.sh
+# downloads static builds from osxexperts.net (arm64) / evermeet.cx
+# (x86_64) instead — see `.external.ffmpeg_macos_*` in `.build-config.json`.
 
 # MIDI → audio renderer used by GP5 import (`gp2midi.py`).
 # Homebrew calls the formula `fluid-synth` (with a hyphen); the binary

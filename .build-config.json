@@ -31,6 +31,22 @@
     "python_standalone_linux_x64": {
       "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20250317/cpython-3.12.9+20250317-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
       "sha256": "a36bc60c38fe146e908e2e71fc21266c8558b24a9407226b1d887212839437ef"
+    },
+    "ffmpeg_macos_arm64": {
+      "url": "https://www.osxexperts.net/ffmpeg81arm.zip",
+      "sha256": "ebb82529562b71170807bbc6b0e7eb4f0b13af8cbb0e085bb9e8f6fe709598ad"
+    },
+    "ffprobe_macos_arm64": {
+      "url": "https://www.osxexperts.net/ffprobe81arm.zip",
+      "sha256": "a6640a77d38a6f0527c5b597e599cb36a3427a6931444ed80bc62542421950a1"
+    },
+    "ffmpeg_macos_x64": {
+      "url": "https://evermeet.cx/ffmpeg/ffmpeg-8.1.1.zip",
+      "sha256": "4610988e2f54c243c50da73a09e4e2c36d9bb77546f9aa6c84cb328dcb1a98c1"
+    },
+    "ffprobe_macos_x64": {
+      "url": "https://evermeet.cx/ffmpeg/ffprobe-8.1.1.zip",
+      "sha256": "aeade29dee3c3844e9bcc974f4ae4b29cc4f87994177d77003a8589fa531009e"
     }
   }
 }
