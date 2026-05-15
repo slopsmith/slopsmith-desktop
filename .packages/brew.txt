@@ -5,11 +5,18 @@
 cmake
 pkg-config
 
-# Note: ffmpeg + ffprobe are NOT installed via brew. Homebrew's stock
-# ffmpeg formula (8.1.1+) no longer ships --enable-libvorbis, which
-# sloppak conversion requires (`-c:a libvorbis`). build-macos.sh
-# downloads static builds from osxexperts.net (arm64) / evermeet.cx
-# (x86_64) instead — see `.external.ffmpeg_macos_*` in `.build-config.json`.
+# Media tools
+#
+# ffmpeg is installed for its *dylibs* (libavformat / libavcodec /
+# libswresample / libavutil) — vgmstream-cli is linked against
+# /opt/homebrew/opt/ffmpeg/lib/lib*.dylib, and dylibbundler hangs in a
+# stdin-EOF prompt loop on CI if those files don't exist at bundle
+# time. We do NOT bundle brew's ffmpeg *binary*: Homebrew's stock
+# formula (8.1.1+) no longer ships --enable-libvorbis (sloppak's
+# encoder of choice), so build-macos.sh overwrites resources/bin/ffmpeg
+# with a static build from osxexperts.net (arm64) / evermeet.cx (x86_64)
+# instead. See `.external.ffmpeg_macos_*` in `.build-config.json`.
+ffmpeg
 
 # MIDI → audio renderer used by GP5 import (`gp2midi.py`).
 # Homebrew calls the formula `fluid-synth` (with a hyphen); the binary
