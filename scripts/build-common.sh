@@ -369,9 +369,57 @@ verify_bundled_binaries() {
     exit 1
   fi
   echo "  ✓ vgmstream-cli"
-  
+
+  # On Linux, audit each bundled ELF binary's NEEDED entries: every
+  # SONAME must either be in the glibc/loader skip list (delegated to
+  # the user's libc) or sit next to the binary in resources/bin/.
+  # The `-version` smoke tests above can't catch this on the build
+  # host because /usr/lib happens to satisfy the deps — but on a user
+  # machine with a different ffmpeg ABI the load fails at runtime
+  # (issue #68 on Fedora 44 / Arch).
+  if [[ "$PLATFORM" == "linux" ]]; then
+    if ! command -v readelf >/dev/null 2>&1; then
+      echo_error "readelf not found (apt: binutils) - required to audit bundled binaries' shared library deps"
+      exit 1
+    fi
+    for bin in fluidsynth ffmpeg ffprobe vgmstream-cli; do
+      audit_bundled_deps "$bin_dir/$bin" "$bin_dir" || exit 1
+    done
+    echo "  ✓ shared-library audit"
+  fi
+
   echo_summary "All bundled binaries verified"
   echo ""
+}
+
+# Asserts every NEEDED SONAME in $1 is either in the glibc skip list
+# or present as a file in $2 (the bundle directory). Returns non-zero
+# with a specific error if any SONAME is unsatisfied.
+audit_bundled_deps() {
+  local bin_path="$1"
+  local bundle_dir="$2"
+  local missing=()
+  local soname
+  while IFS= read -r soname; do
+    [ -n "$soname" ] || continue
+    case "$soname" in
+      libc.so*|libm.so*|libpthread.so*|libdl.so*|librt.so*|\
+      ld-linux*|libresolv.so*|linux-vdso*|linux-gate*|\
+      libnsl.so*|libutil.so*|libgcc_s.so*)
+        continue ;;
+    esac
+    [ -f "$bundle_dir/$soname" ] && continue
+    missing+=("$soname")
+  done < <(readelf -d "$bin_path" 2>/dev/null | awk -F'[][]' '/\(NEEDED\)/ {print $2}')
+
+  if [ ${#missing[@]} -gt 0 ]; then
+    echo_error "Bundled $(basename "$bin_path") needs shared libs that are not in resources/bin/:"
+    for soname in "${missing[@]}"; do
+      echo "    - $soname"
+    done
+    echo "  Fix: extend scripts/bundle-binaries.sh so these SONAMEs are bundled (or add them to the glibc skip list if they MUST come from the host libc)."
+    return 1
+  fi
 }
 
 bundle_soundfont() {
