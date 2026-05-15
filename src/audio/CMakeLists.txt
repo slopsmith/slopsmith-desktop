@@ -77,7 +77,6 @@ target_link_libraries(slopsmith_audio PRIVATE
 # JUCE compile definitions
 target_compile_definitions(slopsmith_audio PRIVATE
     JUCE_PLUGINHOST_VST3=1
-    JUCE_PLUGINHOST_LV2=1
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_DISPLAY_SPLASH_SCREEN=0
@@ -116,7 +115,10 @@ elseif(WIN32)
         target_compile_options(slopsmith_audio PRIVATE /EHa)
     endif()
 elseif(UNIX)
+    # LV2 is Linux-only — on Windows, lilv probes every .vst3 bundle for a
+    # manifest.ttl during scan and crashes the audio addon.
     target_compile_definitions(slopsmith_audio PRIVATE
+        JUCE_PLUGINHOST_LV2=1
         JUCE_JACK=1
         JUCE_JACK_CLIENT_NAME="Slopsmith"
         JUCE_ALSA=1
