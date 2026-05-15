@@ -201,7 +201,7 @@ bundle_binaries_impl() {
     # unbundled installs, not a license to ship a libvorbis-less binary.
     if ! "$PROJECT_DIR/resources/bin/ffmpeg.exe" -hide_banner -encoders 2>/dev/null | grep -wq libvorbis; then
         echo_error "bundled ffmpeg lacks libvorbis encoder. Sloppak conversion would fall back to the lower-quality built-in vorbis encoder on user machines."
-        echo_error "Upstream BtbN ffmpeg-master-latest-win64-gpl.zip layout may have changed; pick a different release asset that includes --enable-libvorbis."
+        echo_error "BtbN's GPL build no longer includes --enable-libvorbis; pick a different release asset (or earlier build) that ships it."
         exit 1
     fi
 
