@@ -21,6 +21,10 @@ if [[ -z "${SCRIPT_DIR:-}" ]]; then
     exit 1
 fi
 
+# is_skipped_lib() — glibc/loader skip list, shared verbatim with
+# bundle-binaries.sh so the bundler and the audit never disagree.
+source "$SCRIPT_DIR/bundled-lib-skiplist.sh"
+
 # Colors
 if [[ -z "${RED:-}" ]]; then
     RED='\033[0;31m'
@@ -410,12 +414,7 @@ audit_bundled_deps() {
   local soname
   while IFS= read -r soname; do
     [ -n "$soname" ] || continue
-    case "$soname" in
-      libc.so*|libm.so*|libpthread.so*|libdl.so*|librt.so*|\
-      ld-linux*|libresolv.so*|linux-vdso*|linux-gate*|\
-      libnsl.so*|libutil.so*|libgcc_s.so*)
-        continue ;;
-    esac
+    is_skipped_lib "$soname" && continue
     [ -f "$bundle_dir/$soname" ] && continue
     missing+=("$soname")
   done < <(readelf -d "$bin_path" 2>/dev/null | awk -F'[][]' '/\(NEEDED\)/ {print $2}')

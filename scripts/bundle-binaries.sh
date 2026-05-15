@@ -35,18 +35,9 @@ if ! command -v patchelf >/dev/null 2>&1; then
     exit 1
 fi
 
-# Library basenames we deliberately do NOT bundle: low-level libc /
-# loader pieces that MUST come from the user's own glibc. Bundling
-# these across distros breaks the dynamic linker.
-is_skipped_lib() {
-    case "$1" in
-        libc.so*|libm.so*|libpthread.so*|libdl.so*|librt.so*|\
-        ld-linux*|libresolv.so*|linux-vdso*|linux-gate*|\
-        libnsl.so*|libutil.so*|libgcc_s.so*)
-            return 0 ;;
-    esac
-    return 1
-}
+# is_skipped_lib() — the glibc/loader skip list, shared verbatim with
+# build-common.sh's audit so the two never drift.
+source "$SCRIPT_DIR/bundled-lib-skiplist.sh"
 
 # Copy every non-glibc shared library that the given binary links to
 # into resources/bin/. The final patchelf sweep (below) sets RPATH on
@@ -70,8 +61,10 @@ bundle_with_deps() {
         # -L follows symlinks; -n avoids re-copying a lib already
         # contributed by an earlier binary (every bundled binary on
         # the same build host links the same /usr/lib versions, so
-        # first-wins is safe).
-        cp -Ln "$lib" "$BIN_DIR/" 2>/dev/null || true
+        # first-wins is safe). Errors are NOT suppressed: -n makes the
+        # already-bundled case a no-op exit 0, so any non-zero status
+        # here is a real copy failure that must fail the build.
+        cp -Ln "$lib" "$BIN_DIR/"
     done
 }
 
