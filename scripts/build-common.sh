@@ -108,12 +108,15 @@ clone_slopsmith() {
 	# Remove broken symlinks from plugins dir
 	find "$clone_dir/plugins" -maxdepth 1 -type l -delete 2>/dev/null || true
 
-	# Clone bundled plugins. Format per entry: <owner>/<repo>[:<dirname>]
+	# Clone bundled plugins. Format per entry:
+	#   <owner>/<repo>[@<branch>][:<dirname>]
 	# Dirname defaults to <repo> minus the "slopsmith-plugin-" prefix
 	# with hyphens replaced by underscores (slopsmith treats plugin
 	# directories as Python module names, which can't contain dashes).
 	# Provide an explicit dirname after a colon for repos that don't
-	# follow the slopsmith-plugin-* naming convention.
+	# follow the slopsmith-plugin-* naming convention. An optional
+	# @<branch> clones a non-default branch (used to ship in-review
+	# plugin work in a feature-branch test build).
 	cd "$clone_dir/plugins"
 	local plugins=(
 		# byrongamatos plugins
@@ -125,7 +128,10 @@ clone_slopsmith() {
 		byrongamatos/slopsmith-plugin-midi
 		byrongamatos/slopsmith-plugin-multiplayer
 		byrongamatos/slopsmith-plugin-nam-tone
-		byrongamatos/slopsmith-plugin-notedetect
+		# TEST BUILD: ship the in-review Phase-2 ML detectNotes consumer.
+		# Revert to plain "byrongamatos/slopsmith-plugin-notedetect" once
+		# feat/ml-note-detection merges to the plugin's default branch.
+		byrongamatos/slopsmith-plugin-notedetect@feat/ml-note-detection
 		byrongamatos/slopsmith-plugin-piano
 		byrongamatos/slopsmith-plugin-practice
 		byrongamatos/slopsmith-plugin-profileimport
@@ -155,19 +161,30 @@ clone_slopsmith() {
 	local cloned=0
 	for entry in "${plugins[@]}"; do
 		total=$((total + 1))
-		local owner_repo="${entry%%:*}"
-		local dirname
-		if [[ "$entry" == *:* ]]; then
-			dirname="${entry##*:}"
-		else
+		# Split off an optional ":<dirname>" then an optional "@<branch>".
+		# Git branch names can't contain ':' so the dirname split is safe
+		# to do first; what's left is "<owner>/<repo>" or "<owner>/<repo>@<branch>".
+		local spec="$entry" dirname="" branch=""
+		if [[ "$spec" == *:* ]]; then
+			dirname="${spec##*:}"
+			spec="${spec%%:*}"
+		fi
+		local owner_repo="$spec"
+		if [[ "$spec" == *@* ]]; then
+			branch="${spec##*@}"
+			owner_repo="${spec%%@*}"
+		fi
+		if [[ -z "$dirname" ]]; then
 			dirname="${owner_repo##*/}"
 			dirname="${dirname#slopsmith-plugin-}"
 			dirname="${dirname//-/_}"
 		fi
-		if git clone --depth 1 "https://github.com/${owner_repo}.git" "$dirname" 2>/dev/null; then
+		local clone_args=(--depth 1)
+		[[ -n "$branch" ]] && clone_args+=(--branch "$branch")
+		if git clone "${clone_args[@]}" "https://github.com/${owner_repo}.git" "$dirname" 2>/dev/null; then
 			cloned=$((cloned + 1))
 		else
-			echo " skipped ${owner_repo}"
+			echo " skipped ${owner_repo}${branch:+@$branch}"
 		fi
 	done
 
