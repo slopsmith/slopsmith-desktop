@@ -35,6 +35,8 @@ const juce::StringArray kDefaultNeedsSandboxFilenames = {
     "Guitar Rig",
 };
 
+} // anonymous
+
 juce::File resolveSandboxExe()
 {
     // Locate the directory of the .node DLL via GetModuleHandleEx with this
@@ -114,8 +116,6 @@ juce::File resolveSandboxExe()
 
     return {};
 }
-
-} // anonymous
 
 bool shouldSandbox(const juce::PluginDescription& desc)
 {

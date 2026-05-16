@@ -180,4 +180,9 @@ std::unique_ptr<juce::AudioProcessor> tryLoadSandboxed(
 // status.
 bool shouldSandbox(const juce::PluginDescription& desc);
 
+// Resolve the path to slopsmith-vst-host.exe (sits next to the audio addon
+// .node). Returns a non-existent File if it can't be located. Exposed so the
+// out-of-process VST scan path can spawn the same host binary as the sandbox.
+juce::File resolveSandboxExe();
+
 } // namespace slopsmith::sandbox

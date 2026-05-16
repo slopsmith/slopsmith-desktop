@@ -1,6 +1,69 @@
 #include "VSTHost.h"
 #include "VSTTrace.h"
 
+// The out-of-process scan path is compiled only into the audio addon
+// (SLOPSMITH_AUDIO_ADDON, set in src/audio/CMakeLists.txt). slopsmith-vst-host
+// also links VSTHost.cpp but must NOT pull in SandboxFactory — and it never
+// calls scanDirectories anyway (it runs the --scan-plugin one-shot instead).
+#if JUCE_WINDOWS && defined(SLOPSMITH_AUDIO_ADDON)
+ #include "Sandbox/SandboxedProcessor.h"
+#endif
+
+#if JUCE_WINDOWS && defined(SLOPSMITH_AUDIO_ADDON)
+namespace {
+
+// Probe one plugin file in a child slopsmith-vst-host.exe so a plugin that
+// crashes / aborts / hangs during init can't take down the host process.
+// Returns the descriptor XML on success; sets `reason` and returns empty on
+// failure (spawn failure, timeout, non-zero exit, or no output).
+juce::String scanPluginOutOfProcess(const juce::File& hostExe,
+                                    const juce::String& pluginPath,
+                                    int timeoutMs,
+                                    juce::String& reason)
+{
+    const juce::File outFile = juce::File::createTempFile(".scan.xml");
+
+    juce::ChildProcess proc;
+    const juce::StringArray args {
+        hostExe.getFullPathName(),
+        "--scan-plugin", pluginPath,
+        "--scan-out",    outFile.getFullPathName(),
+    };
+    if (! proc.start(args, 0))
+    {
+        reason = "failed to spawn scan host";
+        outFile.deleteFile();
+        return {};
+    }
+    if (! proc.waitForProcessToFinish(timeoutMs))
+    {
+        // A plugin that hangs during init (license-wait deadlock, modal
+        // dialog) never returns — kill the child and move on.
+        proc.kill();
+        reason = "scan timed out after " + juce::String(timeoutMs) + " ms";
+        outFile.deleteFile();
+        return {};
+    }
+    const auto exitCode = proc.getExitCode();
+    if (exitCode != 0)
+    {
+        reason = "scan host exited with code " + juce::String((int) exitCode);
+        outFile.deleteFile();
+        return {};
+    }
+    const juce::String xml = outFile.loadFileAsString();
+    outFile.deleteFile();
+    if (xml.isEmpty())
+    {
+        reason = "scan host produced no output";
+        return {};
+    }
+    return xml;
+}
+
+} // anonymous
+#endif
+
 VSTHost::VSTHost()
 {
     formatManager.addFormat(std::make_unique<juce::VST3PluginFormat>());
@@ -88,9 +151,51 @@ void VSTHost::scanDirectories(const juce::StringArray& directories, ScanProgress
 #endif
     }
 
-    int totalFiles = filesToScan.size();
+    const int totalFiles = filesToScan.size();
     int scannedCount = 0;
 
+#if JUCE_WINDOWS && defined(SLOPSMITH_AUDIO_ADDON)
+    // Out-of-process scan: probe each plugin in a child slopsmith-vst-host.exe.
+    // The addon is loaded into the Electron main process via N-API, so a
+    // plugin that crashes / aborts during in-process scanAndAddFile would take
+    // the whole app down (see issue: iZotope/Melodyne abort() during scan).
+    // A child process boundary is the only thing that contains an abort() on
+    // an arbitrary plugin-spawned thread.
+    {
+        const juce::File hostExe = slopsmith::sandbox::resolveSandboxExe();
+        if (hostExe.existsAsFile())
+        {
+            constexpr int kScanTimeoutMs = 20000;
+            for (auto& file : filesToScan)
+            {
+                if (scanCancelled.load()) break;
+
+                juce::String reason;
+                const juce::String xml = scanPluginOutOfProcess(
+                    hostExe, file, kScanTimeoutMs, reason);
+                if (xml.isNotEmpty())
+                    addPluginsFromXml(xml);
+                else
+                    juce::Logger::writeToLog("VST scan: skipped " + file
+                                             + " — " + reason);
+
+                ++scannedCount;
+                const float progress = totalFiles > 0
+                    ? (float) scannedCount / (float) totalFiles : 1.0f;
+                if (callback)
+                    callback(progress,
+                             juce::File(file).getFileNameWithoutExtension());
+            }
+            scanning.store(false);
+            return;
+        }
+        juce::Logger::writeToLog("VST scan: slopsmith-vst-host.exe not found —"
+                                 " falling back to in-process scan");
+    }
+#endif
+
+    // In-process scan — used on macOS/Linux, and as a fallback on Windows when
+    // the out-of-process host binary can't be located.
     for (auto& file : filesToScan)
     {
         if (scanCancelled.load()) break;
@@ -117,6 +222,38 @@ void VSTHost::scanDirectories(const juce::StringArray& directories, ScanProgress
     }
 
     scanning.store(false);
+}
+
+juce::String VSTHost::scanPluginFileToXml(const juce::String& path)
+{
+    juce::XmlElement root("PLUGINS");
+    for (auto* format : formatManager.getFormats())
+    {
+        juce::OwnedArray<juce::PluginDescription> found;
+        {
+            const juce::ScopedLock sl(listLock);
+            knownPlugins.scanAndAddFile(path, true, found, *format);
+        }
+        for (auto* desc : found)
+            root.addChildElement(desc->createXml().release());
+    }
+    // Always a parseable document — <PLUGINS/> when the file yields nothing,
+    // so the parent treats "scanned, empty" as success rather than failure.
+    return root.toString();
+}
+
+void VSTHost::addPluginsFromXml(const juce::String& xml)
+{
+    const auto parsed = juce::parseXML(xml);
+    if (parsed == nullptr) return;
+
+    const juce::ScopedLock sl(listLock);
+    for (auto* child : parsed->getChildIterator())
+    {
+        juce::PluginDescription desc;
+        if (desc.loadFromXml(*child))
+            knownPlugins.addType(desc);
+    }
 }
 
 // ── Plugin Access ─────────────────────────────────────────────────────────────

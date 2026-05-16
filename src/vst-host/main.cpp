@@ -987,6 +987,34 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
     }
 }
 
+// One-shot --scan-plugin mode: load a single plugin, write its descriptors to
+// --scan-out, exit. No control pipe, audio shm, message loop, or editor — this
+// is the child process spawned by VSTHost::scanDirectories so a crashy plugin
+// can't take down the addon. A crash here just fails this one plugin's scan.
+int runScanMode(const juce::String& pluginPath, const juce::String& outPath)
+{
+    if (pluginPath.isEmpty() || outPath.isEmpty())
+    {
+        hostLogf("scan mode: need both --scan-plugin and --scan-out");
+        return 2;
+    }
+    // JUCE GUI init: VST3 scanning instantiates the plugin, which can touch
+    // the message thread. Created here on the OS main thread (WinMain).
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    VSTHost host;
+    // scanPluginFileToXml always returns a parseable document (<PLUGINS/> when
+    // the file yields nothing), so an empty result still writes cleanly and
+    // exits 0 — the parent treats "scanned, empty" as success.
+    const juce::String xml = host.scanPluginFileToXml(pluginPath);
+    if (! juce::File(outPath).replaceWithText(xml))
+    {
+        hostLogf("scan mode: failed to write %s", outPath.toRawUTF8());
+        return 11;
+    }
+    hostLogf("scan mode: wrote descriptors for %s", pluginPath.toRawUTF8());
+    return 0;
+}
+
 } // anonymous
 
 // Debug-log path: %TEMP%\slopsmith-vst-host-<pid>.log. Plain text, line-buffered
@@ -1096,6 +1124,27 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
                  (unsigned long)GetLastError());
         return 1;
     }
+
+    // --scan-plugin mode is a separate, minimal code path that bypasses the
+    // whole sandbox handshake (control pipe / audio shm / message loop). It's
+    // detected here before parseArgs, which is built around the sandbox's
+    // required-flag set and would reject the scan flags.
+    {
+        juce::String scanPlugin, scanOut;
+        for (int i = 1; i + 1 < argc; ++i)
+        {
+            const juce::String key(argv[i]);
+            if      (key == "--scan-plugin") scanPlugin = juce::String(argv[i + 1]);
+            else if (key == "--scan-out")    scanOut    = juce::String(argv[i + 1]);
+        }
+        if (scanPlugin.isNotEmpty() || scanOut.isNotEmpty())
+        {
+            const int rc = runScanMode(scanPlugin, scanOut);
+            LocalFree(argv);
+            return rc;
+        }
+    }
+
     Args parsed;
     juce::String parseFailReason;
     if (!parseArgs(argc, argv, parsed, parseFailReason))

@@ -63,6 +63,11 @@ target_include_directories(slopsmith_audio PRIVATE ${NAPI_INCLUDE_DIR})
 # N-API version
 target_compile_definitions(slopsmith_audio PRIVATE NAPI_VERSION=9 NAPI_DISABLE_CPP_EXCEPTIONS)
 
+# Marks this translation unit set as the audio addon (vs. slopsmith-vst-host,
+# which also compiles VSTHost.cpp). Gates the out-of-process VST scan path so
+# it's only built into the addon — the host exe never calls scanDirectories.
+target_compile_definitions(slopsmith_audio PRIVATE SLOPSMITH_AUDIO_ADDON=1)
+
 # JUCE modules — headless (no GUI)
 target_link_libraries(slopsmith_audio PRIVATE
     juce::juce_audio_basics
