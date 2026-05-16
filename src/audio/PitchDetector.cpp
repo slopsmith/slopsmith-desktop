@@ -35,8 +35,11 @@ PitchDetector::~PitchDetector()
 void PitchDetector::prepare(double sampleRate, int /*blockSize*/)
 {
     currentSampleRate = sampleRate;
+
+    // Recompute window so halfLen-1 >= sampleRate/25 Hz at any device rate.
+    analysisSize = 2 * ((int)std::ceil(sampleRate / 25.0) + 1);
+    analysisBuffer.assign((size_t)analysisSize, 0.0f);
     analysisWritePos = 0;
-    std::fill(analysisBuffer.begin(), analysisBuffer.end(), 0.0f);
 
     if (!running.load())
     {
