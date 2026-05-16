@@ -168,6 +168,11 @@ float PitchDetector::yinDetect(const float* buffer, int length, float sampleRate
             yinBuffer[(size_t)tau] *= (float)tau / runningSum;
     }
 
+    // Silent or DC-constant frame: all difference values are zero, every
+    // CMNDF entry stays 0, and the threshold test (0 < 0.15) would accept the
+    // very first tau — producing a spurious pitch.  Bail out early.
+    if (runningSum < 1e-10f) return -1.0f;
+
     // Absolute threshold — search only within the detectable pitch range
     int tau = tauMin;
     while (tau <= tauMax)
