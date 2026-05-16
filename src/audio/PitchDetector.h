@@ -53,8 +53,8 @@ private:
     // Analysis buffer — sized at prepare() time so the minimum detectable
     // frequency stays below 25 Hz at every device sample rate:
     //   analysisSize = 2 * (ceil(sampleRate / 25) + 1)
-    // e.g. 4096 at 44.1/48 kHz, 7842 at 96 kHz, 15 682 at 192 kHz.
-    // Default covers 44.1/48 kHz before prepare() is first called.
+    // e.g. 3530 at 44.1 kHz, 3842 at 48 kHz, 7682 at 96 kHz, 15 362 at 192 kHz.
+    // Default is 4096 so 44.1/48 kHz is covered before prepare() is first called.
     int analysisSize = 4096;
     std::vector<float> analysisBuffer;
     int analysisWritePos = 0;
