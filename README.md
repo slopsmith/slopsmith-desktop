@@ -14,6 +14,25 @@ Standalone cross-platform desktop app that wraps [Slopsmith](https://github.com/
 - **Plugin Manager** — install/update/remove Slopsmith plugins via git
 - **Cross-platform** — Windows 10+, macOS 12+, Linux
 
+## Install
+
+Prebuilt installers for the latest tagged release are published on the
+[GitHub Releases page](https://github.com/byrongamatos/slopsmith-desktop/releases/latest).
+
+| Platform | Download | Notes |
+|----------|----------|-------|
+| Windows 10/11 (x64) | `Slopsmith.Setup.<version>.exe` | NSIS installer. On first run Windows SmartScreen may warn — click *More info → Run anyway*. |
+| macOS 12+ (Apple Silicon) | `Slopsmith-<version>-arm64.dmg` | Signed & notarized. Intel Macs are not currently published — build from source. |
+| Linux (x86_64) | `Slopsmith-<version>.AppImage` | `chmod +x` then run. Portable, no install step. |
+| Debian / Ubuntu (x86_64) | `slopsmith-desktop_<version>_amd64.deb` | `sudo apt install ./slopsmith-desktop_<version>_amd64.deb` |
+
+> **First launch may take a minute or two** while ML model caches populate
+> in the app cache directory. Subsequent launches are fast.
+
+There is currently no Homebrew, winget, Chocolatey, Scoop, Flatpak, or
+Snap distribution — download directly from Releases. The app does not
+yet ship an auto-updater; check Releases periodically for new versions.
+
 ## Architecture
 
 ```
@@ -164,6 +183,13 @@ cd ~/.config/slopsmith-desktop/plugins/
 git clone https://github.com/user/slopsmith-plugin-foo
 # Restart the app
 ```
+
+## Reporting issues
+
+File bugs and feature requests on the
+[issue tracker](https://github.com/byrongamatos/slopsmith-desktop/issues).
+Please include your OS / version, the Slopsmith Desktop version (visible
+in the title bar or in *About*), and steps to reproduce.
 
 ## License
 
