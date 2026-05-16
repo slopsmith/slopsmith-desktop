@@ -1,0 +1,65 @@
+# Feature-branch Windows build — produces a Windows installer for the
+# feat/ml-note-detection branch WITHOUT merging to main or opening a PR.
+#
+# A `push`-triggered workflow runs from the workflow file on the pushed
+# branch, so this file only needs to exist on feat/ml-note-detection to take
+# effect — it never touches main's CI. The installer lands as an artifact on
+# the workflow run (download needs a GitHub login).
+#
+# Delete this file when feat/ml-note-detection merges (build.yml's matrix
+# already covers Windows for main / PRs / tags).
+name: Branch Windows Build
+
+on:
+  push:
+    branches: [feat/ml-note-detection]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # Version numbers for the toolchain setup, read from .build-config.json
+      # (same source build.yml uses).
+      - name: Read build configuration
+        id: config
+        shell: bash
+        run: |
+          NODE_VERSION=$(node -p "require('./.build-config.json').versions.node")
+          PYTHON_VERSION=$(node -p "require('./.build-config.json').versions.python")
+          DOTNET_VERSION=$(node -p "require('./.build-config.json').versions.dotnet")
+          echo "node=$NODE_VERSION" >> $GITHUB_OUTPUT
+          echo "python=$PYTHON_VERSION" >> $GITHUB_OUTPUT
+          echo "dotnet=$DOTNET_VERSION" >> $GITHUB_OUTPUT
+          echo "Node ${NODE_VERSION}, Python ${PYTHON_VERSION}, .NET ${DOTNET_VERSION}"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ steps.config.outputs.node }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ steps.config.outputs.python }}
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ steps.config.outputs.dotnet }}.x
+
+      # Unified platform build script — detects Windows and runs the full
+      # bundle + electron-builder NSIS path. ONNX Runtime is fetched at CMake
+      # configure time (pinned URL + SHA-256, soft-fall to YIN on failure).
+      - name: Build
+        run: ./scripts/build-release.sh
+        shell: bash
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: slopsmith-win-x64-ml-note-detection
+          path: release/*.exe
+          if-no-files-found: warn
