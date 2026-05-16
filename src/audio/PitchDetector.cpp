@@ -208,11 +208,13 @@ float PitchDetector::yinDetect(const float* buffer, int length, float sampleRate
     float freq = sampleRate / betterTau;
 
     // Sanity check: guitar range is ~80 Hz (E2) to ~1320 Hz (E6);
-    // bass is ~41 Hz (E1) to ~330 Hz (E4),
-    // with some extended-range basses reaching ~31 Hz (B0)
-    // with analysisSize=4096 the minimum detectable is ~23 Hz at
-    // 48 kHz; 25 Hz matches the tauMax bound and covers all extended-range bass
-    // tunings (B0 ~31 Hz, drop-A ~27.5 Hz) while rejecting sub-bass artefacts.
+    // bass is ~41 Hz (E1) to ~330 Hz (E4), with some extended-range basses
+    // reaching ~31 Hz (B0). The analysis window is derived from the current
+    // sample rate, so the detector's minimum resolvable frequency is determined
+    // by the configured tauMax / window length rather than a fixed
+    // analysisSize=4096. A 25 Hz floor remains consistent with that bound,
+    // covers extended-range bass tunings (B0 ~31 Hz, drop-A ~27.5 Hz),
+    // and rejects sub-bass artefacts.
     if (freq < 25.0f || freq > 2000.0f) return -1.0f;
 
     return freq;
