@@ -29,6 +29,10 @@ npm-debug.log*
 
 # NAM models (user downloads)
 models/
+# ...but the bundled Basic Pitch ML model IS shipped with the app
+# (Constitution IV — offline first-run), so track resources/models/.
+!resources/models/
+!resources/models/**
 
 # User config
 config/

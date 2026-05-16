@@ -11,6 +11,7 @@ set(AUDIO_SOURCES
     IRLoader.cpp
     PitchDetector.cpp
     ChordScorer.cpp
+    MlNoteDetector.cpp
     Sandbox/Protocol.cpp
 )
 
@@ -163,6 +164,36 @@ if(NAM_AVAILABLE)
     endif()
 else()
     target_compile_definitions(slopsmith_audio PRIVATE SLOPSMITH_NAM_SUPPORT=0)
+endif()
+
+# ONNX Runtime — MlNoteDetector (Basic Pitch). When unavailable, the addon
+# still builds and MlNoteDetector is compiled as an inert stub; the engine
+# falls back to the YIN PitchDetector / ChordScorer (Constitution VII).
+if(ONNXRUNTIME_AVAILABLE)
+    target_include_directories(slopsmith_audio PRIVATE "${ONNXRUNTIME_INCLUDE_DIR}")
+    target_link_libraries(slopsmith_audio PRIVATE "${ONNXRUNTIME_IMPORT_LIB}")
+    target_compile_definitions(slopsmith_audio PRIVATE SLOPSMITH_ONNX_SUPPORT=1)
+
+    # The ONNX Runtime shared lib must load next to slopsmith_audio.node.
+    # Linux: rpath $ORIGIN; macOS: @loader_path; Windows: DLL is searched in
+    # the module's own directory by default.
+    if(APPLE)
+        set_target_properties(slopsmith_audio PROPERTIES
+            BUILD_RPATH "@loader_path" INSTALL_RPATH "@loader_path")
+    elseif(UNIX)
+        set_target_properties(slopsmith_audio PROPERTIES
+            BUILD_RPATH "$ORIGIN" INSTALL_RPATH "$ORIGIN")
+    endif()
+
+    # Stage the runtime lib beside the .node so dev runs and electron-builder
+    # packaging (asarUnpack of build/Release/*) both find it.
+    add_custom_command(TARGET slopsmith_audio POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${ONNXRUNTIME_RUNTIME_LIB}"
+                "$<TARGET_FILE_DIR:slopsmith_audio>/"
+        COMMENT "Staging ONNX Runtime shared library next to slopsmith_audio.node")
+else()
+    target_compile_definitions(slopsmith_audio PRIVATE SLOPSMITH_ONNX_SUPPORT=0)
 endif()
 
 # Include directory for our headers

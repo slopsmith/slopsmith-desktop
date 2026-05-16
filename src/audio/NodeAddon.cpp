@@ -425,6 +425,59 @@ static Napi::Value ResetPeaks(const Napi::CallbackInfo& info)
 
 // ── Pitch Detection (polled) ──────────────────────────────────────────────────
 
+// Load the Basic Pitch ONNX model for the polyphonic ML note detector.
+// Called once at startup by audio-bridge.ts with the bundled model path.
+// Returns false (never throws) if the engine isn't ready, the file is
+// missing, or ONNX support isn't compiled in — the engine then keeps using
+// the YIN PitchDetector / ChordScorer (Constitution VII).
+static Napi::Value LoadNoteModel(const Napi::CallbackInfo& info)
+{
+    auto env = info.Env();
+    if (!engine || info.Length() < 1 || !info[0].IsString())
+        return Napi::Boolean::New(env, false);
+
+    const auto path = info[0].As<Napi::String>().Utf8Value();
+    const bool ok = engine->loadNoteModel(juce::File(juce::String(path)));
+    return Napi::Boolean::New(env, ok);
+}
+
+// Whether the ML note detector is active (ONNX support compiled in AND a
+// model loaded). Lets the renderer / tests tell the ML path from the YIN
+// fallback without inferring it from behaviour.
+static Napi::Value IsMlNoteDetection(const Napi::CallbackInfo& info)
+{
+    auto env = info.Env();
+    return Napi::Boolean::New(env, engine && engine->hasMlNoteDetector());
+}
+
+// Raw polyphonic transcription from the ML note detector — the full set of
+// currently-active pitches, not just the dominant one. Returns
+// `{ notes: [{ midi, confidence, onset }], sampleRate }`, or null when the ML
+// detector isn't active (no model / ONNX support) so the renderer can feature-
+// detect and fall back. Never throws.
+static Napi::Value DetectNotes(const Napi::CallbackInfo& info)
+{
+    auto env = info.Env();
+    if (!engine || !engine->hasMlNoteDetector())
+        return env.Null();
+
+    const auto active = engine->getMlNoteDetector().getActiveNotes();
+    auto notesArr = Napi::Array::New(env, active.size());
+    for (size_t i = 0; i < active.size(); ++i)
+    {
+        auto entry = Napi::Object::New(env);
+        entry.Set("midi", active[i].midi);
+        entry.Set("confidence", active[i].confidence);
+        entry.Set("onset", active[i].onset);
+        notesArr.Set((uint32_t) i, entry);
+    }
+
+    auto obj = Napi::Object::New(env);
+    obj.Set("notes", notesArr);
+    obj.Set("sampleRate", engine->getCurrentSampleRate());
+    return obj;
+}
+
 static Napi::Value GetPitchDetection(const Napi::CallbackInfo& info)
 {
     auto env = info.Env();
@@ -432,7 +485,10 @@ static Napi::Value GetPitchDetection(const Napi::CallbackInfo& info)
 
     if (engine)
     {
-        auto det = engine->getPitchDetector().getLatestDetection();
+        // getActiveDetection() returns the polyphonic ML detector's dominant
+        // pitch when a Basic Pitch model is loaded, else the YIN detector's
+        // latest result — same shape either way, so the plugin is unchanged.
+        auto det = engine->getActiveDetection();
         obj.Set("frequency", det.frequency);
         obj.Set("confidence", det.confidence);
         obj.Set("midiNote", det.midiNote);
@@ -1498,6 +1554,9 @@ static Napi::Object InitModule(Napi::Env env, Napi::Object exports)
     exports.Set("getPitchDetection", Napi::Function::New(env, GetPitchDetection));
     exports.Set("scoreChord", Napi::Function::New(env, ScoreChord));
     exports.Set("getSampleRate", Napi::Function::New(env, GetSampleRate));
+    exports.Set("loadNoteModel", Napi::Function::New(env, LoadNoteModel));
+    exports.Set("isMlNoteDetection", Napi::Function::New(env, IsMlNoteDetection));
+    exports.Set("detectNotes", Napi::Function::New(env, DetectNotes));
 
     // VST scanning
     exports.Set("scanPlugins", Napi::Function::New(env, ScanPlugins));

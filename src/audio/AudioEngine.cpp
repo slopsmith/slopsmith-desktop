@@ -538,6 +538,7 @@ void AudioEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
 
     signalChain.prepare(sr, bs);
     pitchDetector.prepare(sr, bs);
+    mlNoteDetector.prepare(sr, bs);
     noiseGate.prepare(sr, bs);
 
     const juce::ScopedLock sl(backingLock);
@@ -685,6 +686,9 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
     if (monoSource != nullptr)
     {
         pitchDetector.pushSamples(monoSource, numSamples);
+        // Feed the polyphonic ML detector the same dry mono signal. Lock-free
+        // and a no-op when ONNX support isn't compiled in.
+        mlNoteDetector.pushSamples(monoSource, numSamples);
 
         // Mirror the same signal into the lock-free ring buffer that
         // backs getInputFrame(). The release-store on the write index
@@ -780,6 +784,13 @@ ChordScorer::Result AudioEngine::scoreChord(const ChordScorer::Request& req)
         return out;
     }
 
+    // When a Basic Pitch model is loaded, judge the chord against the ML
+    // detector's active-pitch set — genuine polyphonic transcription rather
+    // than the per-string energy/constraint check. Returns the identical
+    // Result shape so the N-API wrapper and the plugin need no change.
+    if (mlNoteDetector.isAvailable())
+        return scoreChordWithMl(req);
+
     // Snapshot the input ring at the requested window size and forward
     // to the scorer. The renderer never sees audio data — only the
     // result object — which is the whole point of running the scoring
@@ -831,5 +842,98 @@ std::vector<float> AudioEngine::getInputFrame(int numSamples) const
     for (int i = 0; i < numSamples; ++i)
         out[(size_t) i]
             = inputFrameRing[(start + (uint64_t) i) & kMask].load(std::memory_order_relaxed);
+    return out;
+}
+
+// ── ML note detection ─────────────────────────────────────────────────────────
+
+namespace
+{
+juce::String midiNoteName(int midi)
+{
+    static const char* names[] = {"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
+    if (midi < 0 || midi > 127) return "?";
+    return juce::String(names[midi % 12]) + juce::String(midi / 12 - 1);
+}
+} // namespace
+
+PitchDetector::Detection AudioEngine::getActiveDetection() const
+{
+    // Prefer the polyphonic ML detector's dominant pitch when a model is
+    // loaded; otherwise fall back to the YIN detector. The shape is identical
+    // so getPitchDetection's consumers can't tell which detector answered.
+    if (mlNoteDetector.isAvailable())
+    {
+        const auto note = mlNoteDetector.getDominantNote();
+        PitchDetector::Detection d;
+        if (note.midi >= 0)
+        {
+            d.midiNote = note.midi;
+            d.confidence = note.confidence;
+            d.frequency = 440.0f * std::pow(2.0f, (float) (note.midi - 69) / 12.0f);
+            d.cents = 0.0f;  // ML detection is discrete-pitch — no cents estimate
+            d.noteName = midiNoteName(note.midi);
+        }
+        return d;
+    }
+    return pitchDetector.getLatestDetection();
+}
+
+ChordScorer::Result AudioEngine::scoreChordWithMl(const ChordScorer::Request& req) const
+{
+    ChordScorer::Result out{};
+    out.totalStrings = (int) req.notes.size();
+    out.results.reserve(req.notes.size());
+
+    // Standard-tuning MIDI base for this (arrangement, stringCount). nullptr
+    // for unsupported pairs — every note then fails closed, mirroring the
+    // constraint scorer's fail-closed contract.
+    const std::vector<int>* base = ChordScorer::standardMidiFor(req.arrangement, req.stringCount);
+
+    int hits = 0;
+    for (const auto& n : req.notes)
+    {
+        ChordScorer::NoteResult r{};
+        r.string = n.string;
+        r.fret = n.fret;
+        r.hasCents = false;  // ML judges by pitch-class membership, not cents
+
+        if (base != nullptr && n.string >= 0
+            && n.string < (int) base->size() && n.fret >= 0)
+        {
+            // Expected MIDI exactly as ChordScorer computes it:
+            // base + per-string tuning offset + capo + fret.
+            const int off = (n.string < (int) req.tuningOffsets.size())
+                                ? req.tuningOffsets[(size_t) n.string] : 0;
+            const int expectedMidi = (*base)[(size_t) n.string] + off + req.capo + n.fret;
+
+            float conf = 0.0f;
+            bool active = mlNoteDetector.isPitchActive(expectedMidi, &conf);
+
+            // Bend / slide: the sounding pitch is moving — accept a ±2
+            // semitone window around the expected note.
+            if (! active && (n.bend || n.slide))
+            {
+                for (int d = -2; d <= 2 && ! active; ++d)
+                    if (d != 0)
+                        active = mlNoteDetector.isPitchActive(expectedMidi + d, &conf);
+            }
+            // Harmonic: the fretted fundamental is suppressed and an overtone
+            // sounds — accept the octave or octave+fifth above.
+            if (! active && n.harmonic)
+                active = mlNoteDetector.isPitchActive(expectedMidi + 12, &conf)
+                      || mlNoteDetector.isPitchActive(expectedMidi + 19, &conf);
+
+            r.hit = active;
+            r.bandEnergy = conf;  // posteriorgram confidence, 0..1 (energy proxy)
+        }
+
+        if (r.hit) ++hits;
+        out.results.push_back(r);
+    }
+
+    out.hitStrings = hits;
+    out.score = out.totalStrings > 0 ? (float) hits / (float) out.totalStrings : 0.0f;
+    out.isHit = out.totalStrings > 0 && out.score >= req.minHitRatio;
     return out;
 }

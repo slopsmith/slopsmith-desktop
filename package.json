@@ -35,7 +35,9 @@
     },
     "files": [
       "dist/**/*",
-      "build/Release/*.node"
+      "build/Release/*.node",
+      "build/Release/libonnxruntime*",
+      "build/Release/onnxruntime.dll"
     ],
     "extraResources": [
       {
@@ -57,10 +59,16 @@
       {
         "from": "resources/soundfonts",
         "to": "soundfonts"
+      },
+      {
+        "from": "resources/models",
+        "to": "models"
       }
     ],
     "asarUnpack": [
-      "build/Release/*.node"
+      "build/Release/*.node",
+      "build/Release/libonnxruntime*",
+      "build/Release/onnxruntime.dll"
     ],
     "linux": {
       "target": [

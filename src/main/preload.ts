@@ -58,6 +58,17 @@ export interface ChordScoreResult {
     results: ChordScoreNoteResult[];
 }
 
+// Raw polyphonic transcription from the ML note detector (Basic Pitch).
+export interface DetectedNote {
+    midi: number;       // MIDI pitch, 21..108
+    confidence: number; // frame posteriorgram, 0..1
+    onset: number;      // onset posteriorgram, 0..1
+}
+export interface NoteDetection {
+    notes: DetectedNote[];
+    sampleRate: number;
+}
+
 contextBridge.exposeInMainWorld('slopsmithDesktop', {
     // Platform detection
     isDesktop: true,
@@ -99,8 +110,14 @@ contextBridge.exposeInMainWorld('slopsmithDesktop', {
         getLevels: () => ipcRenderer.invoke('audio:getLevels'),
         resetPeaks: () => ipcRenderer.invoke('audio:resetPeaks'),
 
-        // Pitch detection (polled)
+        // Pitch detection (polled). Backed by the polyphonic ML detector
+        // (Basic Pitch) when a model is loaded, else the YIN detector —
+        // same result shape either way.
         getPitchDetection: () => ipcRenderer.invoke('audio:getPitchDetection'),
+
+        // Whether the ML note detector (Basic Pitch) is active vs. the YIN
+        // fallback. Resolves false on a downlevel addon.
+        isMlNoteDetection: (): Promise<boolean> => ipcRenderer.invoke('audio:isMlNoteDetection'),
 
         // Current engine sample rate — needed by notedetect's chord
         // scorer to map FFT bins to Hz on the bridge path (no
@@ -117,6 +134,14 @@ contextBridge.exposeInMainWorld('slopsmithDesktop', {
         // can fall back gracefully.
         scoreChord: (ctx: ChordScoreRequest): Promise<ChordScoreResult | null> =>
             ipcRenderer.invoke('audio:scoreChord', ctx),
+
+        // Raw polyphonic transcription — the ML note detector's full
+        // active-pitch set. Resolves null when the ML detector isn't active
+        // (downlevel addon, ONNX support absent, or no model loaded) so the
+        // caller feature-detects and falls back to getPitchDetection /
+        // scoreChord.
+        detectNotes: (): Promise<NoteDetection | null> =>
+            ipcRenderer.invoke('audio:detectNotes'),
 
         // VST plugins
         scanPlugins: (dirs?: string[]) => ipcRenderer.invoke('audio:scanPlugins', dirs),

@@ -3,6 +3,7 @@
 #include "SignalChain.h"
 #include "PitchDetector.h"
 #include "ChordScorer.h"
+#include "MlNoteDetector.h"
 #include <juce_audio_devices/juce_audio_devices.h>
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <array>
@@ -19,6 +20,18 @@ public:
     juce::AudioDeviceManager& getDeviceManager() { return deviceManager; }
     SignalChain& getSignalChain() { return signalChain; }
     PitchDetector& getPitchDetector() { return pitchDetector; }
+    MlNoteDetector& getMlNoteDetector() { return mlNoteDetector; }
+
+    // Load the Basic Pitch ONNX model for the polyphonic ML detector. When a
+    // model is loaded, getActiveDetection() / scoreChord() route through it;
+    // otherwise they fall back to the YIN PitchDetector / ChordScorer.
+    bool loadNoteModel(const juce::File& modelFile) { return mlNoteDetector.loadModel(modelFile); }
+    bool hasMlNoteDetector() const { return mlNoteDetector.isAvailable(); }
+
+    // Best current single-note detection: the ML detector's dominant pitch
+    // when a model is loaded, else the YIN detector's latest result. Shape is
+    // identical either way so the getPitchDetection bridge is detector-agnostic.
+    PitchDetector::Detection getActiveDetection() const;
 
     // Device enumeration
     struct DeviceTypeInfo
@@ -134,9 +147,14 @@ private:
     void audioDeviceStopped() override;
     void stopBackingNoLock(); // stop transport without acquiring backingLock (caller holds it)
 
+    // ML-backed chord scoring against the MlNoteDetector's active-pitch set.
+    // Used by scoreChord() when a Basic Pitch model is loaded.
+    ChordScorer::Result scoreChordWithMl(const ChordScorer::Request& req) const;
+
     juce::AudioDeviceManager deviceManager;
     SignalChain signalChain;
     PitchDetector pitchDetector;
+    MlNoteDetector mlNoteDetector;
     NoiseGate noiseGate;
     ChordScorer chordScorer;
     juce::AudioFormatManager formatManager;
