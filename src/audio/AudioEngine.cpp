@@ -788,7 +788,7 @@ ChordScorer::Result AudioEngine::scoreChord(const ChordScorer::Request& req)
     // detector's active-pitch set — genuine polyphonic transcription rather
     // than the per-string energy/constraint check. Returns the identical
     // Result shape so the N-API wrapper and the plugin need no change.
-    if (mlNoteDetector.isAvailable())
+    if (mlNoteDetector.isReady())
         return scoreChordWithMl(req);
 
     // Snapshot the input ring at the requested window size and forward
@@ -862,7 +862,7 @@ PitchDetector::Detection AudioEngine::getActiveDetection() const
     // Prefer the polyphonic ML detector's dominant pitch when a model is
     // loaded; otherwise fall back to the YIN detector. The shape is identical
     // so getPitchDetection's consumers can't tell which detector answered.
-    if (mlNoteDetector.isAvailable())
+    if (mlNoteDetector.isReady())
     {
         const auto note = mlNoteDetector.getDominantNote();
         PitchDetector::Detection d;

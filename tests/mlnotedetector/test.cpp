@@ -51,7 +51,7 @@ bool readWav(const std::string& path, std::vector<float>& out, int& sampleRate)
         { data = body; dataLen = std::min<uint32_t>(sz, uint32_t(buf.size() - (pos + 8))); }
         pos += 8 + sz + (sz & 1);
     }
-    if (!data || channels == 0 || rate == 0) return false;
+    if (!data || channels == 0 || rate == 0 || bits < 8) return false;
 
     sampleRate = int(rate);
     const int bps = bits / 8;

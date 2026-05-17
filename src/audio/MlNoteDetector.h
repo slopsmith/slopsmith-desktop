@@ -32,8 +32,14 @@ public:
     bool loadModel(const juce::File& modelFile);
     bool hasModel() const { return modelLoaded.load(std::memory_order_relaxed); }
 
-    // True only when ONNX support is compiled in AND a model is loaded.
+    // True only when ONNX support is compiled in AND a model is loaded
+    // (and its output contract has not been demoted).
     bool isAvailable() const;
+
+    // isAvailable() AND the detector has published at least one inference
+    // snapshot — gate engine-side ML routing on this so the cold-start
+    // window after an audio start/restart uses the YIN fallback.
+    bool isReady() const;
 
     void prepare(double sampleRate, int blockSize);
     void stop();

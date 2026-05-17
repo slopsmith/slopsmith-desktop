@@ -126,10 +126,19 @@ struct MlNoteDetector::Impl
     std::unique_ptr<MlInferenceThread> thread;
 
     // Set false by the inference thread when a loaded model's output shape
-    // violates the Basic Pitch contract — such a model will never publish
-    // usable notes, so isAvailable() then reports false and callers fall back
-    // to the YIN detector instead of silently preferring a dead ML path.
+    // violates the Basic Pitch contract, or after repeated Run() failures —
+    // such a model will never publish usable notes, so isAvailable() then
+    // reports false and callers fall back to the YIN detector instead of
+    // silently preferring a dead ML path.
     std::atomic<bool> contractValid{ true };
+    // Consecutive inference exceptions; demote the model once it stays
+    // structurally broken (touched only by the inference thread).
+    int consecutiveInferFailures = 0;
+    // False until the first inference publishes a snapshot. isReady() gates
+    // the engine's ML routing on this so the ~2 s cold-start window after
+    // every audio start/restart uses the YIN/ChordScorer fallback rather
+    // than an ML scorer that would return all-misses until the window fills.
+    std::atomic<bool> hasPublished{ false };
 
     // Start / stop the background inference thread. prepare() and stop() use
     // these so the thread is never alive while clearAudioState() mutates the
@@ -182,6 +191,9 @@ struct MlNoteDetector::Impl
             snapOnsetSeq.fill(0);
             snapOnsetConf.fill(0.0f);
         }
+        // No snapshot has been published for this (re)start yet — the engine
+        // routes to the YIN fallback via isReady() until the first inference.
+        hasPublished.store(false, std::memory_order_relaxed);
     }
 
     // Drain the FIFO, resample to 22050 Hz, append to the rolling window.
@@ -307,16 +319,26 @@ struct MlNoteDetector::Impl
                 }
             }
 
-            const juce::ScopedLock snap(snapshotLock);
-            snapActivity = act;
-            snapOnsetTimeMs = onsetTimeMs;
-            snapOnsetSeq = onsetSeq;
-            snapOnsetConf = onsetConf;
+            {
+                const juce::ScopedLock snap(snapshotLock);
+                snapActivity = act;
+                snapOnsetTimeMs = onsetTimeMs;
+                snapOnsetSeq = onsetSeq;
+                snapOnsetConf = onsetConf;
+            }
+            consecutiveInferFailures = 0;
+            hasPublished.store(true, std::memory_order_relaxed);
         }
         catch (...)
         {
-            // Inference failed — leave the previous snapshot in place. The
-            // engine still has the YIN fallback for callers that need it.
+            // Inference failed — leave the previous snapshot in place; the
+            // engine still has the YIN fallback. A model that keeps throwing
+            // (e.g. missing the expected Basic Pitch output names) is
+            // structurally broken: demote it after a few consecutive
+            // failures so isAvailable() reports false and callers stop
+            // preferring a permanently dead ML path.
+            if (++consecutiveInferFailures >= 3)
+                contractValid.store(false, std::memory_order_relaxed);
         }
     }
 };
@@ -332,6 +354,15 @@ bool MlNoteDetector::isAvailable() const
         && impl->contractValid.load(std::memory_order_relaxed);
 }
 
+bool MlNoteDetector::isReady() const
+{
+    // Available AND has published at least one inference snapshot — the
+    // engine gates ML routing on this so the cold-start window after an
+    // audio start/restart uses the YIN/ChordScorer fallback.
+    return isAvailable()
+        && impl->hasPublished.load(std::memory_order_relaxed);
+}
+
 bool MlNoteDetector::loadModel(const juce::File& modelFile)
 {
     // Return value is "is the ML detector available after this call" — not
@@ -339,7 +370,7 @@ bool MlNoteDetector::loadModel(const juce::File& modelFile)
     // model that was already working, so a bad reload over a good model still
     // reports true, keeping the result consistent with isAvailable().
     if (! modelFile.existsAsFile())
-        return modelLoaded.load(std::memory_order_relaxed);
+        return isAvailable();
 
     try
     {
@@ -359,8 +390,11 @@ bool MlNoteDetector::loadModel(const juce::File& modelFile)
             impl->session = std::move(newSession);
         }
         // Fresh session — clear any prior contract-violation demotion so a
-        // good model loaded after a bad one is usable again.
+        // good model loaded after a bad one is usable again, and reset the
+        // published flag so isReady() waits for this model's first inference.
         impl->contractValid.store(true, std::memory_order_relaxed);
+        impl->consecutiveInferFailures = 0;
+        impl->hasPublished.store(false, std::memory_order_relaxed);
         modelLoaded.store(true, std::memory_order_relaxed);
         // Bring the inference thread up as soon as a model is loaded — not
         // only on the first audio-device prepare(). This keeps isAvailable()
@@ -376,7 +410,7 @@ bool MlNoteDetector::loadModel(const juce::File& modelFile)
     {
         // Build failed — the previous session (if any) is untouched, so
         // report whatever availability state still holds.
-        return modelLoaded.load(std::memory_order_relaxed);
+        return isAvailable();
     }
 }
 
@@ -510,6 +544,7 @@ struct MlNoteDetector::Impl {};
 MlNoteDetector::MlNoteDetector() = default;
 MlNoteDetector::~MlNoteDetector() = default;
 bool MlNoteDetector::isAvailable() const { return false; }
+bool MlNoteDetector::isReady() const { return false; }
 bool MlNoteDetector::loadModel(const juce::File&) { return false; }
 void MlNoteDetector::prepare(double, int) {}
 void MlNoteDetector::stop() {}

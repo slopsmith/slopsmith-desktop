@@ -80,6 +80,11 @@ if(_ort_ok AND _ort_root STREQUAL "")
     set(_ort_extract "${CMAKE_BINARY_DIR}/_deps/onnxruntime")
     set(_ort_header  "${_ort_extract}/${_ort_asset}/include/onnxruntime_cxx_api.h")
 
+    # On a clean build tree _deps does not exist yet — create it so the
+    # file(DOWNLOAD) below can open its destination file instead of failing
+    # and silently disabling ONNX support on every fresh configure.
+    file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/_deps")
+
     # Download — cached: a prior configure's archive with a matching hash is
     # reused, so reconfigure / clean-tree rebuilds don't re-fetch.
     set(_ort_have OFF)
