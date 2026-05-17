@@ -32,34 +32,67 @@ PitchDetector::~PitchDetector()
     stop();
 }
 
+// Designs one 2nd-order Butterworth low-pass section (RBJ cookbook).
+void PitchDetector::designLowpass(Biquad& bq, double cutoffHz, double sampleRate, double q)
+{
+    const double w0    = juce::MathConstants<double>::twoPi * cutoffHz / sampleRate;
+    const double cosw0 = std::cos(w0);
+    const double alpha = std::sin(w0) / (2.0 * q);
+
+    const double a0 =  1.0 + alpha;
+    bq.b0 = ((1.0 - cosw0) * 0.5) / a0;
+    bq.b1 =  (1.0 - cosw0)        / a0;
+    bq.b2 = ((1.0 - cosw0) * 0.5) / a0;
+    bq.a1 = (-2.0 * cosw0)        / a0;
+    bq.a2 =  (1.0 - alpha)        / a0;
+    bq.reset();
+}
+
 void PitchDetector::prepare(double sampleRate, int /*blockSize*/)
 {
-    // Join the detection thread before touching any shared state.  stop() signals,
-    // waits for the thread to exit, and resets 'thread' and 'running', so all
-    // mutations below are safe even if prepare() is called mid-stream (e.g. after
-    // a sample-rate change).
+    // Join the detection thread before touching any shared state.  stop()
+    // signals and waits unconditionally for the thread to exit and resets it,
+    // so all mutations below are safe even if prepare() is called mid-stream
+    // (e.g. after a sample-rate change).
     stop();
 
-    currentSampleRate = sampleRate;
+    // Decimate the device stream down to ~8 kHz for detection so YIN's
+    // O(N^2) difference function stays bounded regardless of device rate.
+    decimationFactor = std::max(1, (int)std::floor(sampleRate / targetInternalRate));
+    internalRate     = sampleRate / decimationFactor;
+    decimPhase       = 0;
 
-    // Recompute window so halfLen-1 >= sampleRate/25 Hz at any device rate.
-    analysisSize = 2 * ((int)std::ceil(sampleRate / 25.0) + 1);
+    // Window spans >2 periods of the lowest note of interest (25 Hz) at the
+    // internal rate, so YIN can resolve B0 / drop tunings (~640 samples).
+    analysisSize = 2 * ((int)std::ceil(internalRate / 25.0) + 1);
     analysisBuffer.assign((size_t)analysisSize, 0.0f);
     analysisWritePos = 0;
 
-    // Unconditional restart — stop() always leaves running==false / thread==null.
-    running.store(true);
+    // Anti-aliasing low-pass below the post-decimation Nyquist (internalRate/2),
+    // run at the device rate before decimation.  4th-order Butterworth via two
+    // biquads with the standard section Q values.  The cutoff sits just above
+    // the detectable range (2000 Hz) and well below Nyquist for alias rejection.
+    const double cutoff = std::min(2200.0, internalRate * 0.45);
+    designLowpass(aaFilter[0], cutoff, sampleRate, 0.54119610);
+    designLowpass(aaFilter[1], cutoff, sampleRate, 1.30656296);
+
+    // Drop any samples queued before this (re)configure so the restarted
+    // detector never analyses stale audio from the previous run.
+    fifo.reset();
+
     thread = std::make_unique<PitchDetectionThread>([this]() { detectionThread(); });
     thread->startThread(juce::Thread::Priority::normal);
 }
 
 void PitchDetector::stop()
 {
-    running.store(false);
     if (thread)
     {
-        thread->signalThreadShouldExit();
-        thread->waitForThreadToExit(1000);
+        // Wait unconditionally for the thread to exit before destroying it.
+        // The bounded internal rate keeps a YIN pass well under a millisecond,
+        // so this returns promptly; a genuine hang surfaces rather than racing
+        // into a use-after-free on a still-running thread.
+        thread->stopThread(-1);
         thread.reset();
     }
 }
@@ -89,31 +122,37 @@ PitchDetector::Detection PitchDetector::getLatestDetection() const
 
 void PitchDetector::detectionThread()
 {
-    // Read available samples from FIFO into analysis buffer
+    // Read all available device-rate samples from the FIFO.
     auto scope = fifo.read(fifo.getNumReady());
-
-    for (int i = 0; i < scope.blockSize1; ++i)
-    {
-        analysisBuffer[(size_t)analysisWritePos] = fifoBuffer[(size_t)(scope.startIndex1 + i)];
-        analysisWritePos = (analysisWritePos + 1) % analysisSize;
-    }
-
-    for (int i = 0; i < scope.blockSize2; ++i)
-    {
-        analysisBuffer[(size_t)analysisWritePos] = fifoBuffer[(size_t)(scope.startIndex2 + i)];
-        analysisWritePos = (analysisWritePos + 1) % analysisSize;
-    }
 
     if (scope.blockSize1 + scope.blockSize2 == 0)
         return; // no new data
 
-    // Run YIN on the analysis buffer (arranged as a contiguous window)
-    // Rearrange: put oldest samples first
+    // Anti-alias filter at the device rate, then decimate into the
+    // internal-rate analysis buffer (keep every decimationFactor-th sample).
+    auto consume = [this](float raw)
+    {
+        const float filtered = aaFilter[1].process(aaFilter[0].process(raw));
+        if (++decimPhase >= decimationFactor)
+        {
+            decimPhase = 0;
+            analysisBuffer[(size_t)analysisWritePos] = filtered;
+            analysisWritePos = (analysisWritePos + 1) % analysisSize;
+        }
+    };
+
+    for (int i = 0; i < scope.blockSize1; ++i)
+        consume(fifoBuffer[(size_t)(scope.startIndex1 + i)]);
+
+    for (int i = 0; i < scope.blockSize2; ++i)
+        consume(fifoBuffer[(size_t)(scope.startIndex2 + i)]);
+
+    // Run YIN on the decimated analysis buffer (oldest sample first).
     std::vector<float> window(analysisSize);
     for (int i = 0; i < analysisSize; ++i)
         window[(size_t)i] = analysisBuffer[(size_t)((analysisWritePos + i) % analysisSize)];
 
-    float freq = yinDetect(window.data(), analysisSize, (float)currentSampleRate);
+    float freq = yinDetect(window.data(), analysisSize, (float)internalRate);
 
     if (freq > 0.0f)
     {
@@ -209,12 +248,10 @@ float PitchDetector::yinDetect(const float* buffer, int length, float sampleRate
 
     // Sanity check: guitar range is ~80 Hz (E2) to ~1320 Hz (E6);
     // bass is ~41 Hz (E1) to ~330 Hz (E4), with some extended-range basses
-    // reaching ~31 Hz (B0). The analysis window is derived from the current
-    // sample rate, so the detector's minimum resolvable frequency is determined
-    // by the configured tauMax / window length rather than a fixed
-    // analysisSize=4096. A 25 Hz floor remains consistent with that bound,
-    // covers extended-range bass tunings (B0 ~31 Hz, drop-A ~27.5 Hz),
-    // and rejects sub-bass artefacts.
+    // reaching ~31 Hz (B0). Detection runs on a decimated ~8 kHz internal
+    // stream whose window spans >2 periods of 25 Hz, so a 25 Hz floor is
+    // resolvable; it covers extended-range bass tunings (B0 ~31 Hz, drop-A
+    // ~27.5 Hz) and rejects sub-bass artefacts.
     if (freq < 25.0f || freq > 2000.0f) return -1.0f;
 
     return freq;

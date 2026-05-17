@@ -46,16 +46,52 @@ private:
     static float midiToFrequency(int midi, float tuningRef);
     static juce::String midiToNoteName(int midi);
 
+    // ── Anti-aliasing decimation ────────────────────────────────────────────
+    // Detection runs at a bounded internal rate (~8 kHz) so YIN's O(N^2) cost
+    // stays constant regardless of the device sample rate.  Incoming audio is
+    // low-pass filtered and decimated before analysis.
+    struct Biquad
+    {
+        double b0 = 1.0, b1 = 0.0, b2 = 0.0, a1 = 0.0, a2 = 0.0;
+        double z1 = 0.0, z2 = 0.0; // Direct Form II transposed state
+
+        inline float process(float x) noexcept
+        {
+            const double in = (double)x;
+            const double y  = b0 * in + z1;
+            z1 = b1 * in - a1 * y + z2;
+            z2 = b2 * in - a2 * y;
+            return (float)y;
+        }
+
+        void reset() noexcept { z1 = z2 = 0.0; }
+    };
+
+    // Designs one 2nd-order Butterworth low-pass section into 'bq'.
+    static void designLowpass(Biquad& bq, double cutoffHz, double sampleRate, double q);
+
     // Lock-free FIFO for audio thread -> detection thread
     juce::AbstractFifo fifo{4096};
     std::vector<float> fifoBuffer;
 
-    // Analysis buffer — sized at prepare() time so the minimum detectable
-    // frequency stays below 25 Hz at every device sample rate:
-    //   analysisSize = 2 * (ceil(sampleRate / 25) + 1)
-    // e.g. 3530 at 44.1 kHz, 3842 at 48 kHz, 7682 at 96 kHz, 15 362 at 192 kHz.
-    // Default is 4096 so 44.1/48 kHz is covered before prepare() is first called.
-    int analysisSize = 4096;
+    // Detection runs on decimated audio at ~8 kHz so YIN's cost is bounded.
+    // decimationFactor and internalRate are computed in prepare(); aaFilter is
+    // a 4th-order Butterworth low-pass (two cascaded biquads) applied at the
+    // device rate before decimation.  prepare() writes these while the
+    // detection thread is joined (stopped), and the thread only reads them
+    // while running — so no concurrent access occurs.
+    static constexpr double targetInternalRate = 8000.0;
+    int decimationFactor = 1;
+    double internalRate = 48000.0;
+    Biquad aaFilter[2];
+    int decimPhase = 0;
+
+    // Analysis buffer — holds the most recent decimated (internal-rate)
+    // samples, spanning >2 periods of the lowest note of interest (25 Hz).
+    // Sized at prepare() time as 2 * (ceil(internalRate / 25) + 1); ~640
+    // samples regardless of device rate.  Default covers 44.1/48 kHz before
+    // prepare() is first called.
+    int analysisSize = 1024;
     std::vector<float> analysisBuffer;
     int analysisWritePos = 0;
 
@@ -66,11 +102,9 @@ private:
     std::atomic<float> detectedCents{0.0f};
 
     std::atomic<float> tuningRef{440.0f};
-    double currentSampleRate = 48000.0;
 
     // Background thread
     std::unique_ptr<juce::Thread> thread;
-    std::atomic<bool> running{false};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PitchDetector)
 };
