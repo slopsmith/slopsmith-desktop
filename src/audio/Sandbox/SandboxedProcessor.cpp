@@ -91,10 +91,27 @@ namespace {
             auto style = GetWindowLongPtrW((HWND)nativeHwnd, GWL_STYLE);
             style = (style | WS_CHILD) & ~WS_POPUP;
             SetWindowLongPtrW((HWND)nativeHwnd, GWL_STYLE, style);
+
+            // SetParent returns the *previous* parent, which is NULL both on
+            // failure and when the old parent was the desktop — ambiguous.
+            // Verify the reparent took by reading the parent back. Don't set
+            // `embedded` on failure: that flag gates the retry guard, so a
+            // false success would strand the editor offscreen forever.
             SetParent((HWND)nativeHwnd, parent);
-            SetWindowPos((HWND)nativeHwnd, nullptr, 0, 0,
-                         getWidth(), getHeight(),
-                         SWP_NOZORDER | SWP_FRAMECHANGED);
+            if (GetParent((HWND)nativeHwnd) != parent)
+            {
+                VST_TRACE("[sandbox] SandboxedEditor: SetParent failed — "
+                          "HWND not embedded");
+                return;
+            }
+            if (! SetWindowPos((HWND)nativeHwnd, nullptr, 0, 0,
+                               getWidth(), getHeight(),
+                               SWP_NOZORDER | SWP_FRAMECHANGED))
+            {
+                VST_TRACE("[sandbox] SandboxedEditor: SetWindowPos failed "
+                          "after reparent");
+                return;
+            }
             // The sandbox parks the editor window offscreen until it has a
             // parent; make it visible now that it's embedded.
             ShowWindow((HWND)nativeHwnd, SW_SHOW);
