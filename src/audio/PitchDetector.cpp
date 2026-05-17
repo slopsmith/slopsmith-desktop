@@ -32,7 +32,8 @@ PitchDetector::~PitchDetector()
     stop();
 }
 
-// Designs one 2nd-order Butterworth low-pass section (RBJ cookbook).
+// Designs one 2nd-order RBJ-cookbook low-pass biquad.  The cascade in
+// prepare() is Butterworth only because of the section Q values it passes.
 void PitchDetector::designLowpass(Biquad& bq, double cutoffHz, double sampleRate, double q)
 {
     const double w0    = juce::MathConstants<double>::twoPi * cutoffHz / sampleRate;
@@ -78,8 +79,9 @@ void PitchDetector::prepare(double sampleRate, int /*blockSize*/)
     yinBuffer.assign((size_t)(analysisSize / 2), 0.0f);
 
     // Anti-aliasing low-pass below the post-decimation Nyquist (internalRate/2),
-    // run at the device rate before decimation.  4th-order Butterworth via two
-    // biquads with the standard section Q values.  The cutoff sits near the top
+    // run at the device rate before decimation.  Two cascaded RBJ low-pass
+    // biquads given the standard Butterworth section Q values, which makes the
+    // overall 4th-order response Butterworth.  The cutoff sits near the top
     // of the detectable range (~2 kHz) when the internal rate allows; otherwise
     // it is capped at internalRate*0.45 to stay below the Nyquist margin.
     const double cutoff = std::min(2200.0, internalRate * 0.45);

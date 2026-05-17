@@ -67,7 +67,8 @@ private:
         void reset() noexcept { z1 = z2 = 0.0; }
     };
 
-    // Designs one 2nd-order Butterworth low-pass section into 'bq'.
+    // Designs one 2nd-order RBJ-cookbook low-pass biquad into 'bq'.  The
+    // cascade is Butterworth only by virtue of the section Q values passed.
     static void designLowpass(Biquad& bq, double cutoffHz, double sampleRate, double q);
 
     // Lock-free FIFO for audio thread -> detection thread
@@ -76,7 +77,7 @@ private:
 
     // Detection runs on decimated audio at ~8 kHz so YIN's cost is bounded.
     // decimationFactor and internalRate are computed in prepare(); aaFilter is
-    // a 4th-order Butterworth low-pass (two cascaded biquads) applied at the
+    // a 4th-order Butterworth-response low-pass (two cascaded biquads) at the
     // device rate before decimation.  prepare() writes these while the
     // detection thread is joined (stopped), and the thread only reads them
     // while running — so no concurrent access occurs.
