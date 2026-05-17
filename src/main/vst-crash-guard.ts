@@ -60,9 +60,11 @@ export function initVstCrashGuard(): string[] {
 
     // A clean shutdown is, by definition, not a crash. If the app quits while
     // an editor grace-window sentinel is still armed (the unref'd timer
-    // hasn't fired yet), clear it here so the plugin isn't falsely blocklisted
-    // on next launch — only an abrupt termination should leave a sentinel.
-    app.once('will-quit', () => clearSentinel());
+    // hasn't fired yet), disarm it here so the plugin isn't falsely
+    // blocklisted on next launch — only an abrupt termination should leave a
+    // sentinel. disarmSentinel also cancels the pending timer so no stale
+    // callback can fire mid-shutdown.
+    app.once('will-quit', () => disarmSentinel());
 
     return [...blocklist];
 }

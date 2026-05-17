@@ -269,16 +269,20 @@ export function initAudioBridge(): void {
     // ── Signal Chain ───────────────────────────────────────────────────────
 
     ipcMain.handle('audio:loadVST', (_event, pluginPath: string) => {
-        // Bracket the in-process load with the crash sentinel: loadVST is
-        // synchronous (it blocks on the addon's message thread), so a hard
-        // fault means this call never returns and the sentinel survives for
-        // the next startup to find. The sentinel is cleared only on a clean
-        // return — if the native call throws (it does so on a required-
-        // sandbox spawn failure) the sentinel is deliberately left armed for
-        // startup to promote; that plugin already needs the sandbox.
+        // Bracket the in-process load with the crash sentinel. The sentinel
+        // detects a hard process abort: loadVST is synchronous, so a fault
+        // means this call never returns and the `finally` never runs, leaving
+        // the sentinel for the next startup to find. Any normal return OR a
+        // thrown JS exception (loadVST throws on a required-sandbox spawn
+        // failure — a clean error, not a crash) means the process survived,
+        // so disarm in `finally` to avoid a false blocklist entry.
         armSentinel(pluginPath, 'load');
-        const slotId = audio?.loadVST(pluginPath) ?? -1;
-        disarmSentinel();
+        let slotId = -1;
+        try {
+            slotId = audio?.loadVST(pluginPath) ?? -1;
+        } finally {
+            disarmSentinel();
+        }
         if (slotId >= 0) vstSlotPaths.set(slotId, pluginPath);
         return slotId;
     });
