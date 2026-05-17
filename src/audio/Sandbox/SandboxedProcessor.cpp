@@ -97,11 +97,13 @@ namespace {
             // Verify the reparent took by reading the parent back. Don't set
             // `embedded` on failure: that flag gates the retry guard, so a
             // false success would strand the editor offscreen forever.
+            SetLastError(0);
             SetParent((HWND)nativeHwnd, parent);
             if (GetParent((HWND)nativeHwnd) != parent)
             {
-                VST_TRACE("[sandbox] SandboxedEditor: SetParent failed — "
-                          "HWND not embedded");
+                VST_TRACE("[sandbox] SandboxedEditor: SetParent failed "
+                          "(GetLastError=%lu) — HWND not embedded",
+                          (unsigned long)GetLastError());
                 return;
             }
             if (! SetWindowPos((HWND)nativeHwnd, nullptr, 0, 0,
