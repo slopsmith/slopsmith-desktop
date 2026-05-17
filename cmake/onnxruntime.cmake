@@ -118,7 +118,10 @@ if(_ort_ok AND _ort_root STREQUAL "")
     endif()
     if(NOT _ort_have)
         message(STATUS "ONNX Runtime: downloading ${_ort_asset}.${_ort_ext}")
-        file(DOWNLOAD "${_ort_url}" "${_ort_archive}" STATUS _ort_dlst TLS_VERIFY ON)
+        # Bounded timeouts so a network stall can't hang cmake configure
+        # indefinitely — the status check below then soft-falls to YIN.
+        file(DOWNLOAD "${_ort_url}" "${_ort_archive}" STATUS _ort_dlst
+             TLS_VERIFY ON INACTIVITY_TIMEOUT 30 TIMEOUT 600)
         list(GET _ort_dlst 0 _ort_dlcode)
         if(_ort_dlcode EQUAL 0 AND EXISTS "${_ort_archive}")
             file(SHA256 "${_ort_archive}" _ort_got)

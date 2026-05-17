@@ -28,7 +28,10 @@ public:
 
     // Load the Basic Pitch ONNX model. Thread-safe; the live model pointer is
     // swapped under a lock once the new session is built (NAMProcessor pattern).
-    // Returns false if the file is missing/invalid or ONNX support is disabled.
+    // Returns "is the ML detector available after this call" — NOT whether
+    // this particular load succeeded. A missing/invalid file never tears down
+    // an already-loaded model, so it can still return true; returns false when
+    // no model is loaded or ONNX support is compiled out.
     bool loadModel(const juce::File& modelFile);
     bool hasModel() const { return modelLoaded.load(std::memory_order_relaxed); }
 

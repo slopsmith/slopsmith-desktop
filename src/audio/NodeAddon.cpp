@@ -427,9 +427,12 @@ static Napi::Value ResetPeaks(const Napi::CallbackInfo& info)
 
 // Load the Basic Pitch ONNX model for the polyphonic ML note detector.
 // Called once at startup by audio-bridge.ts with the bundled model path.
-// Returns false (never throws) if the engine isn't ready, the file is
-// missing, or ONNX support isn't compiled in — the engine then keeps using
-// the YIN PitchDetector / ChordScorer (Constitution VII).
+// Never throws. Returns "is ML note detection available after this call" —
+// a model is loaded with a valid contract. A missing/invalid file does NOT
+// tear down an already-loaded model, so it can still return true; it returns
+// false when the engine isn't ready or ONNX support isn't compiled in, and
+// the engine then keeps using the YIN PitchDetector / ChordScorer
+// (Constitution VII).
 static Napi::Value LoadNoteModel(const Napi::CallbackInfo& info)
 {
     auto env = info.Env();
