@@ -24,6 +24,26 @@ check_command() {
     fi
 }
 
+# Verify the media chain: ffmpeg (WEM/OGG transcode), ffprobe (demucs probes
+# stream metadata before invoking ffmpeg), and ffmpeg's libvorbis encoder
+# (Sloppak conversion encodes .ogg with `-c:a libvorbis`). $1 is the install
+# hint shown when ffmpeg/ffprobe are missing.
+check_media_chain() {
+    local install_hint="$1"
+    command -v ffmpeg  >/dev/null 2>&1 && echo "  [OK] ffmpeg"  || echo "  [MISSING] ffmpeg ($install_hint)"
+    command -v ffprobe >/dev/null 2>&1 && echo "  [OK] ffprobe" || echo "  [MISSING] ffprobe (ships with ffmpeg — $install_hint)"
+    if command -v ffmpeg >/dev/null 2>&1; then
+        if ffmpeg -hide_banner -encoders 2>/dev/null | grep -wq libvorbis; then
+            echo "  [OK] ffmpeg libvorbis encoder"
+        else
+            echo "  [WARN] ffmpeg lacks the libvorbis encoder — Sloppak conversion"
+            echo "         falls back to the lower-quality built-in vorbis encoder."
+            echo "         Homebrew's ffmpeg 8.1.1+ dropped libvorbis; packaged builds"
+            echo "         bundle a static ffmpeg with --enable-libvorbis instead."
+        fi
+    fi
+}
+
 check_command node "Install Node.js 20+" || exit 1
 check_command npm "Comes with Node.js" || exit 1
 check_command cmake "Install cmake (apt/brew/pacman)" || exit 1
@@ -42,14 +62,14 @@ case "$(uname -s)" in
         pkg-config --exists xrandr 2>/dev/null && echo "  [OK] Xrandr" || echo "  [MISSING] Xrandr dev headers"
         pkg-config --exists xcursor 2>/dev/null && echo "  [OK] Xcursor" || echo "  [MISSING] Xcursor dev headers"
         pkg-config --exists xinerama 2>/dev/null && echo "  [OK] Xinerama" || echo "  [MISSING] Xinerama dev headers"
-        command -v ffmpeg        >/dev/null 2>&1 && echo "  [OK] ffmpeg"        || echo "  [MISSING] ffmpeg (apt: ffmpeg / pacman: ffmpeg)"
+        check_media_chain "apt: ffmpeg / pacman: ffmpeg"
         command -v vgmstream-cli >/dev/null 2>&1 && echo "  [OK] vgmstream-cli" || echo "  [MISSING] vgmstream-cli (AUR: yay -S vgmstream-cli-bin / or github.com/vgmstream/vgmstream/releases)"
         ;;
     Darwin)
         echo ""
         echo "Checking macOS dependencies..."
         xcode-select -p &>/dev/null && echo "  [OK] Xcode Command Line Tools" || echo "  [MISSING] Run: xcode-select --install"
-        command -v ffmpeg        >/dev/null 2>&1 && echo "  [OK] ffmpeg"        || echo "  [MISSING] ffmpeg (brew install ffmpeg)"
+        check_media_chain "brew install ffmpeg"
         command -v vgmstream-cli >/dev/null 2>&1 && echo "  [OK] vgmstream-cli" || echo "  [MISSING] vgmstream-cli (brew install vgmstream)"
         ;;
 esac
@@ -65,26 +85,28 @@ echo ""
 echo "Installing npm dependencies..."
 npm install
 
-# Locate Slopsmith: $SLOPSMITH_DIR env, ../slopsmith (sibling), ~/Repositories/slopsmith
-if [ -n "${SLOPSMITH_DIR:-}" ] && [ -d "$SLOPSMITH_DIR" ]; then
-    SLOPSMITH_DIR="$(cd "$SLOPSMITH_DIR" && pwd)"
-elif [ -d "$PROJECT_DIR/../slopsmith" ]; then
-    SLOPSMITH_DIR="$(cd "$PROJECT_DIR/../slopsmith" && pwd)"
-elif [ -d "$HOME/Repositories/slopsmith" ]; then
-    SLOPSMITH_DIR="$(cd "$HOME/Repositories/slopsmith" && pwd)"
-else
-    SLOPSMITH_DIR="$PROJECT_DIR/../slopsmith"
-fi
+# Locate Slopsmith: $SLOPSMITH_DIR env, ../slopsmith (sibling), ~/Repositories/slopsmith.
+# A candidate only counts if it actually contains server.py — a partial or
+# unrelated ../slopsmith directory must not mask a valid legacy checkout.
+SLOPSMITH_FOUND=""
+for candidate in "${SLOPSMITH_DIR:-}" "$PROJECT_DIR/../slopsmith" "$HOME/Repositories/slopsmith"; do
+    [ -n "$candidate" ] || continue
+    if [ -f "$candidate/server.py" ]; then
+        SLOPSMITH_FOUND="$(cd "$candidate" && pwd)"
+        break
+    fi
+done
+SLOPSMITH_DIR="$SLOPSMITH_FOUND"
 
-if [ -d "$SLOPSMITH_DIR" ]; then
+if [ -n "$SLOPSMITH_DIR" ]; then
     echo ""
     echo "Slopsmith found at: $SLOPSMITH_DIR"
 
     PYTHON="${PROJECT_DIR}/.venv/bin/python3"
     [ -x "$PYTHON" ] || PYTHON="python3"
-    echo "Checking Python dependencies ($PYTHON)..."
-    "$PYTHON" -c "import fastapi" 2>/dev/null && echo "  [OK] fastapi" || echo "  [MISSING] $PYTHON -m pip install -r \"$SLOPSMITH_DIR/requirements.txt\""
-    "$PYTHON" -c "import uvicorn" 2>/dev/null && echo "  [OK] uvicorn" || echo "  [MISSING] $PYTHON -m pip install -r \"$SLOPSMITH_DIR/requirements.txt\""
+    echo "Checking Python dependencies (\"$PYTHON\")..."
+    "$PYTHON" -c "import fastapi" 2>/dev/null && echo "  [OK] fastapi" || echo "  [MISSING] \"$PYTHON\" -m pip install -r \"$SLOPSMITH_DIR/requirements.txt\""
+    "$PYTHON" -c "import uvicorn" 2>/dev/null && echo "  [OK] uvicorn" || echo "  [MISSING] \"$PYTHON\" -m pip install -r \"$SLOPSMITH_DIR/requirements.txt\""
 else
     echo ""
     echo "WARNING: Slopsmith not found. Set \$SLOPSMITH_DIR, clone to $PROJECT_DIR/../slopsmith, or use ~/Repositories/slopsmith"

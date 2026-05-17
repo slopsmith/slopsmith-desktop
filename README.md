@@ -81,6 +81,9 @@ yet ship an auto-updater; check Releases periodically for new versions.
 sudo apt install libasound2-dev libjack-jackd2-dev libfreetype-dev \
   libx11-dev libxrandr-dev libxcursor-dev libxinerama-dev pkg-config cmake \
   ffmpeg
+# vgmstream-cli is not in the apt repos — install a prebuilt binary from
+# https://github.com/vgmstream/vgmstream/releases (download the Linux CLI
+# artifact and place vgmstream-cli on your PATH).
 
 # Arch/Manjaro
 sudo pacman -S alsa-lib jack2 freetype2 libx11 libxrandr libxcursor libxinerama cmake ffmpeg
@@ -92,6 +95,12 @@ yay -S vgmstream-cli-bin
 xcode-select --install
 brew install cmake pkg-config ffmpeg vgmstream
 ```
+
+> **Note:** Homebrew's `ffmpeg` 8.1.1+ no longer enables the `libvorbis`
+> encoder. Dev mode still runs — Sloppak conversion falls back to ffmpeg's
+> lower-quality built-in vorbis encoder — but packaged macOS builds bundle a
+> static ffmpeg with `--enable-libvorbis` for full-quality `.ogg` output.
+> `setup-dev.sh` prints a `[WARN]` when the encoder is absent.
 
 ### Build
 
@@ -129,7 +138,11 @@ inside the DevContainer:
 
 **Prerequisites**
 - [Docker](https://docs.docker.com/get-docker/)
-- The [Slopsmith](https://github.com/byrongamatos/slopsmith) server repository (see path resolution above)
+- The [Slopsmith](https://github.com/byrongamatos/slopsmith) server repository
+  cloned as a sibling at `../slopsmith`. The DevContainer bind-mounts that exact
+  path (`.devcontainer/devcontainer.json`) and its `postCreateCommand` fails
+  fast if it is missing — unlike the host build, it does **not** honour
+  `$SLOPSMITH_DIR` or `~/Repositories/slopsmith`.
 
 **VS Code**
 ```bash

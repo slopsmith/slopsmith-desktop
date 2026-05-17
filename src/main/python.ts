@@ -125,23 +125,28 @@ function findSlopsmithDir(): string {
         return path.join(process.resourcesPath, 'slopsmith');
     }
 
-    // Development — same resolution order as scripts/resolve-slopsmith-dir.sh:
+    // Development — same resolution order as scripts/setup-dev.sh:
     //   1. $SLOPSMITH_DIR
     //   2. ../slopsmith (sibling to slopsmith-desktop)
     //   3. ~/Repositories/slopsmith (legacy)
+    // A candidate only counts if it actually contains server.py — a partial
+    // or unrelated ../slopsmith directory must not mask a valid legacy
+    // checkout, otherwise startPython fails outright instead of falling
+    // through to the next candidate.
+    const isSlopsmithRepo = (dir: string): boolean =>
+        fs.existsSync(path.join(dir, 'server.py'));
+
     const explicit = process.env.SLOPSMITH_DIR;
     if (explicit) {
         const explicitPath = path.resolve(explicit);
-        if (fs.existsSync(explicitPath) && fs.statSync(explicitPath).isDirectory()) {
-            return explicitPath;
-        }
+        if (isSlopsmithRepo(explicitPath)) return explicitPath;
     }
 
     const siblingPath = path.join(__dirname, '..', '..', '..', 'slopsmith');
-    if (fs.existsSync(siblingPath)) return siblingPath;
+    if (isSlopsmithRepo(siblingPath)) return siblingPath;
 
     const legacyPath = path.join(process.env.HOME || '', 'Repositories', 'slopsmith');
-    if (fs.existsSync(legacyPath)) return legacyPath;
+    if (isSlopsmithRepo(legacyPath)) return legacyPath;
 
     return siblingPath;
 }
