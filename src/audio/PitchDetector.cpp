@@ -57,9 +57,11 @@ void PitchDetector::prepare(double sampleRate, int /*blockSize*/)
     // touched below; it must not be called while the audio callback is live.
     stop();
 
-    // Decimate the device stream down to ~8 kHz for detection so YIN's
+    // Decimate the device stream down to <= ~8 kHz for detection so YIN's
     // O(N^2) difference function stays bounded regardless of device rate.
-    decimationFactor = std::max(1, (int)std::floor(sampleRate / targetInternalRate));
+    // ceil() keeps internalRate at or below targetInternalRate (floor() could
+    // leave it higher, e.g. ~8.8 kHz at 44.1 kHz, inflating the YIN cost).
+    decimationFactor = std::max(1, (int)std::ceil(sampleRate / targetInternalRate));
     internalRate     = sampleRate / decimationFactor;
     decimPhase       = 0;
 
