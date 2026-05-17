@@ -88,10 +88,15 @@ namespace {
                 return;
             }
 
+            wchar_t winsta[128] = L"?";
+            DWORD winstaLen = 0;
+            GetUserObjectInformationW(GetProcessWindowStation(), UOI_NAME,
+                                      winsta, sizeof(winsta), &winstaLen);
             VST_TRACE("[sandbox] SandboxedEditor: embed attempt — "
-                      "nativeHwnd=%p IsWindow=%d, parentHwnd=%p IsWindow=%d",
+                      "nativeHwnd=%p IsWindow=%d, parentHwnd=%p IsWindow=%d, "
+                      "winsta=%ls",
                       nativeHwnd, IsWindow((HWND)nativeHwnd) ? 1 : 0,
-                      (void*)parent, IsWindow(parent) ? 1 : 0);
+                      (void*)parent, IsWindow(parent) ? 1 : 0, winsta);
 
             auto style = GetWindowLongPtrW((HWND)nativeHwnd, GWL_STYLE);
             style = (style | WS_CHILD) & ~WS_POPUP;

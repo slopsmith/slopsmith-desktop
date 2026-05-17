@@ -812,8 +812,13 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
                 st.plugin->getName(), st.editor.get());
             st.editorWindow->setVisible(true);
             HWND hwnd = (HWND)st.editorWindow->getWindowHandle();
-            hostLogf("kOpenEditor: editor HWND=%p IsWindow=%d", (void*)hwnd,
-                     hwnd != nullptr && IsWindow(hwnd) ? 1 : 0);
+            wchar_t winsta[128] = L"?";
+            DWORD winstaLen = 0;
+            GetUserObjectInformationW(GetProcessWindowStation(), UOI_NAME,
+                                      winsta, sizeof(winsta), &winstaLen);
+            hostLogf("kOpenEditor: editor HWND=%p IsWindow=%d winsta=%ls",
+                     (void*)hwnd, hwnd != nullptr && IsWindow(hwnd) ? 1 : 0,
+                     winsta);
             if (hwnd == nullptr)
             {
                 // Native peer never came up (rare — class-registration
