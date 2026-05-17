@@ -79,8 +79,9 @@ void PitchDetector::prepare(double sampleRate, int /*blockSize*/)
 
     // Anti-aliasing low-pass below the post-decimation Nyquist (internalRate/2),
     // run at the device rate before decimation.  4th-order Butterworth via two
-    // biquads with the standard section Q values.  The cutoff sits just above
-    // the detectable range (2000 Hz) and well below Nyquist for alias rejection.
+    // biquads with the standard section Q values.  The cutoff sits near the top
+    // of the detectable range (~2 kHz) when the internal rate allows; otherwise
+    // it is capped at internalRate*0.45 to stay below the Nyquist margin.
     const double cutoff = std::min(2200.0, internalRate * 0.45);
     designLowpass(aaFilter[0], cutoff, sampleRate, 0.54119610);
     designLowpass(aaFilter[1], cutoff, sampleRate, 1.30656296);
@@ -105,9 +106,9 @@ void PitchDetector::stop()
     if (thread)
     {
         // Wait unconditionally for the thread to exit before destroying it.
-        // The bounded internal rate keeps a YIN pass well under a millisecond,
-        // so this returns promptly; a genuine hang surfaces rather than racing
-        // into a use-after-free on a still-running thread.
+        // The detection loop sleeps 10 ms between passes, so this typically
+        // returns within ~10 ms plus one bounded YIN pass; waiting without a
+        // timeout avoids racing into a use-after-free on a still-running thread.
         thread->stopThread(-1);
         thread.reset();
     }
