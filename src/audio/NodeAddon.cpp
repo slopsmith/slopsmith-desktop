@@ -459,7 +459,7 @@ static Napi::Value IsMlNoteDetection(const Napi::CallbackInfo& info)
 
 // Raw polyphonic transcription from the ML note detector — the full set of
 // currently-active pitches, not just the dominant one. Returns
-// `{ notes: [{ midi, confidence, onset }], sampleRate }`, or null when the ML
+// `{ notes: [{ midi, confidence, onsetMs, onsetSeq }], sampleRate }`, or null when the ML
 // detector isn't active (no model / ONNX support) so the renderer can feature-
 // detect and fall back. Never throws.
 static Napi::Value DetectNotes(const Napi::CallbackInfo& info)
