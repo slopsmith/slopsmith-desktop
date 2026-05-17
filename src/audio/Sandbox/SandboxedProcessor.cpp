@@ -130,6 +130,13 @@ namespace {
             embedded = true;
             VST_TRACE("[sandbox] SandboxedEditor: embedded plugin HWND under "
                       "host window (%dx%d)", getWidth(), getHeight());
+
+            // The host window was shown and brought to front while it was
+            // being constructed — before this async embed completed — so it
+            // can end up behind the main app window. Raise it now that the
+            // plugin HWND is actually in place.
+            if (auto* top = getTopLevelComponent())
+                top->toFront(true);
         }
        #endif
 
