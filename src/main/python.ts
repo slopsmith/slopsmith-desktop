@@ -153,11 +153,12 @@ function findSlopsmithDir(): string {
     const siblingPath = path.join(__dirname, '..', '..', '..', 'slopsmith');
     if (isSlopsmithRepo(siblingPath)) return siblingPath;
 
-    const legacyHome = process.env.HOME || process.env.USERPROFILE;
-    if (legacyHome) {
-        const legacyPath = path.join(legacyHome, 'Repositories', 'slopsmith');
-        if (isSlopsmithRepo(legacyPath)) return legacyPath;
-    }
+    // app.getPath('home') is the platform-native home (USERPROFILE on
+    // Windows, HOME on POSIX). process.env.HOME is an MSYS-style path such
+    // as /c/Users/name when Electron is launched from Git Bash, which Node
+    // misresolves — see the cacheBase comment in startPython.
+    const legacyPath = path.join(app.getPath('home'), 'Repositories', 'slopsmith');
+    if (isSlopsmithRepo(legacyPath)) return legacyPath;
 
     return siblingPath;
 }
@@ -214,9 +215,13 @@ export async function startPython(): Promise<void> {
     const serverScript = path.join(slopsmithDir, 'server.py');
 
     if (!fs.existsSync(serverScript)) {
+        // findSlopsmithDir returns a bundled path when packaged and ignores
+        // SLOPSMITH_DIR there — so the remediation differs by mode.
         startupError = `Slopsmith server.py not found at ${serverScript}. `
-            + 'Set SLOPSMITH_DIR to your Slopsmith checkout, clone it to ../slopsmith, '
-            + 'or use ~/Repositories/slopsmith/.';
+            + (app.isPackaged
+                ? 'The application bundle is incomplete or corrupt — reinstall Slopsmith Desktop.'
+                : 'Set SLOPSMITH_DIR to your Slopsmith checkout, clone it to ../slopsmith, '
+                  + 'or use ~/Repositories/slopsmith/.');
         console.error(`[python] ${startupError}`);
         return;
     }
@@ -396,18 +401,21 @@ export async function startPython(): Promise<void> {
 
     child.stderr?.on('error', () => { /* ignore */ });
 
-    child.on('close', (code: number | null) => {
+    child.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
         // Ignore events from a child that restartPython has already
         // replaced — a stale 'close' must not null out the new process
         // or fail its startup.
         if (pythonProcess !== child) return;
-        console.log(`[python] Process exited with code ${code}`);
+        // On a signal exit Node reports code === null; surface the signal
+        // so the cause (SIGKILL/OOM, SIGTERM, ...) is not lost.
+        const exitDesc = code !== null ? `code ${code}` : `signal ${signal ?? 'unknown'}`;
+        console.log(`[python] Process exited with ${exitDesc}`);
         // If the child exits before it ever signalled readiness, record a
         // startupError so waitForPython fails fast instead of polling out
         // the full timeout. serverReady === true means startup already
         // succeeded (a later crash is not a startup failure).
         if (!serverReady && !startupError) {
-            startupError = `Python process exited before startup completed (code ${code ?? 'null'}).`;
+            startupError = `Python process exited before startup completed (${exitDesc}).`;
         }
         pythonProcess = null;
         serverReady = false;

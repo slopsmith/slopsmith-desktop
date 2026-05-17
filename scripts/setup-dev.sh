@@ -101,6 +101,7 @@ npm install
 # masked by a sibling or legacy checkout. Only when $SLOPSMITH_DIR is unset
 # do we fall back to ../slopsmith then ~/Repositories/slopsmith, and a
 # fallback candidate only counts if it actually contains server.py.
+SLOPSMITH_DIR_ENV="${SLOPSMITH_DIR:-}"
 if [ -z "${SLOPSMITH_DIR:-}" ]; then
     if [ -f "$PROJECT_DIR/../slopsmith/server.py" ]; then
         SLOPSMITH_DIR="$PROJECT_DIR/../slopsmith"
@@ -113,6 +114,25 @@ if [ -n "${SLOPSMITH_DIR:-}" ] && [ -f "$SLOPSMITH_DIR/server.py" ]; then
     SLOPSMITH_DIR="$(cd "$SLOPSMITH_DIR" && pwd)"
     echo ""
     echo "Slopsmith found at: $SLOPSMITH_DIR"
+
+    # On Windows/Git Bash a bash check passes for an MSYS path like
+    # /c/src/slopsmith, but `npm run dev` (Electron) resolves $SLOPSMITH_DIR
+    # with Node, which needs a native Windows path. Warn before setup
+    # reports a config that dev mode would still fail to start.
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*)
+            if [ -n "$SLOPSMITH_DIR_ENV" ] && [ "${SLOPSMITH_DIR_ENV#/}" != "$SLOPSMITH_DIR_ENV" ]; then
+                echo ""
+                echo "  NOTE: \$SLOPSMITH_DIR is an MSYS/Git-Bash path. 'npm run dev' needs a"
+                echo "        native Windows path. Re-export it as:"
+                if command -v cygpath >/dev/null 2>&1; then
+                    echo "          export SLOPSMITH_DIR='$(cygpath -w "$SLOPSMITH_DIR_ENV")'"
+                else
+                    echo "          a native path such as C:\\src\\slopsmith"
+                fi
+            fi
+            ;;
+    esac
 
     PYTHON="${PROJECT_DIR}/.venv/bin/python3"
     [ -x "$PYTHON" ] || PYTHON="python3"
