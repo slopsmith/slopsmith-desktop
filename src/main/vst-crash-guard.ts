@@ -29,9 +29,15 @@ const blocklist = new Set<string>();
 // unrecorded.
 let editorTimer: ReturnType<typeof setTimeout> | null = null;
 
-// Windows VST paths are case-insensitive; normalise so the addon's
-// case-insensitive match and ours agree.
-const norm = (p: string): string => p.trim().toLowerCase();
+// Normalise a plugin path for use as a blocklist key. Windows paths are
+// case-insensitive, so fold case there to match the addon's case-insensitive
+// lookup. POSIX paths are case-sensitive — lowercasing them would corrupt the
+// path, so preserve case (and the lowercasing wouldn't help anyway, as the
+// sandbox is Windows-only today).
+const norm = (p: string): string => {
+    const trimmed = p.trim();
+    return process.platform === 'win32' ? trimmed.toLowerCase() : trimmed;
+};
 
 // Run once at startup, before any VST can be loaded. Promotes a leftover
 // sentinel (= the app crashed mid-op last run) into the persistent blocklist,
