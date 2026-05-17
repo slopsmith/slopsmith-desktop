@@ -864,6 +864,12 @@ juce::String midiNoteName(int midi)
 
 PitchDetector::Detection AudioEngine::getActiveDetection() const
 {
+    // Audio stopped — neither detector has live data. Return no detection
+    // rather than letting the YIN fallback path surface its last stale note
+    // for the whole stopped / cold-start window.
+    if (! audioRunning.load(std::memory_order_relaxed))
+        return {};
+
     // Prefer the polyphonic ML detector's dominant pitch when a model is
     // loaded; otherwise fall back to the YIN detector. The shape is identical
     // so getPitchDetection's consumers can't tell which detector answered.
@@ -909,11 +915,23 @@ ChordScorer::Result AudioEngine::scoreChordWithMl(const ChordScorer::Request& re
     bool allValid = validRequest;
     if (allValid)
         for (const auto& n : req.notes)
+        {
             if (n.string < 0 || n.string >= req.stringCount || n.fret < 0)
             {
                 allValid = false;
                 break;
             }
+            // Reject a request whose synthesized MIDI falls outside the valid
+            // 0..127 range — the detector can't represent it, so it must fail
+            // closed like any other malformed note, not be probed downstream.
+            const int off = req.tuningOffsets[(size_t) n.string];
+            const int expectedMidi = (*base)[(size_t) n.string] + off + req.capo + n.fret;
+            if (expectedMidi < 0 || expectedMidi > 127)
+            {
+                allValid = false;
+                break;
+            }
+        }
 
     if (! allValid)
     {

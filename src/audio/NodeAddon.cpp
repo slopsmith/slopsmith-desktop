@@ -465,10 +465,12 @@ static Napi::Value IsMlNoteDetection(const Napi::CallbackInfo& info)
 static Napi::Value DetectNotes(const Napi::CallbackInfo& info)
 {
     auto env = info.Env();
-    // Also require audio to be running: a stopped device leaves the ML
-    // detector's last snapshot in place, so without this the renderer would
-    // keep consuming the previous session's pitches after audio stops.
-    if (!engine || !engine->hasMlNoteDetector() || !engine->isAudioRunning())
+    // Gate on isReady(): the contract is that callers get null whenever the
+    // ML detector isn't actively producing notes. isReady() is false with no
+    // model, after a device stop, and during the cold-start window before the
+    // first inference publishes — so the renderer feature-detects correctly
+    // and falls back instead of consuming an empty ML stream.
+    if (!engine || !engine->getMlNoteDetector().isReady())
         return env.Null();
 
     const auto active = engine->getMlNoteDetector().getActiveNotes();

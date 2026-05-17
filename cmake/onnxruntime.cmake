@@ -160,13 +160,15 @@ if(_ort_ok AND NOT _ort_root STREQUAL ""
 endif()
 
 if(_ort_ok AND NOT _ort_root STREQUAL "")
-    set(ONNXRUNTIME_AVAILABLE   ON                       CACHE INTERNAL "")
-    set(ONNXRUNTIME_INCLUDE_DIR "${_ort_root}/include"   CACHE INTERNAL "")
-    set(ONNXRUNTIME_IMPORT_LIB  "${_ort_import_path}"    CACHE INTERNAL "")
-    set(ONNXRUNTIME_RUNTIME_LIB "${_ort_runtime_path}"   CACHE INTERNAL "")
+    # FORCE so a reconfigure always reflects the current probe result rather
+    # than a stale entry from an earlier configure.
+    set(ONNXRUNTIME_AVAILABLE   ON                       CACHE INTERNAL "" FORCE)
+    set(ONNXRUNTIME_INCLUDE_DIR "${_ort_root}/include"   CACHE INTERNAL "" FORCE)
+    set(ONNXRUNTIME_IMPORT_LIB  "${_ort_import_path}"    CACHE INTERNAL "" FORCE)
+    set(ONNXRUNTIME_RUNTIME_LIB "${_ort_runtime_path}"   CACHE INTERNAL "" FORCE)
     message(STATUS "ONNX Runtime available — ML note detection enabled")
 else()
-    set(ONNXRUNTIME_AVAILABLE OFF CACHE INTERNAL "")
+    set(ONNXRUNTIME_AVAILABLE OFF CACHE INTERNAL "" FORCE)
     # Clear any stale paths a previous successful configure cached, so a
     # later reconfigure that loses ONNX can't leave downstream steps
     # pointed at a runtime that is no longer there.

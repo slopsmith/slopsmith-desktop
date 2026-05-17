@@ -53,4 +53,12 @@ foreach(tgt mlnd_test mlnd_bench)
         "${ONNXRUNTIME_LIB}")
     set_target_properties(${tgt} PROPERTIES
         BUILD_RPATH "${ONNXRUNTIME_ROOT}/lib")
+    # Windows ignores RPATH — copy the ONNX Runtime DLL next to the test
+    # executable so the documented `./build/mlnd_test ...` run can load it.
+    if(WIN32)
+        add_custom_command(TARGET ${tgt} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${ONNXRUNTIME_ROOT}/lib/onnxruntime.dll"
+                "$<TARGET_FILE_DIR:${tgt}>")
+    endif()
 endforeach()
