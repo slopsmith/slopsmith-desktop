@@ -458,7 +458,10 @@ static Napi::Value IsMlNoteDetection(const Napi::CallbackInfo& info)
 static Napi::Value DetectNotes(const Napi::CallbackInfo& info)
 {
     auto env = info.Env();
-    if (!engine || !engine->hasMlNoteDetector())
+    // Also require audio to be running: a stopped device leaves the ML
+    // detector's last snapshot in place, so without this the renderer would
+    // keep consuming the previous session's pitches after audio stops.
+    if (!engine || !engine->hasMlNoteDetector() || !engine->isAudioRunning())
         return env.Null();
 
     const auto active = engine->getMlNoteDetector().getActiveNotes();

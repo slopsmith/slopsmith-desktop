@@ -240,15 +240,20 @@ struct MlNoteDetector::Impl
 
             const float* note  = out[0].GetTensorData<float>();
             const float* onset = out[1].GetTensorData<float>();
+            // Require the note tensor to be exactly rank-3 [1, frames, 88]
+            // with a positive frame count before indexing it — a fallback to
+            // expected dims would let an unexpected-shape model slip through
+            // and the flat indexing below would read past the tensor.
             const auto shape = out[0].GetTensorTypeAndShapeInfo().GetShape();
-            const int frames  = shape.size() >= 2 ? (int) shape[1] : kFramesPerWindow;
-            const int pitches = shape.size() >= 3 ? (int) shape[2] : kModelPitches;
-            if (pitches != kModelPitches) return;  // unexpected model
+            if (shape.size() != 3) return;  // unexpected note-output rank
+            const int frames  = (int) shape[1];
+            const int pitches = (int) shape[2];
+            if (frames <= 0 || pitches != kModelPitches) return;
             // The onset head is indexed below with the note tensor's
             // frames/pitches — confirm out[1] is rank-3 and matches, or an
             // incompatible model's smaller onset tensor is read out of bounds.
             const auto onsetShape = out[1].GetTensorTypeAndShapeInfo().GetShape();
-            if (onsetShape.size() < 3
+            if (onsetShape.size() != 3
                 || (int) onsetShape[1] != frames
                 || (int) onsetShape[2] != pitches) return;
 

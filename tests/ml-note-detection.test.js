@@ -23,7 +23,15 @@ let audio = null;
 try {
     audio = require(ADDON);
 } catch (e) {
-    test('ml-note-detection (skipped — addon not built)', { skip: true }, () => {});
+    if (!fs.existsSync(ADDON)) {
+        // Addon genuinely not built yet — skip cleanly.
+        test('ml-note-detection (skipped — addon not built)', { skip: true }, () => {});
+    } else {
+        // The addon file IS present but failed to load — a real staging
+        // regression (e.g. a missing/incompatible ONNX Runtime library next
+        // to it). Surface it as a failure so this smoke test catches it.
+        test('ml-note-detection addon loads', () => { throw e; });
+    }
 }
 
 if (audio) {
