@@ -14,6 +14,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <iostream>
@@ -201,7 +202,18 @@ int main(int argc, char** argv)
 
         const float* note  = out[0].GetTensorData<float>();
         const float* onset = out[1].GetTensorData<float>();
-        const auto noteShape = out[0].GetTensorTypeAndShapeInfo().GetShape();
+        // Validate the output shapes before indexing: both heads must be
+        // rank-3 [1, frames, kNumPitches] and agree on the frame count, or
+        // the flat indexing below would read out of bounds.
+        const auto noteShape  = out[0].GetTensorTypeAndShapeInfo().GetShape();
+        const auto onsetShape = out[1].GetTensorTypeAndShapeInfo().GetShape();
+        if (noteShape.size() != 3 || onsetShape.size() != 3
+            || noteShape[2] != kNumPitches || onsetShape[2] != kNumPitches
+            || noteShape[1] != onsetShape[1])
+        {
+            std::cerr << "FAIL: unexpected model output shape\n";
+            return 1;
+        }
         const int frames = int(noteShape[1]); // 172
 
         const double windowStartSec = double(base) / kModelSampleRate;

@@ -479,7 +479,11 @@ static Napi::Value DetectNotes(const Napi::CallbackInfo& info)
 
     auto obj = Napi::Object::New(env);
     obj.Set("notes", notesArr);
-    obj.Set("sampleRate", engine->getCurrentSampleRate());
+    // Normalise the sample rate: getCurrentSampleRate() is 0 when no audio
+    // device is active — hand the renderer a sane positive value so its
+    // Hz/time math can't divide by zero.
+    const double sr = engine->getCurrentSampleRate();
+    obj.Set("sampleRate", sr > 0.0 ? sr : 48000.0);
     return obj;
 }
 

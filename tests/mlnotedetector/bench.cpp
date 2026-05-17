@@ -58,7 +58,7 @@ bool readWav(const std::string& path, int channelMode, std::vector<float>& out, 
         { data = body; dataLen = std::min<uint32_t>(sz, uint32_t(buf.size() - (pos + 8))); }
         pos += 8 + sz + (sz & 1);
     }
-    if (!data || channels == 0 || fmt != 1 || bits != 16) return false;
+    if (!data || channels == 0 || rate == 0 || fmt != 1 || bits != 16) return false;
 
     sampleRate = int(rate);
     const size_t frames = dataLen / (size_t(2) * channels);
@@ -166,6 +166,23 @@ int main(int argc, char** argv)
         }
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(400));
+    // One final poll after the drain delay: late onsets / active notes the
+    // detector only resolved during the trailing inference would otherwise be
+    // omitted from the metrics and detectstream.json.
+    {
+        auto active = det.getActiveNotes();
+        polls.push_back({ wavSec, active });
+        for (const auto& a : active)
+        {
+            auto it = lastSeq.find(a.midi);
+            if (it == lastSeq.end() || a.onsetSeq > it->second)
+            {
+                lastSeq[a.midi] = a.onsetSeq;
+                const double age = (a.onsetAgeMs < 1.0e6f) ? a.onsetAgeMs / 1000.0 : 0.0;
+                onsets.push_back({ wavSec - age, a.midi, a.confidence });
+            }
+        }
+    }
     det.stop();
     std::cout << "detected onsets: " << onsets.size() << "\n";
 
