@@ -925,7 +925,10 @@ ChordScorer::Result AudioEngine::scoreChordWithMl(const ChordScorer::Request& re
             // 0..127 range — the detector can't represent it, so it must fail
             // closed like any other malformed note, not be probed downstream.
             const int off = req.tuningOffsets[(size_t) n.string];
-            const int expectedMidi = (*base)[(size_t) n.string] + off + req.capo + n.fret;
+            // Sum in 64-bit: base/off/capo/fret arrive from IPC as 32-bit
+            // ints, so an int sum could overflow before the range check.
+            const long long expectedMidi =
+                (long long) (*base)[(size_t) n.string] + off + req.capo + n.fret;
             if (expectedMidi < 0 || expectedMidi > 127)
             {
                 allValid = false;
@@ -964,7 +967,10 @@ ChordScorer::Result AudioEngine::scoreChordWithMl(const ChordScorer::Request& re
             // base + per-string tuning offset + capo + fret.
             const int off = (n.string < (int) req.tuningOffsets.size())
                                 ? req.tuningOffsets[(size_t) n.string] : 0;
-            const int expectedMidi = (*base)[(size_t) n.string] + off + req.capo + n.fret;
+            // 64-bit sum to avoid int overflow on malformed IPC values; the
+            // value is already validated to 0..127 by the allValid pass above.
+            const int expectedMidi = (int) (
+                (long long) (*base)[(size_t) n.string] + off + req.capo + n.fret);
 
             float conf = 0.0f;
             bool active = mlNoteDetector.isPitchActive(expectedMidi, &conf);
