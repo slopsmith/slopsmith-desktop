@@ -33,6 +33,9 @@ namespace {
 //   "FM8", "Absynth", "Maschine", "Monark".
 const juce::StringArray kDefaultNeedsSandboxFilenames = {
     "Guitar Rig",
+    // PolyChrome DSP Graphene — its editor faults (access violation) when
+    // created in-process; the sandbox owns the editor window out-of-process.
+    "Graphene",
 };
 
 } // anonymous
