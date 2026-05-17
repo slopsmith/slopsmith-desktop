@@ -60,5 +60,15 @@ foreach(tgt mlnd_test mlnd_bench)
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${ONNXRUNTIME_ROOT}/lib/onnxruntime.dll"
                 "$<TARGET_FILE_DIR:${tgt}>")
+        # ONNX Runtime LoadLibrary's the providers_shared stub from the
+        # runtime directory during session creation — stage it next to the
+        # test exe too, matching the addon (src/audio/CMakeLists.txt). Guard:
+        # not every ONNX Runtime layout ships this secondary DLL.
+        if(EXISTS "${ONNXRUNTIME_ROOT}/lib/onnxruntime_providers_shared.dll")
+            add_custom_command(TARGET ${tgt} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${ONNXRUNTIME_ROOT}/lib/onnxruntime_providers_shared.dll"
+                    "$<TARGET_FILE_DIR:${tgt}>")
+        endif()
     endif()
 endforeach()

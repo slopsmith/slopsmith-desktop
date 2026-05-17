@@ -173,13 +173,19 @@ int main(int argc, char** argv)
             }
         }
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(400));
+    constexpr double kDrainSec = 0.400;
+    std::this_thread::sleep_for(std::chrono::milliseconds(
+        (int) (kDrainSec * 1000)));
     // One final poll after the drain delay: late onsets / active notes the
     // detector only resolved during the trailing inference would otherwise be
-    // omitted from the metrics and detectstream.json.
+    // omitted from the metrics and detectstream.json. Wall time has advanced
+    // by the drain sleep, so the poll timestamp is wavSec + kDrainSec — using
+    // a bare wavSec would back-date trailing onsets by the drain duration,
+    // since onsetAgeMs is measured at this (later) wall-clock instant.
     {
+        const double finalPollSec = wavSec + kDrainSec;
         auto active = det.getActiveNotes();
-        polls.push_back({ wavSec, active });
+        polls.push_back({ finalPollSec, active });
         for (const auto& a : active)
         {
             auto it = lastSeq.find(a.midi);
@@ -188,7 +194,7 @@ int main(int argc, char** argv)
             if (a.onsetSeq > prevSeq && a.onsetSeq > 0)
             {
                 const double age = (a.onsetAgeMs < 1.0e6f) ? a.onsetAgeMs / 1000.0 : 0.0;
-                onsets.push_back({ wavSec - age, a.midi, a.confidence });
+                onsets.push_back({ finalPollSec - age, a.midi, a.confidence });
             }
             lastSeq[a.midi] = a.onsetSeq;
         }
