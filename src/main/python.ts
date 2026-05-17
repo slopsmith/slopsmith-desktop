@@ -153,8 +153,11 @@ function findSlopsmithDir(): string {
     const siblingPath = path.join(__dirname, '..', '..', '..', 'slopsmith');
     if (isSlopsmithRepo(siblingPath)) return siblingPath;
 
-    const legacyPath = path.join(process.env.HOME || '', 'Repositories', 'slopsmith');
-    if (isSlopsmithRepo(legacyPath)) return legacyPath;
+    const legacyHome = process.env.HOME || process.env.USERPROFILE;
+    if (legacyHome) {
+        const legacyPath = path.join(legacyHome, 'Repositories', 'slopsmith');
+        if (isSlopsmithRepo(legacyPath)) return legacyPath;
+    }
 
     return siblingPath;
 }
@@ -346,7 +349,7 @@ export async function startPython(): Promise<void> {
         }
     }
 
-    pythonProcess = spawn(pythonPath, [
+    const child = spawn(pythonPath, [
         '-m', 'uvicorn', 'server:app',
         '--host', '127.0.0.1',
         '--port', String(serverPort),
@@ -356,6 +359,7 @@ export async function startPython(): Promise<void> {
         env: pythonEnv,
         stdio: ['pipe', 'pipe', 'pipe'],
     });
+    pythonProcess = child;
 
     // Flip `serverReady` when uvicorn emits a startup signal on either
     // stdout or stderr. structlog routes these messages to stdout in dev
@@ -366,7 +370,7 @@ export async function startPython(): Promise<void> {
         }
     }
 
-    pythonProcess.stdout?.on('data', (data: Buffer) => {
+    child.stdout?.on('data', (data: Buffer) => {
         try {
             const msg = data.toString().trim();
             if (msg) {
@@ -378,9 +382,9 @@ export async function startPython(): Promise<void> {
 
     // Swallow stream errors — EPIPE fires when the Python child dies while
     // we're still draining its pipes; that's expected, not a bug.
-    pythonProcess.stdout?.on('error', () => { /* ignore */ });
+    child.stdout?.on('error', () => { /* ignore */ });
 
-    pythonProcess.stderr?.on('data', (data: Buffer) => {
+    child.stderr?.on('data', (data: Buffer) => {
         try {
             const msg = data.toString().trim();
             if (msg) {
@@ -390,9 +394,13 @@ export async function startPython(): Promise<void> {
         } catch { /* EPIPE or similar when the process dies mid-write */ }
     });
 
-    pythonProcess.stderr?.on('error', () => { /* ignore */ });
+    child.stderr?.on('error', () => { /* ignore */ });
 
-    pythonProcess.on('close', (code: number | null) => {
+    child.on('close', (code: number | null) => {
+        // Ignore events from a child that restartPython has already
+        // replaced — a stale 'close' must not null out the new process
+        // or fail its startup.
+        if (pythonProcess !== child) return;
         console.log(`[python] Process exited with code ${code}`);
         // If the child exits before it ever signalled readiness, record a
         // startupError so waitForPython fails fast instead of polling out
@@ -405,7 +413,9 @@ export async function startPython(): Promise<void> {
         serverReady = false;
     });
 
-    pythonProcess.on('error', (err: Error) => {
+    child.on('error', (err: Error) => {
+        // Ignore errors from a child restartPython has already replaced.
+        if (pythonProcess !== child) return;
         console.error(`[python] Failed to start: ${err.message}`);
         // spawn itself failed (e.g. interpreter not found) — surface it to
         // waitForPython rather than waiting out the readiness timeout.
