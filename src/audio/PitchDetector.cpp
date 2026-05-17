@@ -71,6 +71,7 @@ void PitchDetector::prepare(double sampleRate, int /*blockSize*/)
     analysisSize = 2 * ((int)std::ceil(internalRate / 25.0) + 1);
     analysisBuffer.assign((size_t)analysisSize, 0.0f);
     analysisWritePos = 0;
+    analysisSamplesPrimed = 0;
 
     // Pre-size the detection-thread scratch buffers so the detection loop
     // never allocates.  yinBuffer needs analysisSize/2 entries (halfLen),
@@ -158,6 +159,8 @@ void PitchDetector::detectionThread()
             decimPhase = 0;
             analysisBuffer[(size_t)analysisWritePos] = filtered;
             analysisWritePos = (analysisWritePos + 1) % analysisSize;
+            if (analysisSamplesPrimed < analysisSize)
+                ++analysisSamplesPrimed;
             ++decimatedWritten;
         }
     };
@@ -168,10 +171,13 @@ void PitchDetector::detectionThread()
     for (int i = 0; i < scope.blockSize2; ++i)
         consume(fifoBuffer[(size_t)(scope.startIndex2 + i)]);
 
-    // If this tick read fewer raw samples than decimationFactor, no decimated
-    // sample was produced — the analysis window is unchanged, so skip the
-    // redundant YIN pass rather than re-publishing the same result.
-    if (decimatedWritten == 0)
+    // Skip the YIN pass when the window is not worth analysing:
+    //  - decimatedWritten == 0: this tick produced no decimated sample, so the
+    //    window is unchanged — avoid re-publishing an identical result.
+    //  - not yet primed: fewer than analysisSize decimated samples have been
+    //    written since prepare(), so the window still holds startup silence,
+    //    which could otherwise yield spurious notes.
+    if (decimatedWritten == 0 || analysisSamplesPrimed < analysisSize)
         return;
 
     // Rearrange the ring buffer into the contiguous window scratch buffer

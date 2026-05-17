@@ -96,6 +96,11 @@ private:
     std::vector<float> analysisBuffer;
     int analysisWritePos = 0;
 
+    // Count of decimated samples written since prepare(), capped at
+    // analysisSize.  YIN is gated on this so it never analyses a window that
+    // still contains startup silence (which could publish spurious notes).
+    int analysisSamplesPrimed = 0;
+
     // Detection-thread scratch buffers, sized in prepare() so the detection
     // loop stays allocation-free.  Touched only by the detection thread.
     std::vector<float> windowBuffer; // rearranged contiguous analysis window
