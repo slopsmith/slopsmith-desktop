@@ -21,4 +21,10 @@ bool shouldSandbox(const juce::PluginDescription& /*desc*/)
     return false;
 }
 
+void setCrashedPlugins(const juce::StringArray& /*pluginPaths*/)
+{
+    // No-op: sandboxing is unavailable off Windows, so there's nothing to
+    // route the crash blocklist to.
+}
+
 } // namespace slopsmith::sandbox

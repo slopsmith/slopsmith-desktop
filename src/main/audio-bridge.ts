@@ -6,6 +6,7 @@ import { ipcMain } from 'electron';
 import * as path from 'path';
 import { app } from 'electron';
 import { isDebugEnabled, getDebugLogPath } from './debug-log';
+import { initVstCrashGuard, armSentinel, disarmSentinel, armEditorSentinel } from './vst-crash-guard';
 
 type AudioModule = Record<string, (...args: any[]) => any>;
 
@@ -61,6 +62,20 @@ export function initAudioBridge(): void {
         } catch (e: any) {
             console.error(`[audio] Init failed: ${e.message}`);
             audio = null;
+        }
+    }
+
+    // VST crash guard: promote any leftover crash sentinel into the blocklist,
+    // then hand the blocklist to the addon so it sandboxes those plugins.
+    if (audio) {
+        try {
+            const blocked = initVstCrashGuard();
+            if (typeof audio.setCrashedPlugins === 'function')
+                audio.setCrashedPlugins(blocked);
+            if (blocked.length)
+                console.log(`[audio] ${blocked.length} VST(s) on the crash blocklist — will load sandboxed`);
+        } catch (e: any) {
+            console.warn(`[audio] VST crash guard init failed: ${e.message}`);
         }
     }
 
@@ -248,7 +263,16 @@ export function initAudioBridge(): void {
     // ── Signal Chain ───────────────────────────────────────────────────────
 
     ipcMain.handle('audio:loadVST', (_event, pluginPath: string) => {
-        return audio?.loadVST(pluginPath) ?? -1;
+        // Bracket the in-process load with the crash sentinel: loadVST is
+        // synchronous (it blocks on the addon's message thread), so a fault
+        // means this call never returns and the sentinel survives for the
+        // next startup to find. A clean return clears it.
+        armSentinel(pluginPath, 'load');
+        try {
+            return audio?.loadVST(pluginPath) ?? -1;
+        } finally {
+            disarmSentinel();
+        }
     });
 
     ipcMain.handle('audio:loadNAMModel', async (_event, modelPath: string) => {
@@ -282,6 +306,14 @@ export function initAudioBridge(): void {
     // ── Plugin Editor ──────────────────────────────────────────────────────
 
     ipcMain.handle('audio:openPluginEditor', (_event, slotId: number) => {
+        // Editor creation is the common in-process fault point (an editor
+        // that must run on the OS main thread). Arm the sentinel with the
+        // slot's plugin path; armEditorSentinel self-clears after a grace
+        // window since editor creation is asynchronous and has no sync
+        // success signal.
+        const slot = (audio?.getChainState() ?? []).find((s: any) => s?.id === slotId);
+        if (slot && typeof slot.path === 'string' && slot.path)
+            armEditorSentinel(slot.path);
         return audio?.openPluginEditor(slotId) ?? false;
     });
 

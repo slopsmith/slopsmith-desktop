@@ -809,6 +809,27 @@ static Napi::Value LoadPluginList(const Napi::CallbackInfo& info)
     return info.Env().Undefined();
 }
 
+// Register the plugins the renderer's VST crash guard recorded as having
+// crashed the app on a previous run. shouldSandbox() then routes them through
+// the out-of-process sandbox. Expects a single array-of-strings argument.
+static Napi::Value SetCrashedPlugins(const Napi::CallbackInfo& info)
+{
+    auto env = info.Env();
+    juce::StringArray paths;
+    if (info.Length() > 0 && info[0].IsArray())
+    {
+        auto arr = info[0].As<Napi::Array>();
+        for (uint32_t i = 0; i < arr.Length(); ++i)
+        {
+            auto value = arr.Get(i);
+            if (value.IsString())
+                paths.add(juce::String(value.As<Napi::String>().Utf8Value()));
+        }
+    }
+    slopsmith::sandbox::setCrashedPlugins(paths);
+    return env.Undefined();
+}
+
 // ── Signal Chain Management ──────────────────────────────────────────────────
 
 static Napi::Value LoadVST(const Napi::CallbackInfo& info)
@@ -1586,6 +1607,7 @@ static Napi::Object InitModule(Napi::Env env, Napi::Object exports)
     exports.Set("getKnownPlugins", Napi::Function::New(env, GetKnownPlugins));
     exports.Set("savePluginList", Napi::Function::New(env, SavePluginList));
     exports.Set("loadPluginList", Napi::Function::New(env, LoadPluginList));
+    exports.Set("setCrashedPlugins", Napi::Function::New(env, SetCrashedPlugins));
 
     // Signal chain
     exports.Set("loadVST", Napi::Function::New(env, LoadVST));
