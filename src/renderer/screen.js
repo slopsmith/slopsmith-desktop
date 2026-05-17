@@ -2610,7 +2610,9 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
         // Fallback when first IIFE hasn't loaded yet (should not happen in normal flow).
         const inputLin = Number.isFinite(Number(preset?.inputGain)) ? Number(preset.inputGain) : 1;
         const outputLin = Number.isFinite(Number(preset?.outputGain)) ? Number(preset.outputGain) : 1;
-        if (_api?.setGain) { _api.setGain('input', inputLin); _api.setGain('output', outputLin); }
+        // Output gain → 'chain' (guitar-only) so a preset switch doesn't move
+        // the song volume — consistent with the first IIFE's applyPresetGainLevels.
+        if (_api?.setGain) { _api.setGain('input', inputLin); _api.setGain('chain', outputLin); }
     }
 
     function applyPresetNoiseGate(_api, preset) {
@@ -2634,6 +2636,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
     function startToneAutoSwitch() {
         if (hookState.toneAutoMonitor) clearInterval(hookState.toneAutoMonitor);
         _lastTone = null;
+        _toneSwitcherWarned = false;  // fresh not-ready warning per monitor session
         window._toneAutoSwitchActive = true;
 
         hookState.toneAutoMonitor = setInterval(() => {
@@ -2689,6 +2692,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
         window._aeDidClearChainForNewSong = false;
         window._aeClearingChainForNewSong = false;
         _lastTone = null;
+        _toneSwitcherWarned = false;
         window._aeTaSessionOverrides = {};
         if (window._closeChainPanel) window._closeChainPanel();
         window._currentSongFile = decodeURIComponent(filename);
