@@ -714,6 +714,11 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
     if (monitorMuted.load() && !hasProcessors)
         buffer.clear();
 
+    // Chain output gain — the amp/tone's output level. Applied to the guitar
+    // signal ONLY, before the backing track is mixed in, so switching tone
+    // presets changes the guitar level without touching the song volume.
+    buffer.applyGain(chainOutputGain.load());
+
     // Mix backing track
     {
         const juce::ScopedTryLock sl(backingLock);

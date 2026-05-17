@@ -341,6 +341,7 @@ static Napi::Value SetGain(const Napi::CallbackInfo& info)
 
     if (which == "input") engine->setInputGain(value);
     else if (which == "output") engine->setOutputGain(value);
+    else if (which == "chain") engine->setChainOutputGain(value);
     else if (which == "backing") engine->setBackingVolume(value);
 
     return env.Undefined();

@@ -64,6 +64,12 @@ public:
     float getInputGain() const { return inputGain.load(); }
     float getOutputGain() const { return outputGain.load(); }
 
+    // Chain output gain — the amp/tone's output level, applied to the guitar
+    // signal before the backing track is mixed. Distinct from outputGain (the
+    // post-mix master) so a tone-preset switch doesn't move the song volume.
+    void setChainOutputGain(float gain) { chainOutputGain.store(gain); }
+    float getChainOutputGain() const { return chainOutputGain.load(); }
+
     // Input channel selection (for multi-channel interfaces like Valeton GP-5)
     // 0=left (dry), 1=right (wet), -1=both (mono mix)
     void setInputChannel(int channel) { selectedInputChannel.store(channel); }
@@ -143,6 +149,7 @@ private:
 
     std::atomic<float> inputGain{1.0f};
     std::atomic<float> outputGain{1.0f};
+    std::atomic<float> chainOutputGain{1.0f};
     std::atomic<float> backingVolume{0.7f};
     std::atomic<float> currentInputLevel{0.0f};
     std::atomic<float> currentOutputLevel{0.0f};

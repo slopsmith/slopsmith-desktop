@@ -395,8 +395,11 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
         // Round-trip through the clamped dB value so the engine sees the same gain
         // the slider shows — prevents out-of-range preset values from bypassing the
         // [-60, +12] dB clamp applied by linearGainToDb/dbToLinearGain.
+        // Output gain routes to 'chain' (guitar-only, applied before the
+        // backing track is mixed) so a tone-preset switch changes the amp
+        // level without moving the song volume.
         api.setGain('input', dbToLinearGain(inDbR));
-        api.setGain('output', dbToLinearGain(outDbR));
+        api.setGain('chain', dbToLinearGain(outDbR));
     }
 
     // ── Device Types ──────────────────────────────────────────────────────────
@@ -661,7 +664,8 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
 
         outputGainSlider.addEventListener('input', () => {
             const db = parseFloat(outputGainSlider.value);
-            api.setGain('output', dbToLinearGain(db));
+            // 'chain' = guitar-only amp output (see applyPresetGainLevels).
+            api.setGain('chain', dbToLinearGain(db));
             outputGainLabel.textContent = formatGainDbLabel(db);
         });
 
@@ -2655,14 +2659,17 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
             }
 
             if (activeTone && activeTone !== _lastTone) {
-                _lastTone = activeTone;
-                showToneToast(activeTone);
-
-                // Trigger preset switch if ToneSwitcher is available
+                // Only mark the tone consumed once it is actually applied.
+                // Updating _lastTone before the _toneSwitcher null-check would
+                // permanently drop a switch that arrives during the startup
+                // window before _toneSwitcher is installed — the next 50 ms
+                // poll would see activeTone === _lastTone and skip it.
                 if (window._toneSwitcher) {
+                    _lastTone = activeTone;
+                    showToneToast(activeTone);
                     window._toneSwitcher.switchToTone(activeTone);
                 } else {
-                    console.log('[tone-switcher] WARNING: _toneSwitcher is null at switch time');
+                    console.log('[tone-switcher] _toneSwitcher not ready — retrying next poll');
                 }
             }
         }, 50);
