@@ -45,12 +45,17 @@ public:
     struct ActiveNote
     {
         int   midi = -1;
-        float confidence = 0.0f;  // frame/note posteriorgram, 0..1
-        float onset = 0.0f;       // onset posteriorgram, 0..1
+        float confidence = 0.0f;    // note posteriorgram, 0..1
+        // Milliseconds since this pitch's most recent detected onset, measured
+        // when getActiveNotes()/getDominantNote() is called. Lets the caller
+        // back-date a detection to the true onset rather than poll time.
+        // >= 1e6 means no recent onset (sustained / decaying tail).
+        float onsetAgeMs = 1.0e9f;
     };
 
-    // Pitches whose frame posteriorgram clears the activity threshold,
-    // highest-confidence first. Polled from the main (N-API) thread.
+    // Pitches that are sounding now — either sustained above the activity
+    // threshold or freshly onset within the last ~200 ms. Polled from the
+    // main (N-API) thread.
     std::vector<ActiveNote> getActiveNotes() const;
 
     // Highest-confidence active pitch; midi < 0 when nothing is sounding.

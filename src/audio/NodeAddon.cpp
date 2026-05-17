@@ -468,7 +468,9 @@ static Napi::Value DetectNotes(const Napi::CallbackInfo& info)
         auto entry = Napi::Object::New(env);
         entry.Set("midi", active[i].midi);
         entry.Set("confidence", active[i].confidence);
-        entry.Set("onset", active[i].onset);
+        // Milliseconds since this pitch's onset — lets the renderer back-date
+        // a detection to the true onset instead of poll time.
+        entry.Set("onsetMs", active[i].onsetAgeMs);
         notesArr.Set((uint32_t) i, entry);
     }
 

@@ -24,15 +24,25 @@ const char* kInputName   = "serving_default_input_2:0";
 const char* kNoteOutput  = "StatefulPartitionedCall:1";  // frame/note posteriorgram
 const char* kOnsetOutput = "StatefulPartitionedCall:2";  // onset posteriorgram
 
-// Inference cadence. Hop ≈ 96 ms balances detection latency against background
-// CPU: end-to-end latency ≈ hop + inference (~20-35 ms) + model onset lag.
-constexpr int kHopMs       = 96;
-constexpr int kHopSamples  = kModelSampleRate * kHopMs / 1000;  // ~2117
+// Inference cadence. A 48 ms hop keeps detection latency low for live
+// single-note scoring of fast material; inference itself is ~30 ms so the
+// background thread stays under one core. (Onset *timing* no longer depends
+// on the hop — it is back-dated from the posteriorgram frame, see below.)
+constexpr int kHopMs       = 48;
+constexpr int kHopSamples  = kModelSampleRate * kHopMs / 1000;  // ~1058
+
+// One posteriorgram frame in ms (FFT hop 256 @ 22050 Hz ≈ 11.6 ms). Used to
+// back-date a detected onset from its frame index to a wall-clock time.
+constexpr double kFrameMs = 256.0 * 1000.0 / kModelSampleRate;
 
 // When reading "what is sounding now" from a fresh inference, look at the
 // posteriorgram frames covering roughly the last hop plus a small margin.
 constexpr int   kFreshFrames        = 12;     // ~140 ms at 86 fps
 constexpr float kActivityThreshold  = 0.40f;  // frame posteriorgram -> "active"
+constexpr float kOnsetThreshold     = 0.50f;  // onset posteriorgram rising edge
+// A pitch is reported active for this long after its onset even once its
+// sustained level has decayed — so fast notes aren't missed between polls.
+constexpr float kRecentOnsetMs      = 200.0f;
 
 const char* noteNameFor(int midi)
 {
@@ -92,8 +102,9 @@ struct MlNoteDetector::Impl
     // main (N-API) thread under snapshotLock. Neither writer nor reader is the
     // audio thread, so a lock here is correct and cheap.
     juce::CriticalSection snapshotLock;
-    std::array<float, kModelPitches> snapActivity{};
-    std::array<float, kModelPitches> snapOnset{};
+    std::array<float, kModelPitches>  snapActivity{};      // sustained note level
+    std::array<double, kModelPitches> snapOnsetTimeMs{};   // monotonic ms of last onset; 0 = none
+    std::array<float, kModelPitches>  snapOnsetConf{};     // note posteriorgram at that onset
 
     // Reusable inference scratch — avoids per-hop allocation.
     std::vector<float> window = std::vector<float>(kAudioNSamples, 0.0f);
@@ -182,7 +193,10 @@ struct MlNoteDetector::Impl
         const juce::ScopedTryLock sl(sessionLock);
         if (! sl.isLocked() || session == nullptr) return;
 
-        // Linearise the circular window, oldest sample first.
+        // Linearise the circular window, oldest sample first. Capture the
+        // wall-clock time of the window's last sample ("now") so detected
+        // onsets can be back-dated from their posteriorgram frame index.
+        const double tWindowEnd = juce::Time::getMillisecondCounterHiRes();
         for (int i = 0; i < kAudioNSamples; ++i)
             window[(size_t) i] = circ[(circWrite + (size_t) i) % (size_t) kAudioNSamples];
 
@@ -205,23 +219,36 @@ struct MlNoteDetector::Impl
             if (pitches != kModelPitches) return;  // unexpected model
 
             const int firstFrame = juce::jmax(0, frames - kFreshFrames);
-            std::array<float, kModelPitches> act{};
-            std::array<float, kModelPitches> ons{};
+            std::array<float, kModelPitches>  act{};
+            std::array<double, kModelPitches> onsetTime{};
+            std::array<float, kModelPitches>  onsetConf{};
             for (int p = 0; p < kModelPitches; ++p)
             {
-                float a = 0.0f, o = 0.0f;
+                // Sustained level: peak note posteriorgram over the fresh frames.
+                float a = 0.0f;
                 for (int f = firstFrame; f < frames; ++f)
-                {
                     a = juce::jmax(a, note[f * pitches + p]);
-                    o = juce::jmax(o, onset[f * pitches + p]);
-                }
                 act[(size_t) p] = a;
-                ons[(size_t) p] = o;
+
+                // Most recent onset: latest rising edge of the onset
+                // posteriorgram anywhere in the window. Back-date it to a
+                // wall-clock time from its frame offset to the window end.
+                for (int f = frames - 1; f >= 1; --f)
+                {
+                    if (onset[f * pitches + p] >= kOnsetThreshold
+                        && onset[(f - 1) * pitches + p] < kOnsetThreshold)
+                    {
+                        onsetTime[(size_t) p] = tWindowEnd - (double) (frames - 1 - f) * kFrameMs;
+                        onsetConf[(size_t) p] = note[f * pitches + p];
+                        break;
+                    }
+                }
             }
 
             const juce::ScopedLock snap(snapshotLock);
             snapActivity = act;
-            snapOnset = ons;
+            snapOnsetTimeMs = onsetTime;
+            snapOnsetConf = onsetConf;
         }
         catch (...)
         {
@@ -326,14 +353,28 @@ void MlNoteDetector::pushSamples(const float* data, int numSamples)
 std::vector<MlNoteDetector::ActiveNote> MlNoteDetector::getActiveNotes() const
 {
     std::vector<ActiveNote> notes;
+    const double now = juce::Time::getMillisecondCounterHiRes();
     {
         const juce::ScopedLock sl(impl->snapshotLock);
         for (int p = 0; p < kNumPitches; ++p)
         {
-            if (impl->snapActivity[(size_t) p] >= kActivityThreshold)
-                notes.push_back({ kLowestMidi + p,
-                                  impl->snapActivity[(size_t) p],
-                                  impl->snapOnset[(size_t) p] });
+            const float  level = impl->snapActivity[(size_t) p];
+            const double ot    = impl->snapOnsetTimeMs[(size_t) p];
+            const float  ageMs = (ot > 0.0) ? (float) (now - ot) : 1.0e9f;
+            const bool   recentOnset = ageMs >= 0.0f && ageMs <= kRecentOnsetMs;
+
+            // Report a pitch that is either sustained above the level
+            // threshold or freshly onset — the latter keeps fast notes,
+            // whose sustained level decays between polls, from being missed.
+            if (level >= kActivityThreshold || recentOnset)
+            {
+                ActiveNote n;
+                n.midi = kLowestMidi + p;
+                n.confidence = juce::jmax(level,
+                    recentOnset ? impl->snapOnsetConf[(size_t) p] : 0.0f);
+                n.onsetAgeMs = ageMs;
+                notes.push_back(n);
+            }
         }
     }
     std::sort(notes.begin(), notes.end(),
@@ -345,12 +386,18 @@ std::vector<MlNoteDetector::ActiveNote> MlNoteDetector::getActiveNotes() const
 MlNoteDetector::ActiveNote MlNoteDetector::getDominantNote() const
 {
     ActiveNote best;
+    const double now = juce::Time::getMillisecondCounterHiRes();
     const juce::ScopedLock sl(impl->snapshotLock);
     for (int p = 0; p < kNumPitches; ++p)
     {
         const float a = impl->snapActivity[(size_t) p];
         if (a >= kActivityThreshold && a > best.confidence)
-            best = { kLowestMidi + p, a, impl->snapOnset[(size_t) p] };
+        {
+            const double ot = impl->snapOnsetTimeMs[(size_t) p];
+            best.midi = kLowestMidi + p;
+            best.confidence = a;
+            best.onsetAgeMs = (ot > 0.0) ? (float) (now - ot) : 1.0e9f;
+        }
     }
     return best;
 }

@@ -61,8 +61,8 @@ export interface ChordScoreResult {
 // Raw polyphonic transcription from the ML note detector (Basic Pitch).
 export interface DetectedNote {
     midi: number;       // MIDI pitch, 21..108
-    confidence: number; // frame posteriorgram, 0..1
-    onset: number;      // onset posteriorgram, 0..1
+    confidence: number; // note posteriorgram, 0..1
+    onsetMs: number;    // ms since this pitch's onset (large = sustained tail)
 }
 export interface NoteDetection {
     notes: DetectedNote[];
