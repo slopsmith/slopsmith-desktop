@@ -244,6 +244,13 @@ struct MlNoteDetector::Impl
             const int frames  = shape.size() >= 2 ? (int) shape[1] : kFramesPerWindow;
             const int pitches = shape.size() >= 3 ? (int) shape[2] : kModelPitches;
             if (pitches != kModelPitches) return;  // unexpected model
+            // The onset head is indexed below with the note tensor's
+            // frames/pitches — confirm out[1] is rank-3 and matches, or an
+            // incompatible model's smaller onset tensor is read out of bounds.
+            const auto onsetShape = out[1].GetTensorTypeAndShapeInfo().GetShape();
+            if (onsetShape.size() < 3
+                || (int) onsetShape[1] != frames
+                || (int) onsetShape[2] != pitches) return;
 
             const int firstFrame = juce::jmax(0, frames - kFreshFrames);
             std::array<float, kModelPitches> act{};
