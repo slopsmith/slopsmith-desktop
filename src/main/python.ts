@@ -522,6 +522,18 @@ export function stopPython(): void {
 
     console.log('[python] Stopping server...');
 
+    // The stop is intentional, so detach this child from module state now:
+    //   - pythonProcess = null makes proc's own 'close'/'error' handlers
+    //     no-op (their `pythonProcess !== child` guard), so the expected
+    //     shutdown exit can't be recorded as a startup failure;
+    //   - clearing the startup flags means a restart (and any later
+    //     waitForPython) starts from a clean slate rather than throwing a
+    //     stale startupError left by the stopped child.
+    pythonProcess = null;
+    startupError = null;
+    startupComplete = false;
+    serverReady = false;
+
     // Try graceful shutdown first
     let exited = false;
     proc.kill('SIGTERM');
