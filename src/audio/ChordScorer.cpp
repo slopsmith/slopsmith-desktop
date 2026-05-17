@@ -116,6 +116,7 @@ void ChordScorer::ensureFft(int fftSize)
     currentFftSize = fftSize;
     currentFftOrder = order;
     fftScratch.assign((size_t) fftSize, juce::dsp::Complex<float>{0.0f, 0.0f});
+    fftOutScratch.assign((size_t) fftSize, juce::dsp::Complex<float>{0.0f, 0.0f});
     magnitudes.assign((size_t) ((fftSize >> 1) + 1), 0.0f);
 }
 
@@ -138,15 +139,24 @@ void ChordScorer::computeMagnitudes(const float* buffer, int numSamples)
         fftScratch[(size_t) i] = juce::dsp::Complex<float>{ buffer[i] * w, 0.0f };
     }
 
-    // Forward FFT in-place — same Complex<float>* pointer as input and
-    // output, matching the JS `_ndFftInPlace` shape. No reinterpret_cast
-    // needed now that the scratch is already typed as complex bins.
-    fft->perform(fftScratch.data(), fftScratch.data(), false);
+    // Forward FFT — out-of-place. JUCE's FFT::perform contract is that
+    // input and output must be distinct buffers ("Performs an out-of-place
+    // FFT" — juce_FFT.h). The Ooura fallback engine that Linux + Windows
+    // desktop builds default to recurses into a radix decomposition that
+    // reads input positions and writes output positions in overlapping
+    // iteration patterns; aliasing the two buffers produces cascading
+    // numerical corruption (observed: ~1e27-magnitude bins from sub-1.0
+    // input samples). The corrupted magnitudes propagate into the per-
+    // string band energy as Inf/NaN downstream, and every chord scores
+    // as all-miss. macOS desktop builds use vDSP (Apple Accelerate),
+    // which tolerates input==output aliasing in practice — which is
+    // why this bug only surfaces on the Linux/Windows desktop bridge.
+    fft->perform(fftScratch.data(), fftOutScratch.data(), false);
 
     const int halfBins = (currentFftSize >> 1) + 1;
     for (int k = 0; k < halfBins; ++k)
     {
-        const auto& c = fftScratch[(size_t) k];
+        const auto& c = fftOutScratch[(size_t) k];
         magnitudes[(size_t) k] = std::sqrt(c.real() * c.real() + c.imag() * c.imag());
     }
 }

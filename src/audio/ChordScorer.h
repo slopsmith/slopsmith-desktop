@@ -124,6 +124,15 @@ private:
     // compatible with T[2] in one direction (complex → T[2]), not the
     // other, so a float* → complex* cast is undefined.
     std::vector<juce::dsp::Complex<float>> fftScratch;
+    // Output buffer for fft->perform(). JUCE's FFT::perform is documented
+    // out-of-place (juce_FFT.h: "Performs an out-of-place FFT"). Aliasing
+    // input and output silently corrupts the result on the Ooura fallback
+    // engine that ships on Linux/Windows builds — radix decomposition
+    // reads input positions and writes output positions in overlapping
+    // iteration patterns, so the same memory gets read after write and
+    // intermediate values cascade through butterflies into ~1e27-magnitude
+    // garbage bins. Keep a distinct output buffer of the same size.
+    std::vector<juce::dsp::Complex<float>> fftOutScratch;
     // Magnitude spectrum, length fftSize/2 + 1 (Nyquist-inclusive).
     std::vector<float> magnitudes;
     double lastBinHz = 0.0;
