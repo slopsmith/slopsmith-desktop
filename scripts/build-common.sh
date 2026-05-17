@@ -128,10 +128,7 @@ clone_slopsmith() {
 		byrongamatos/slopsmith-plugin-midi
 		byrongamatos/slopsmith-plugin-multiplayer
 		byrongamatos/slopsmith-plugin-nam-tone
-		# TEST BUILD: ship the in-review Phase-2 ML detectNotes consumer.
-		# Revert to plain "byrongamatos/slopsmith-plugin-notedetect" once
-		# feat/ml-note-detection merges to the plugin's default branch.
-		byrongamatos/slopsmith-plugin-notedetect@feat/ml-note-detection
+		byrongamatos/slopsmith-plugin-notedetect
 		byrongamatos/slopsmith-plugin-piano
 		byrongamatos/slopsmith-plugin-practice
 		byrongamatos/slopsmith-plugin-profileimport
