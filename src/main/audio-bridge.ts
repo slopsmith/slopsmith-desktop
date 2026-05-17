@@ -12,6 +12,12 @@ type AudioModule = Record<string, (...args: any[]) => any>;
 
 let audio: AudioModule | null = null;
 
+// slotId → VST3 path, populated by audio:loadVST. Lets audio:openPluginEditor
+// resolve a slot's plugin path for the crash sentinel without a native
+// getChainState call. Kept in sync on remove/clear; slot ids are stable
+// across moves so a reorder needs no upkeep.
+const vstSlotPaths = new Map<number, string>();
+
 function loadNativeAddon(): AudioModule | null {
     const addonPaths = [
         // Development build
@@ -268,11 +274,14 @@ export function initAudioBridge(): void {
         // means this call never returns and the sentinel survives for the
         // next startup to find. A clean return clears it.
         armSentinel(pluginPath, 'load');
+        let slotId = -1;
         try {
-            return audio?.loadVST(pluginPath) ?? -1;
+            slotId = audio?.loadVST(pluginPath) ?? -1;
         } finally {
             disarmSentinel();
         }
+        if (slotId >= 0) vstSlotPaths.set(slotId, pluginPath);
+        return slotId;
     });
 
     ipcMain.handle('audio:loadNAMModel', async (_event, modelPath: string) => {
@@ -285,6 +294,7 @@ export function initAudioBridge(): void {
 
     ipcMain.handle('audio:removeProcessor', (_event, slotId: number) => {
         audio?.removeProcessor(slotId);
+        vstSlotPaths.delete(slotId);
     });
 
     ipcMain.handle('audio:moveProcessor', (_event, from: number, to: number) => {
@@ -297,6 +307,7 @@ export function initAudioBridge(): void {
 
     ipcMain.handle('audio:clearChain', () => {
         audio?.clearChain();
+        vstSlotPaths.clear();
     });
 
     ipcMain.handle('audio:getChainState', () => {
@@ -308,12 +319,17 @@ export function initAudioBridge(): void {
     ipcMain.handle('audio:openPluginEditor', (_event, slotId: number) => {
         // Editor creation is the common in-process fault point (an editor
         // that must run on the OS main thread). Arm the sentinel with the
-        // slot's plugin path; armEditorSentinel self-clears after a grace
-        // window since editor creation is asynchronous and has no sync
-        // success signal.
-        const slot = (audio?.getChainState() ?? []).find((s: any) => s?.id === slotId);
-        if (slot && typeof slot.path === 'string' && slot.path)
-            armEditorSentinel(slot.path);
+        // slot's plugin path before opening; armEditorSentinel self-clears
+        // after a grace window since editor creation is asynchronous and has
+        // no synchronous success signal. The path comes from the loadVST map
+        // first; getChainState is only a fallback for slots created another
+        // way (e.g. preset restore).
+        let pluginPath = vstSlotPaths.get(slotId);
+        if (!pluginPath) {
+            const slot = (audio?.getChainState() ?? []).find((s: any) => s?.id === slotId);
+            if (slot && typeof slot.path === 'string') pluginPath = slot.path;
+        }
+        if (pluginPath) armEditorSentinel(pluginPath);
         return audio?.openPluginEditor(slotId) ?? false;
     });
 

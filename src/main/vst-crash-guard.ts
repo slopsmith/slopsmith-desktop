@@ -78,8 +78,13 @@ function clearSentinel(): void {
 // Drop the sentinel just before a risky in-process VST op. A plain
 // writeFileSync is enough: an access violation kills the process but not the
 // OS page cache, so the file survives for the next startup to find.
+//
+// Cancels any pending editor-grace timer first: that timer would otherwise
+// clear this fresh sentinel mid-op (e.g. an editor-open followed by a load
+// inside the grace window), losing the crash attribution.
 export function armSentinel(pluginPath: string, op: 'load' | 'editor'): void {
     if (!pluginPath || !sentinelPath) return;
+    if (editorTimer) { clearTimeout(editorTimer); editorTimer = null; }
     try {
         fs.writeFileSync(sentinelPath,
             JSON.stringify({ plugin: pluginPath, op, at: Date.now() }));
@@ -91,13 +96,12 @@ export function disarmSentinel(): void {
     clearSentinel();
 }
 
-// Arm for an editor-open and self-clear after the grace window. Any pending
-// grace timer from an earlier editor-open is cancelled first so it can't
-// clear this newer sentinel early. The timer is unref'd so it never holds
-// the app open on its own.
+// Arm for an editor-open and self-clear after the grace window. armSentinel
+// cancels any pending grace timer from an earlier editor-open, so an older
+// timer can't clear this newer sentinel early. The timer is unref'd so it
+// never holds the app open on its own.
 export function armEditorSentinel(pluginPath: string): void {
     if (!pluginPath || !sentinelPath) return;
-    if (editorTimer) clearTimeout(editorTimer);
     armSentinel(pluginPath, 'editor');
     editorTimer = setTimeout(() => {
         editorTimer = null;
