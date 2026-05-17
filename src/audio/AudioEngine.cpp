@@ -126,6 +126,9 @@ AudioEngine::DeviceOptions AudioEngine::probeDeviceOptions(const juce::String& t
             return options;
         }
 
+        options.inputChannels = device->getInputChannelNames();
+        options.outputChannels = device->getOutputChannelNames();
+
         for (auto rate : device->getAvailableSampleRates())
             options.sampleRates.addIfNotAlreadyThere(rate);
 
@@ -137,9 +140,10 @@ AudioEngine::DeviceOptions AudioEngine::probeDeviceOptions(const juce::String& t
         for (auto size : advertisedBuffers)
             options.bufferSizes.addIfNotAlreadyThere(size);
 
-        fprintf(stderr, "[AudioEngine] Probed device options: type='%s' in='%s' out='%s' rates=%d buffers=%d\n",
+        fprintf(stderr, "[AudioEngine] Probed device options: type='%s' in='%s' out='%s' inputs=%d outputs=%d rates=%d buffers=%d\n",
                 options.type.toRawUTF8(), options.input.toRawUTF8(), options.output.toRawUTF8(),
-            options.sampleRates.size(), options.bufferSizes.size());
+                options.inputChannels.size(), options.outputChannels.size(),
+                options.sampleRates.size(), options.bufferSizes.size());
     }
     catch (const std::exception& e)
     {
@@ -231,45 +235,12 @@ bool AudioEngine::setAudioDevice(const juce::String& inputName, const juce::Stri
     fprintf(stderr, "[AudioEngine] setAudioDevice: in='%s' out='%s' sr=%.0f bs=%d\n",
             inputName.toRawUTF8(), outputName.toRawUTF8(), sampleRate, bufferSize);
 
-    // Skip if already configured with the same settings
-    if (deviceManager.getCurrentAudioDevice() != nullptr)
-    {
-        juce::AudioDeviceManager::AudioDeviceSetup current;
-        deviceManager.getAudioDeviceSetup(current);
-        if (current.inputDeviceName == inputName && current.outputDeviceName == outputName
-            && current.sampleRate == sampleRate && current.bufferSize == bufferSize)
-        {
-            fprintf(stderr, "[AudioEngine] Device already configured with same settings, skipping\n");
-            return true;
-        }
-    }
-
     bool wasRunning = audioRunning.load(std::memory_order_relaxed);
-    if (wasRunning) stopAudio();
 
     // Save current device type name before closing
     juce::String currentTypeName;
     if (auto* currentType = deviceManager.getCurrentDeviceTypeObject())
         currentTypeName = currentType->getTypeName();
-
-    // Close the device completely on Linux to avoid ALSA deadlocks on
-    // reconfigure. On Windows, setAudioDeviceSetup can reconfigure in place
-    // and closing first makes WASAPI driver changes much slower.
-#if JUCE_LINUX
-    if (deviceManager.getCurrentAudioDevice() != nullptr)
-    {
-        try {
-            deviceManager.closeAudioDevice();
-            fprintf(stderr, "[AudioEngine] Closed device for reconfiguration\n");
-
-            // Re-set the device type so the device list is repopulated
-            if (currentTypeName.isNotEmpty())
-                deviceManager.setCurrentAudioDeviceType(currentTypeName, true);
-        } catch (...) {
-            fprintf(stderr, "[AudioEngine] closeAudioDevice crashed, continuing\n");
-        }
-    }
-#endif
 
     // Initialize if no device type set yet.
     //
@@ -342,10 +313,101 @@ bool AudioEngine::setAudioDevice(const juce::String& inputName, const juce::Stri
     setup.outputDeviceName = resolvedOutput;
     setup.sampleRate = sampleRate > 0 ? sampleRate : 48000.0;
     setup.bufferSize = bufferSize > 0 ? bufferSize : 256;
-    setup.inputChannels.setRange(0, 2, true);
-    setup.outputChannels.setRange(0, 2, true);
     setup.useDefaultInputChannels = resolvedInput.isEmpty();
     setup.useDefaultOutputChannels = resolvedOutput.isEmpty();
+
+    // Skip only when the full requested setup already matches. The channel
+    // masks matter: older sessions may have opened just two inputs, and a
+    // high-numbered selectedInputChannel requires the expanded input mask.
+    if (auto* currentDevice = deviceManager.getCurrentAudioDevice())
+    {
+        try
+        {
+            juce::AudioDeviceManager::AudioDeviceSetup current;
+            deviceManager.getAudioDeviceSetup(current);
+
+            const int advertisedInputs = currentDevice->getInputChannelNames().size();
+            juce::BigInteger expectedInputs;
+            expectedInputs.setRange(0, advertisedInputs > 0 ? advertisedInputs : 2, true);
+
+            const int advertisedOutputs = currentDevice->getOutputChannelNames().size();
+            juce::BigInteger expectedOutputs;
+            expectedOutputs.setRange(0, juce::jmin(advertisedOutputs > 0 ? advertisedOutputs : 2, 2), true);
+
+            if (current.inputDeviceName == setup.inputDeviceName
+                && current.outputDeviceName == setup.outputDeviceName
+                && current.sampleRate == setup.sampleRate
+                && current.bufferSize == setup.bufferSize
+                && current.useDefaultInputChannels == setup.useDefaultInputChannels
+                && current.useDefaultOutputChannels == setup.useDefaultOutputChannels
+                && current.inputChannels == expectedInputs
+                && current.outputChannels == expectedOutputs)
+            {
+                fprintf(stderr, "[AudioEngine] Device already configured with same settings, skipping\n");
+                return true;
+            }
+        }
+        catch (const std::exception& e)
+        {
+            fprintf(stderr, "[AudioEngine] Current device channel check failed: %s\n", e.what());
+        }
+        catch (...)
+        {
+            fprintf(stderr, "[AudioEngine] Current device channel check failed (unknown)\n");
+        }
+    }
+
+    if (wasRunning) stopAudio();
+
+    // Close the device completely on Linux to avoid ALSA deadlocks on
+    // reconfigure. On Windows, setAudioDeviceSetup can reconfigure in place
+    // and closing first makes WASAPI driver changes much slower.
+#if JUCE_LINUX
+    if (deviceManager.getCurrentAudioDevice() != nullptr)
+    {
+        try {
+            deviceManager.closeAudioDevice();
+            fprintf(stderr, "[AudioEngine] Closed device for reconfiguration\n");
+
+            // Re-set the device type so the device list is repopulated
+            if (currentTypeName.isNotEmpty())
+                deviceManager.setCurrentAudioDeviceType(currentTypeName, true);
+        } catch (...) {
+            fprintf(stderr, "[AudioEngine] closeAudioDevice crashed, continuing\n");
+        }
+    }
+#endif
+
+    int inputChannelCount = 0;
+    int outputChannelCount = 0;
+    if (auto* type = deviceManager.getCurrentDeviceTypeObject())
+    {
+        try
+        {
+            if (auto probe = std::unique_ptr<juce::AudioIODevice>(type->createDevice(resolvedOutput, resolvedInput)))
+            {
+                inputChannelCount = probe->getInputChannelNames().size();
+                outputChannelCount = probe->getOutputChannelNames().size();
+            }
+        }
+        catch (const std::exception& e)
+        {
+            fprintf(stderr, "[AudioEngine] Channel probe failed: %s\n", e.what());
+        }
+        catch (...)
+        {
+            fprintf(stderr, "[AudioEngine] Channel probe failed (unknown)\n");
+        }
+    }
+    if (inputChannelCount <= 0) inputChannelCount = 2;
+    if (outputChannelCount <= 0) outputChannelCount = 2;
+
+    // Keep every advertised input open so selectedInputChannel can choose
+    // high-numbered dry DI inputs used by mixers and modelers. Output routing
+    // remains stereo for now; exposing arbitrary output pairs is a separate UI
+    // concern tracked upstream.
+    setup.inputChannels.setRange(0, inputChannelCount, true);
+    setup.outputChannels.setRange(0, juce::jmin(outputChannelCount, 2), true);
 
     juce::String result;
     try {
@@ -590,20 +652,19 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
     }
     else if (selectedCh < 0 && numInputChannels > 1)
     {
-        // "Both (Mono Mix)": average all input channels and broadcast
-        // the result to every output channel, so the signal chain,
-        // pitch detector, input-frame ring, and the user's monitoring
-        // all see the same mono signal. Previously the else-branch
-        // copied channels through 1:1, which delivered stereo to the
-        // signal chain and to the user even though the UI label
-        // promised a mix; that mismatch surfaced as the renderer's
-        // chord scorer and the engine pitch detector seeing different
-        // audio from what the signal chain/output produced.
-        const float invCh = 1.0f / (float) numInputChannels;
+        // Default pair mono mix: average the first two input channels
+        // and broadcast the result to every output channel, so the
+        // signal chain, pitch detector, input-frame ring, and the
+        // user's monitoring all see the same mono signal. We open all
+        // advertised hardware inputs so explicit higher channel picks
+        // work, but the default keeps the old first-pair semantics
+        // instead of attenuating the signal by averaging every input.
+        const int mixChannels = juce::jmin(numInputChannels, 2);
+        const float invCh = 1.0f / (float) mixChannels;
         for (int i = 0; i < numSamples; ++i)
         {
             float mix = 0.0f;
-            for (int ch = 0; ch < numInputChannels; ++ch)
+            for (int ch = 0; ch < mixChannels; ++ch)
                 mix += inputData[ch][i];
             const float gained = mix * invCh * inGain;
             for (int outCh = 0; outCh < numOutputChannels; ++outCh)
@@ -657,7 +718,7 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
     {
         // Build the mono source mirroring the channel-copy semantics:
         // explicit channel select picks one input; -1 with multi-input
-        // averages; otherwise input channel 0.
+        // averages the first pair; otherwise input channel 0.
         if (selectedCh >= 0 && selectedCh < numInputChannels)
         {
             for (int i = 0; i < numSamples; ++i)
@@ -665,11 +726,12 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
         }
         else if (selectedCh < 0 && numInputChannels > 1)
         {
-            const float invCh = 1.0f / (float) numInputChannels;
+            const int mixChannels = juce::jmin(numInputChannels, 2);
+            const float invCh = 1.0f / (float) mixChannels;
             for (int i = 0; i < numSamples; ++i)
             {
                 float mix = 0.0f;
-                for (int ch = 0; ch < numInputChannels; ++ch)
+                for (int ch = 0; ch < mixChannels; ++ch)
                     mix += inputData[ch][i];
                 inputCaptureScratch[(size_t) i] = mix * invCh * inGain;
             }

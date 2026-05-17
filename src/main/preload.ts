@@ -77,6 +77,8 @@ contextBridge.exposeInMainWorld('slopsmithDesktop', {
         setDeviceType: (typeName: string) => ipcRenderer.invoke('audio:setDeviceType', typeName),
         setDevice: (input: string, output: string, sampleRate: number, bufferSize: number) =>
             ipcRenderer.invoke('audio:setDevice', input, output, sampleRate, bufferSize),
+        loadDeviceSettings: () => ipcRenderer.invoke('audio:loadDeviceSettings'),
+        saveDeviceSettings: (settings: unknown) => ipcRenderer.invoke('audio:saveDeviceSettings', settings),
 
         // Audio control
         startAudio: () => ipcRenderer.invoke('audio:startAudio'),

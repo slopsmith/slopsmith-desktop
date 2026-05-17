@@ -233,10 +233,14 @@ static Napi::Value ProbeDeviceOptions(const Napi::CallbackInfo& info)
     auto output = info.Length() > 2 && info[2].IsString() ? info[2].As<Napi::String>().Utf8Value() : "";
     auto ratesArray = Napi::Array::New(env);
     auto buffersArray = Napi::Array::New(env);
+    auto inputChannelsArray = Napi::Array::New(env);
+    auto outputChannelsArray = Napi::Array::New(env);
 
     obj.Set("type", type);
     obj.Set("input", input);
     obj.Set("output", output);
+    obj.Set("inputChannels", inputChannelsArray);
+    obj.Set("outputChannels", outputChannelsArray);
     obj.Set("sampleRates", ratesArray);
     obj.Set("bufferSizes", buffersArray);
     if (!engine)
@@ -250,6 +254,16 @@ static Napi::Value ProbeDeviceOptions(const Napi::CallbackInfo& info)
     obj.Set("input", options.input.toStdString());
     obj.Set("output", options.output.toStdString());
     obj.Set("error", options.error.toStdString());
+
+    inputChannelsArray = Napi::Array::New(env, options.inputChannels.size());
+    for (int i = 0; i < options.inputChannels.size(); ++i)
+        inputChannelsArray.Set((uint32_t)i, options.inputChannels[i].toStdString());
+    obj.Set("inputChannels", inputChannelsArray);
+
+    outputChannelsArray = Napi::Array::New(env, options.outputChannels.size());
+    for (int i = 0; i < options.outputChannels.size(); ++i)
+        outputChannelsArray.Set((uint32_t)i, options.outputChannels[i].toStdString());
+    obj.Set("outputChannels", outputChannelsArray);
 
     ratesArray = Napi::Array::New(env, options.sampleRates.size());
     for (int i = 0; i < options.sampleRates.size(); ++i)
