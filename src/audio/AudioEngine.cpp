@@ -549,6 +549,11 @@ void AudioEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
 void AudioEngine::audioDeviceStopped()
 {
     signalChain.releaseResources();
+    // Stop the ML inference thread and clear its snapshot — audioDeviceAboutToStart()
+    // prepares it again on the next start. Without this the worker thread stays
+    // alive after a stop/device-removal and getPitchDetection()/detectNotes()
+    // could keep serving the last session's stale notes.
+    mlNoteDetector.stop();
     // Flatten the input ring index on stop so a getInputFrame() call
     // made between stopAudio() and the next startAudio() returns the
     // cold-start zero-padded frame rather than stale samples from the

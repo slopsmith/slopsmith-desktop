@@ -447,7 +447,14 @@ static Napi::Value LoadNoteModel(const Napi::CallbackInfo& info)
 static Napi::Value IsMlNoteDetection(const Napi::CallbackInfo& info)
 {
     auto env = info.Env();
-    return Napi::Boolean::New(env, engine && engine->hasMlNoteDetector());
+    // Report readiness, not just model-loaded: the engine only routes
+    // getPitchDetection()/scoreChord() to ML once the detector has published
+    // its first snapshot (isReady()). Reporting true during the cold-start
+    // window would tell the renderer "ML active" while it's still getting the
+    // YIN fallback.
+    return Napi::Boolean::New(env,
+        engine && engine->hasMlNoteDetector()
+              && engine->getMlNoteDetector().isReady());
 }
 
 // Raw polyphonic transcription from the ML note detector — the full set of
