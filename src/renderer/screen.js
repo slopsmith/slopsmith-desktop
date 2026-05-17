@@ -2570,6 +2570,10 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
     if (!origPS) return;
 
     let _lastTone = null;
+    // Throttle the "_toneSwitcher not ready" warning — the tone monitor polls
+    // at 50ms, so without this it would log every tick while the switcher is
+    // unavailable. Logged once per not-ready episode; reset on a successful switch.
+    let _toneSwitcherWarned = false;
     /** Song + arrangement — invalidates preload when switching Lead/Bass/etc. on the same file */
     let _preloadedToneCacheKey = null;
 
@@ -2668,8 +2672,11 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                     _lastTone = activeTone;
                     showToneToast(activeTone);
                     window._toneSwitcher.switchToTone(activeTone);
-                } else {
-                    console.log('[tone-switcher] _toneSwitcher not ready — retrying next poll');
+                    _toneSwitcherWarned = false;
+                } else if (!_toneSwitcherWarned) {
+                    // Throttled: log once, not every 50ms poll.
+                    _toneSwitcherWarned = true;
+                    console.log('[tone-switcher] _toneSwitcher not ready — retrying until installed');
                 }
             }
         }, 50);
