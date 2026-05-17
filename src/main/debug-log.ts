@@ -52,11 +52,12 @@ export function initDebugLogging(): string | null {
     }
 
     // Debug mode → console.* is routed to the log file only, NOT also tee'd to
-    // the original console. Deliberate: enableFileLogging dup2's fd 2 onto this
-    // same file, so letting console.error/warn also reach their original
-    // stderr would write those lines into the file twice. A packaged build has
-    // no console anyway; a dev who wants live output can tail the file. A
-    // transient write failure is swallowed so logging can't take the app down.
+    // the original console. Deliberate: enableFileLogging freopen's the native
+    // stderr stream onto this same file, so letting console.error/warn also
+    // reach their original stderr could write those lines into the file twice.
+    // A packaged build has no console anyway; a dev who wants live output can
+    // tail the file. A transient write failure is swallowed so logging can't
+    // take the app down.
     const writeLine = (...args: unknown[]) => {
         try {
             fs.appendFileSync(file, util.format(...args) + '\n');

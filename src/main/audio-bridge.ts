@@ -41,11 +41,15 @@ export function initAudioBridge(): void {
 
     if (audio) {
         // Redirect native stderr to the debug log before init() runs — that's
-        // when the [AudioEngine] device diagnostics start. Best-effort.
+        // when the [AudioEngine] device diagnostics start. enableFileLogging
+        // returns "" on success or an error description (with errno) so a
+        // failure is diagnosable from the log itself. Best-effort.
         if (isDebugEnabled() && typeof audio.enableFileLogging === 'function') {
             try {
-                const ok = audio.enableFileLogging(getDebugLogPath());
-                console.log(`[audio] Native file logging ${ok ? 'enabled' : 'failed'}`);
+                const err = audio.enableFileLogging(getDebugLogPath());
+                console.log(err
+                    ? `[audio] Native file logging failed: ${err}`
+                    : '[audio] Native file logging enabled');
             } catch (e: any) {
                 console.warn(`[audio] enableFileLogging threw: ${e.message}`);
             }
