@@ -91,8 +91,11 @@ export function armSentinel(pluginPath: string, op: 'load' | 'editor'): void {
     } catch { /* best-effort — a missed sentinel just means no auto-blocklist */ }
 }
 
-// Clear the sentinel once the op has survived (use after a synchronous load).
+// Clear the sentinel once the op has survived (use after a synchronous load,
+// or when an editor-open returns failure without ever creating a window).
+// Also cancels a pending editor-grace timer so it can't fire stale later.
 export function disarmSentinel(): void {
+    if (editorTimer) { clearTimeout(editorTimer); editorTimer = null; }
     clearSentinel();
 }
 

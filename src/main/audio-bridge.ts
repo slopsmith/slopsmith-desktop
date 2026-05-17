@@ -329,7 +329,12 @@ export function initAudioBridge(): void {
             if (slot && typeof slot.path === 'string') pluginPath = slot.path;
         }
         if (pluginPath) armEditorSentinel(pluginPath);
-        return audio?.openPluginEditor(slotId) ?? false;
+        const opened = audio?.openPluginEditor(slotId) ?? false;
+        // A synchronous false means no editor window was created (the plugin
+        // has none, or the open failed cleanly) — nothing can fault, so clear
+        // the sentinel now instead of waiting out the grace window.
+        if (!opened) disarmSentinel();
+        return opened;
     });
 
     ipcMain.handle('audio:closePluginEditor', (_event, slotId: number) => {
