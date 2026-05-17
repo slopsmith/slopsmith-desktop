@@ -62,7 +62,10 @@ static bool readWav(const std::string& path, Wav& out)
         const char* id = reinterpret_cast<const char*>(buf.data() + pos);
         uint32_t sz = rdU32(buf.data() + pos + 4);
         const uint8_t* body = buf.data() + pos + 8;
-        if (!std::memcmp(id, "fmt ", 4) && sz >= 16)
+        // Guard the fmt-body reads (up to body+14, i.e. 16 bytes) against a
+        // truncated file: a declared sz >= 16 doesn't mean 16 bytes are
+        // actually present.
+        if (!std::memcmp(id, "fmt ", 4) && sz >= 16 && pos + 8 + 16 <= buf.size())
         {
             fmt = rdU16(body); channels = rdU16(body+2); rate = rdU32(body+4); bits = rdU16(body+14);
         }
