@@ -790,6 +790,14 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
         // Must run on the message thread.
         if (!juce::MessageManager::callAsync([&st, reply]
         {
+          // A misbehaving plugin editor can throw from createEditor(), its
+          // ctor, or the first paint/resize. Unhandled, that escapes the
+          // message dispatch and std::terminate()s the whole sandbox child
+          // (observed as 0xC0000409 FAST_FAIL_FATAL_APP_EXIT) — which would
+          // also kill the plugin's audio processing. Contain it: the editor
+          // open fails, but the child (and the plugin's audio) survives.
+          try
+          {
             // Tear down any prior editor BEFORE replacing st.editor. The
             // existing EditorWindow holds st.editor.get() via
             // setContentNonOwned, so resetting st.editor first would leave
@@ -837,6 +845,23 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
             res->setProperty("h", st.editor->getHeight());
             st.editorRequestInFlight.store(false, std::memory_order_release);
             reply(true, juce::var(res.get()));
+          }
+          catch (const std::exception& e)
+          {
+            st.editorWindow.reset();
+            st.editor.reset();
+            st.editorRequestInFlight.store(false, std::memory_order_release);
+            hostLogf("kOpenEditor: editor creation threw: %s", e.what());
+            reply(false, {}, juce::String("editor creation threw: ") + e.what());
+          }
+          catch (...)
+          {
+            st.editorWindow.reset();
+            st.editor.reset();
+            st.editorRequestInFlight.store(false, std::memory_order_release);
+            hostLogf("kOpenEditor: editor creation threw (unknown exception)");
+            reply(false, {}, "editor creation threw (unknown exception)");
+          }
         }))
         {
             // callAsync returns false when the message queue is gone (shutdown).
