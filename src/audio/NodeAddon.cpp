@@ -871,11 +871,19 @@ static std::unique_ptr<juce::AudioProcessor> loadVstSandboxAware(
 
     // In-process JUCE load. Instantiate on the JUCE message thread for the
     // COM-apartment reason documented in VSTHost::loadPlugin.
-    std::unique_ptr<juce::AudioPluginInstance> instance;
-    dispatchOnMessageThread([&]() {
-        instance = vstHost->loadPlugin(pluginPath, sr, bs, error);
+    //
+    // dispatchOnMessageThread can return on its 15 s timeout while the lambda
+    // is still queued, so the lambda must not capture this (possibly unwound)
+    // stack frame by reference. Route the result through shared_ptrs that
+    // outlive both the caller and a late-running lambda.
+    auto instance = std::make_shared<std::unique_ptr<juce::AudioPluginInstance>>();
+    auto loadError = std::make_shared<juce::String>();
+    dispatchOnMessageThread([pluginPath, sr, bs, instance, loadError]() {
+        if (vstHost)
+            *instance = vstHost->loadPlugin(pluginPath, sr, bs, *loadError);
     });
-    return instance;
+    error = *loadError;
+    return std::move(*instance);
 }
 
 static Napi::Value LoadVST(const Napi::CallbackInfo& info)
