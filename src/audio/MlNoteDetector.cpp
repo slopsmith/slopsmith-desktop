@@ -125,6 +125,12 @@ struct MlNoteDetector::Impl
 
     std::unique_ptr<MlInferenceThread> thread;
 
+    // Set false by the inference thread when a loaded model's output shape
+    // violates the Basic Pitch contract — such a model will never publish
+    // usable notes, so isAvailable() then reports false and callers fall back
+    // to the YIN detector instead of silently preferring a dead ML path.
+    std::atomic<bool> contractValid{ true };
+
     // Start / stop the background inference thread. prepare() and stop() use
     // these so the thread is never alive while clearAudioState() mutates the
     // FIFO / inQueue / circular buffer — otherwise a device stop→start cycle
@@ -143,8 +149,12 @@ struct MlNoteDetector::Impl
     {
         if (thread)
         {
-            thread->signalThreadShouldExit();
-            thread->waitForThreadToExit(1000);
+            // juce::Thread::stopThread() signals, waits, and only force-kills
+            // on timeout — after it returns the thread is definitively not
+            // running, so resetting the unique_ptr can't destroy a live
+            // juce::Thread (which a bare waitForThreadToExit() + unconditional
+            // reset would, if the join timed out mid-inference).
+            thread->stopThread(2000);
             thread.reset();
         }
     }
@@ -240,22 +250,28 @@ struct MlNoteDetector::Impl
 
             const float* note  = out[0].GetTensorData<float>();
             const float* onset = out[1].GetTensorData<float>();
-            // Require the note tensor to be exactly rank-3 [1, frames, 88]
-            // with a positive frame count before indexing it — a fallback to
-            // expected dims would let an unexpected-shape model slip through
-            // and the flat indexing below would read past the tensor.
-            const auto shape = out[0].GetTensorTypeAndShapeInfo().GetShape();
-            if (shape.size() != 3) return;  // unexpected note-output rank
-            const int frames  = (int) shape[1];
-            const int pitches = (int) shape[2];
-            if (frames <= 0 || pitches != kModelPitches) return;
-            // The onset head is indexed below with the note tensor's
-            // frames/pitches — confirm out[1] is rank-3 and matches, or an
-            // incompatible model's smaller onset tensor is read out of bounds.
+            // Validate BOTH output tensors against the Basic Pitch contract
+            // ([1, frames, 88]) before any indexing — a fallback to expected
+            // dims would let an unexpected-shape model slip through and the
+            // flat indexing below would read past a tensor. On a violation the
+            // model can never publish usable notes, so demote (contractValid
+            // = false): isAvailable() then reports false and callers fall back
+            // to YIN instead of silently preferring a dead ML path.
+            const auto noteShape  = out[0].GetTensorTypeAndShapeInfo().GetShape();
             const auto onsetShape = out[1].GetTensorTypeAndShapeInfo().GetShape();
-            if (onsetShape.size() != 3
-                || (int) onsetShape[1] != frames
-                || (int) onsetShape[2] != pitches) return;
+            const bool contractOk =
+                noteShape.size() == 3 && onsetShape.size() == 3
+                && noteShape[1] > 0
+                && (int) noteShape[2] == kModelPitches
+                && onsetShape[1] == noteShape[1]
+                && onsetShape[2] == noteShape[2];
+            if (! contractOk)
+            {
+                contractValid.store(false, std::memory_order_relaxed);
+                return;
+            }
+            const int frames  = (int) noteShape[1];
+            const int pitches = (int) noteShape[2];
 
             const int firstFrame = juce::jmax(0, frames - kFreshFrames);
             std::array<float, kModelPitches> act{};
@@ -312,7 +328,8 @@ MlNoteDetector::~MlNoteDetector() { stop(); }
 
 bool MlNoteDetector::isAvailable() const
 {
-    return modelLoaded.load(std::memory_order_relaxed);
+    return modelLoaded.load(std::memory_order_relaxed)
+        && impl->contractValid.load(std::memory_order_relaxed);
 }
 
 bool MlNoteDetector::loadModel(const juce::File& modelFile)
@@ -341,6 +358,9 @@ bool MlNoteDetector::loadModel(const juce::File& modelFile)
             const juce::ScopedLock sl(impl->sessionLock);
             impl->session = std::move(newSession);
         }
+        // Fresh session — clear any prior contract-violation demotion so a
+        // good model loaded after a bad one is usable again.
+        impl->contractValid.store(true, std::memory_order_relaxed);
         modelLoaded.store(true, std::memory_order_relaxed);
         // Bring the inference thread up as soon as a model is loaded — not
         // only on the first audio-device prepare(). This keeps isAvailable()
