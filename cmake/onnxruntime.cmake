@@ -16,7 +16,12 @@
 #   ONNXRUNTIME_IMPORT_LIB    library to link against
 #   ONNXRUNTIME_RUNTIME_LIB   shared lib that must sit next to slopsmith_audio.node
 
-set(ONNXRUNTIME_VERSION "1.20.1" CACHE STRING "Pinned ONNX Runtime version")
+# Plain variable, not a cache entry: the version is pinned in lock-step with
+# the per-asset SHA-256 table below, so it must always be the value in this
+# file. A CACHE STRING would keep a stale version from a reused build dir
+# (a branch on a different version), making the hash check fail and silently
+# disable ONNX.
+set(ONNXRUNTIME_VERSION "1.20.1")
 
 # --- Resolve the prebuilt asset for this OS/arch --------------------------
 set(_ort_base "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}")
