@@ -88,6 +88,11 @@ namespace {
                 return;
             }
 
+            VST_TRACE("[sandbox] SandboxedEditor: embed attempt — "
+                      "nativeHwnd=%p IsWindow=%d, parentHwnd=%p IsWindow=%d",
+                      nativeHwnd, IsWindow((HWND)nativeHwnd) ? 1 : 0,
+                      (void*)parent, IsWindow(parent) ? 1 : 0);
+
             auto style = GetWindowLongPtrW((HWND)nativeHwnd, GWL_STYLE);
             style = (style | WS_CHILD) & ~WS_POPUP;
             SetWindowLongPtrW((HWND)nativeHwnd, GWL_STYLE, style);
