@@ -50,10 +50,11 @@ void PitchDetector::designLowpass(Biquad& bq, double cutoffHz, double sampleRate
 
 void PitchDetector::prepare(double sampleRate, int /*blockSize*/)
 {
-    // Join the detection thread before touching any shared state.  stop()
-    // signals and waits unconditionally for the thread to exit and resets it,
-    // so all mutations below are safe even if prepare() is called mid-stream
-    // (e.g. after a sample-rate change).
+    // prepare() runs on the audio-device setup path (audioDeviceAboutToStart),
+    // i.e. while the audio callback is stopped — pushSamples() is not running
+    // concurrently, so the FIFO and analysis buffer can be reconfigured safely.
+    // stop() additionally joins the detection thread before any shared state is
+    // touched below; it must not be called while the audio callback is live.
     stop();
 
     // Decimate the device stream down to ~8 kHz for detection so YIN's
@@ -79,6 +80,13 @@ void PitchDetector::prepare(double sampleRate, int /*blockSize*/)
     // Drop any samples queued before this (re)configure so the restarted
     // detector never analyses stale audio from the previous run.
     fifo.reset();
+
+    // Clear the last published detection so getLatestDetection() never reports
+    // a stale note from the previous run before the first new frame arrives.
+    detectedFreq.store(-1.0f);
+    detectedConfidence.store(0.0f);
+    detectedMidi.store(-1);
+    detectedCents.store(0.0f);
 
     thread = std::make_unique<PitchDetectionThread>([this]() { detectionThread(); });
     thread->startThread(juce::Thread::Priority::normal);
@@ -186,10 +194,12 @@ float PitchDetector::yinDetect(const float* buffer, int length, float sampleRate
     // Restrict tau to the frequency range we care about.  This avoids scanning
     // taus that correspond to undetectable or out-of-range pitches and keeps
     // computation proportional to the useful search window.
-    //   tauMin → highest pitch of interest (2000 Hz)
+    //   tauMin → smallest lag scanned (highest pitch of interest, 2000 Hz);
+    //            floor() so the integer lag just below sampleRate/2000 is
+    //            still considered, keeping pitches up to ~2000 Hz in range.
     //   tauMax → lowest pitch of interest (25 Hz covers B0/drop tunings)
     //            capped at halfLen-1, which is the true YIN limit.
-    const int tauMin = std::max(2, (int)std::ceil(sampleRate / 2000.0f));
+    const int tauMin = std::max(2, (int)std::floor(sampleRate / 2000.0f));
     const int tauMax = std::min(halfLen - 1, (int)std::ceil(sampleRate / 25.0f));
 
     std::vector<float> yinBuffer((size_t)(tauMax + 1));
