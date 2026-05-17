@@ -280,6 +280,7 @@ struct MlNoteDetector::Impl
             const auto onsetShape = out[1].GetTensorTypeAndShapeInfo().GetShape();
             const bool contractOk =
                 noteShape.size() == 3 && onsetShape.size() == 3
+                && noteShape[0] == 1 && onsetShape[0] == 1
                 && noteShape[1] > 0
                 && (int) noteShape[2] == kModelPitches
                 && onsetShape[1] == noteShape[1]

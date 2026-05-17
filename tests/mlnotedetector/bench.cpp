@@ -159,12 +159,17 @@ int main(int argc, char** argv)
             for (const auto& a : active)
             {
                 auto it = lastSeq.find(a.midi);
-                if (it == lastSeq.end() || a.onsetSeq > it->second)
+                const int prevSeq = (it == lastSeq.end()) ? 0 : it->second;
+                // onsetSeq == 0 means "no detected onset" (sustained activity),
+                // so only a strictly-advancing, non-zero counter is a real new
+                // onset — otherwise back-dating by the sentinel age would forge
+                // an onset at poll time. Still track the pitch either way.
+                if (a.onsetSeq > prevSeq && a.onsetSeq > 0)
                 {
-                    lastSeq[a.midi] = a.onsetSeq;
                     const double age = (a.onsetAgeMs < 1.0e6f) ? a.onsetAgeMs / 1000.0 : 0.0;
                     onsets.push_back({ fedSec - age, a.midi, a.confidence });
                 }
+                lastSeq[a.midi] = a.onsetSeq;
             }
         }
     }
@@ -178,12 +183,14 @@ int main(int argc, char** argv)
         for (const auto& a : active)
         {
             auto it = lastSeq.find(a.midi);
-            if (it == lastSeq.end() || a.onsetSeq > it->second)
+            const int prevSeq = (it == lastSeq.end()) ? 0 : it->second;
+            // See the in-loop poll above: onsetSeq 0 is "no onset", not a hit.
+            if (a.onsetSeq > prevSeq && a.onsetSeq > 0)
             {
-                lastSeq[a.midi] = a.onsetSeq;
                 const double age = (a.onsetAgeMs < 1.0e6f) ? a.onsetAgeMs / 1000.0 : 0.0;
                 onsets.push_back({ wavSec - age, a.midi, a.confidence });
             }
+            lastSeq[a.midi] = a.onsetSeq;
         }
     }
     det.stop();
