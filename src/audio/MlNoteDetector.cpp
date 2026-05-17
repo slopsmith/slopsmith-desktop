@@ -132,8 +132,9 @@ struct MlNoteDetector::Impl
     // silently preferring a dead ML path.
     std::atomic<bool> contractValid{ true };
     // Consecutive inference exceptions; demote the model once it stays
-    // structurally broken (touched only by the inference thread).
-    int consecutiveInferFailures = 0;
+    // structurally broken. Atomic: incremented by the inference thread but
+    // also reset by loadModel() on the N-API thread.
+    std::atomic<int> consecutiveInferFailures{ 0 };
     // False until the first inference publishes a snapshot. isReady() gates
     // the engine's ML routing on this so the ~2 s cold-start window after
     // every audio start/restart uses the YIN/ChordScorer fallback rather
@@ -236,6 +237,12 @@ struct MlNoteDetector::Impl
         if (sinceInference < kHopSamples) return;
         if (totalResampled < (uint64_t) kAudioNSamples) return;  // window not full yet
         sinceInference = 0;
+
+        // A demoted model (bad output contract or repeated Run() failures)
+        // will never publish — stop running inference for it. Callers have
+        // already fallen back to YIN via isAvailable(); no point burning CPU
+        // or throwing on every hop. loadModel() clears the flag on a reload.
+        if (! contractValid.load(std::memory_order_relaxed)) return;
 
         // try-lock: if a model swap is in progress, skip this hop rather than
         // stalling the detector (NAMProcessor's realtime-adjacent pattern).
