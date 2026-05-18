@@ -42,6 +42,18 @@
     ],
     "extraResources": [
       {
+        "from": "LICENSE",
+        "to": "LICENSE"
+      },
+      {
+        "from": "THIRD_PARTY_LICENSES.md",
+        "to": "THIRD_PARTY_LICENSES.md"
+      },
+      {
+        "from": "README.md",
+        "to": "README.md"
+      },
+      {
         "from": "resources/slopsmith",
         "to": "slopsmith"
       },
