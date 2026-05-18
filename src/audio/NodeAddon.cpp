@@ -357,6 +357,13 @@ static Napi::Value SetMonitorMute(const Napi::CallbackInfo& info)
     return info.Env().Undefined();
 }
 
+static Napi::Value SetMonitorMuteSuppressed(const Napi::CallbackInfo& info)
+{
+    if (engine && info.Length() > 0)
+        engine->setMonitorMuteSuppressed(info[0].As<Napi::Boolean>().Value());
+    return info.Env().Undefined();
+}
+
 static Napi::Value SetNoiseGate(const Napi::CallbackInfo& info)
 {
     auto env = info.Env();
@@ -1649,6 +1656,7 @@ static Napi::Object InitModule(Napi::Env env, Napi::Object exports)
     exports.Set("setGain", Napi::Function::New(env, SetGain));
     exports.Set("setInputChannel", Napi::Function::New(env, SetInputChannel));
     exports.Set("setMonitorMute", Napi::Function::New(env, SetMonitorMute));
+    exports.Set("setMonitorMuteSuppressed", Napi::Function::New(env, SetMonitorMuteSuppressed));
     exports.Set("isMonitorMuted", Napi::Function::New(env, IsMonitorMuted));
     exports.Set("setNoiseGate", Napi::Function::New(env, SetNoiseGate));
 

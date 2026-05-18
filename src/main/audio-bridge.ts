@@ -159,6 +159,14 @@ export function initAudioBridge(): void {
         audio?.setMonitorMute(mute);
     });
 
+    ipcMain.handle('audio:setMonitorMuteSuppressed', (_event, suppressed: boolean) => {
+        // typeof-guarded: a downlevel addon without this method is a no-op
+        // rather than a thrown IPC error (Constitution VII fail-soft).
+        if (audio && typeof audio.setMonitorMuteSuppressed === 'function') {
+            audio.setMonitorMuteSuppressed(suppressed);
+        }
+    });
+
     ipcMain.handle('audio:isMonitorMuted', () => {
         return audio?.isMonitorMuted() ?? true;
     });

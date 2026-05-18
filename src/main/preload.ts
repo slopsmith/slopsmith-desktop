@@ -99,6 +99,8 @@ contextBridge.exposeInMainWorld('slopsmithDesktop', {
         setGain: (which: string, value: number) => ipcRenderer.invoke('audio:setGain', which, value),
         setInputChannel: (channel: number) => ipcRenderer.invoke('audio:setInputChannel', channel),
         setMonitorMute: (mute: boolean) => ipcRenderer.invoke('audio:setMonitorMute', mute),
+        setMonitorMuteSuppressed: (suppressed: boolean) =>
+            ipcRenderer.invoke('audio:setMonitorMuteSuppressed', suppressed),
         isMonitorMuted: () => ipcRenderer.invoke('audio:isMonitorMuted'),
         setNoiseGate: (payload: {
             enabled: boolean;
