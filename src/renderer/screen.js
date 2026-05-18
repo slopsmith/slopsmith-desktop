@@ -1191,7 +1191,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
         // Don't wipe a hand-built chain when the song has no tone-switching to
         // replace it with — that would silence the guitar (empty chain + monitor mute).
         if (!songShouldRebuildChain()) {
-            console.log('[audio-engine] Song has no tone mappings — keeping current chain');
+            console.log('[audio-engine] Song has no rebuildable tone-switching — keeping current chain');
             return false;
         }
         // A rebuild is happening: keep the dry guitar audible through the
@@ -2954,10 +2954,10 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
             //  - MIDI PC mode: talks to an existing VST slot, preload only
             //    sends program changes (no chain replacement).
             //  - Tone Automation enabled: installSwitcherForSong must run so
-            //    category-based switching works even when songShouldRebuild-
-            //    Chain() returned false (e.g. no `idle` target). The TA
-            //    switcher loads presets itself; it does not hit the
-            //    tone-none default-preset fallback below.
+            //    category-based switching works even when
+            //    songShouldRebuildChain() returned false (e.g. no `idle`
+            //    target). The TA switcher loads presets itself; it does not
+            //    hit the tone-none default-preset fallback below.
             const isMidiPcPreflight = midiPreflight?.mode === 'midi'
                 && Number(midiPreflight.vstSlotId) >= 0;
             const taEnabled = window._aeToneAutomation?.isEnabled?.() === true;
