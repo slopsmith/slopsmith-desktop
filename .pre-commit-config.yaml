@@ -75,6 +75,14 @@ repos:
 
 
 #==========================================
+# Ensure good formatting and calls out common shell mistakes and style consistency.
+#  Commented out due to a number of things it isn't happy about.
+#  - repo: https://github.com/shellcheck-py/shellcheck-py
+#    rev: v0.10.0.1  # Use the latest version
+#    hooks:
+#    - id: shellcheck
+
+#==========================================
 # Common json schema validation. Everything looks good currently, but this will help prevent you from committing broken things.
   - repo: https://github.com/python-jsonschema/check-jsonschema
     rev: 0.37.2
