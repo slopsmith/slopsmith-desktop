@@ -1100,6 +1100,10 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
      *  clearChain — some JUCE bridges crash on that sequence; persist empty chain locally instead. */
     async function clearChainForNewSong() {
         if (!api?.clearChain) return;
+        // Keep the dry guitar audible through the empty-chain window that the
+        // preload's rebuild opens; resolveChainRebuildGuard() lifts this once
+        // the chain settles (or leaves it on if the rebuild produced nothing).
+        if (window._aeBeginChainRebuildGuard) window._aeBeginChainRebuildGuard();
         try {
             await api.clearChain();
         } catch (e) {
@@ -2602,6 +2606,58 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
         toast._timer = setTimeout(() => { toast.style.opacity = '0'; }, 2000);
     }
 
+    // ── Monitor-mute suppression around song-load chain rebuilds ────────────
+    // On song load the chain is emptied (clearChainForNewSong) then rebuilt by
+    // the preload below. While the chain is empty the native engine's monitor
+    // mute would silence the dry guitar. Suppress the mute for the rebuild
+    // window so the guitar keeps sounding; resolve it once the chain settles.
+    function aeSetMonitorMuteSuppressed(suppressed) {
+        const api = window.slopsmithDesktop?.audio;
+        // Optional-chained: a downlevel native addon simply ignores this.
+        // setMonitorMuteSuppressed is async (ipcRenderer.invoke) — the sync
+        // try/catch only covers a missing method, so also swallow the
+        // returned promise's rejection to avoid an unhandled rejection.
+        try {
+            const r = api?.setMonitorMuteSuppressed?.(suppressed);
+            if (r && typeof r.catch === 'function') r.catch(() => {});
+        } catch (_) { /* downlevel */ }
+    }
+    // Called by clearChainForNewSong (IIFE 1) and the preload below.
+    window._aeBeginChainRebuildGuard = function () { aeSetMonitorMuteSuppressed(true); };
+
+    function showMonitorMuteHint() {
+        let toast = document.getElementById('monitor-mute-hint');
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'monitor-mute-hint';
+            toast.style.cssText = 'position:fixed;top:60px;right:20px;z-index:9999;max-width:320px;padding:10px 16px;border-radius:8px;background:rgba(180,83,9,0.95);color:white;font-size:12px;font-weight:600;cursor:pointer;transition:opacity 0.5s;';
+            toast.title = 'Click to dismiss';
+            toast.addEventListener('click', () => toast.remove());
+            document.body.appendChild(toast);
+        }
+        toast.textContent = 'Monitor mute is on and no tone is loaded — add an amp/VST or load a preset to hear a processed tone.';
+        toast.style.opacity = '1';
+        clearTimeout(toast._timer);
+        toast._timer = setTimeout(() => { toast.style.opacity = '0'; }, 6000);
+    }
+
+    // Run once the rebuild has settled: if a real chain exists, restore normal
+    // monitor-mute behaviour; if not, keep the dry guitar audible (leave the
+    // suppression on) rather than silencing it, and tell the user why.
+    async function resolveChainRebuildGuard() {
+        const api = window.slopsmithDesktop?.audio;
+        if (!api) return;
+        let slots = [];
+        try { slots = await api.getChainState(); } catch (_) { slots = []; }
+        if (Array.isArray(slots) && slots.length > 0) {
+            aeSetMonitorMuteSuppressed(false);
+        } else {
+            let muted = true;
+            try { muted = await api.isMonitorMuted(); } catch (_) { /* assume muted */ }
+            if (muted) showMonitorMuteHint();
+        }
+    }
+
     // Delegate to the audio-API IIFE's implementation — avoids duplicate gain/UI logic drifting.
     // The _api parameter is accepted for call-site compatibility but ignored when delegating;
     // the first IIFE's version uses its own closure-scoped api (same underlying native object).
@@ -2747,6 +2803,9 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
 
         // Start tone monitoring and preload presets after WebSocket delivers tone data
         setTimeout(async () => {
+            // Re-assert monitor-mute suppression: this preload re-clears the
+            // chain, and clearChainForNewSong may have been skipped.
+            if (window._aeBeginChainRebuildGuard) window._aeBeginChainRebuildGuard();
             try {
             // Only start the 50ms polling interval when at least one switching mode is on;
             // starting it unconditionally wastes cycles on localStorage + highway reads every
@@ -3016,6 +3075,11 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
             }
             } catch (err) {
                 console.error('[tone-switcher] Preload failed:', err);
+            } finally {
+                // Resolve the rebuild guard on every exit path (early returns,
+                // success, or a thrown rebuild) so the monitor-mute state
+                // always matches the chain that actually ended up loaded.
+                await resolveChainRebuildGuard();
             }
         }, 800);
     };
