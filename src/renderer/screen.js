@@ -1129,9 +1129,17 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                 && window._aeToneAutomation.isEnabled()) {
                 const taCfg = (window._aeToneAutomation.getConfig
                     && window._aeToneAutomation.getConfig()) || {};
-                // Rebuild only when at least one target resolves to an
-                // existing preset; an empty/stale TA switcher loads nothing.
-                return hasResolvablePreset(taCfg.targets || {});
+                const taTargets = taCfg.targets || {};
+                // Rebuild only when the `idle` fallback target resolves to an
+                // existing preset. `idle` is what resolveTaPreset() returns
+                // whenever the classifier does not match the current song —
+                // so an `idle` target guarantees TA loads *something* after a
+                // clear. With only unrelated-category targets and no `idle`,
+                // a clear could strand the chain empty, so keep it instead
+                // (a category target still rebuilds on its tone change, just
+                // without the destructive pre-clear).
+                const idleName = String(taTargets.idle || '').trim();
+                return !!idleName && !!presets[idleName];
             }
             const raw = JSON.parse(localStorage.getItem('slopsmith-tone-mappings') || '{}') || {};
             const key = window._aeGetCurrentSongKey ? window._aeGetCurrentSongKey() : '';
@@ -2847,6 +2855,27 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                 || !!window._aeDidClearChainForNewSong
                 || !!window._aeClearingChainForNewSong
                 || !songNeedsRebuild;
+            // When the song has no rebuildable tone-switching, skip the
+            // bypass/no-timeline preload — not just the preflight clear.
+            // That path can otherwise fall back to _aeLoadDefaultPreset(
+            // 'tone-none'), which replaces the preserved hand-built chain.
+            // Exemptions — must still run their own install path:
+            //  - MIDI PC mode: talks to an existing VST slot, preload only
+            //    sends program changes (no chain replacement).
+            //  - Tone Automation enabled: installSwitcherForSong must run so
+            //    category-based switching works even when songShouldRebuild-
+            //    Chain() returned false (e.g. no `idle` target). The TA
+            //    switcher loads presets itself; it does not hit the
+            //    tone-none default-preset fallback below.
+            const isMidiPcPreflight = midiPreflight?.mode === 'midi'
+                && Number(midiPreflight.vstSlotId) >= 0;
+            const taEnabled = window._aeToneAutomation?.isEnabled?.() === true;
+            if (!songNeedsRebuild && !isMidiPcPreflight && !taEnabled) {
+                window._toneSwitcher = null;
+                _preloadedToneCacheKey = null;
+                console.log('[tone-switcher] Song has no rebuildable tone-switching — keeping current chain, skipping preload');
+                return;
+            }
             // Track whether the chain has been cleared by any path so the bypass preload
             // below can skip its own clearChain and avoid a redundant second IPC call.
             let chainClearedForLoad = skipPreflightClear;
