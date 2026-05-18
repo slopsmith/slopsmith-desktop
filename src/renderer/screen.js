@@ -1096,10 +1096,35 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
     window._aeLoadDefaultPreset = loadDefaultPreset;
     window._aeReplaceChainWithPresetBlob = replaceChainWithPresetBlob;
 
+    /** True when the song has tone-switching configured (global / per-song /
+     *  MIDI tone mappings, or Tone Automation). When false, song start must
+     *  NOT clear the FX chain — there is nothing to rebuild in its place, and
+     *  a hand-built chain (e.g. a VST loaded in the Audio Engine panel) would
+     *  be destroyed, leaving the guitar silent. */
+    function songShouldRebuildChain() {
+        try {
+            if (window._aeToneAutomation && window._aeToneAutomation.isEnabled
+                && window._aeToneAutomation.isEnabled()) return true;
+            const raw = JSON.parse(localStorage.getItem('slopsmith-tone-mappings') || '{}') || {};
+            const key = window._aeGetCurrentSongKey ? window._aeGetCurrentSongKey() : '';
+            if (raw.global && Object.keys(raw.global).length > 0) return true;
+            if (raw.songs && raw.songs[key] && Object.keys(raw.songs[key]).length > 0) return true;
+            if (raw.midiPC && raw.midiPC[key]) return true;
+        } catch (_) { /* ignore — fall through to false */ }
+        return false;
+    }
+    window._aeSongShouldRebuildChain = songShouldRebuildChain;
+
     /** Clears the native FX chain when a new song starts. Avoid calling getChainState right after
      *  clearChain — some JUCE bridges crash on that sequence; persist empty chain locally instead. */
     async function clearChainForNewSong() {
         if (!api?.clearChain) return;
+        // Don't wipe a hand-built chain when the song has no tone-switching to
+        // replace it with — that would silence the guitar (empty chain + monitor mute).
+        if (!songShouldRebuildChain()) {
+            console.log('[audio-engine] Song has no tone mappings — keeping current chain');
+            return;
+        }
         try {
             await api.clearChain();
         } catch (e) {
@@ -2777,9 +2802,15 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
             // _aeClearingChainForNewSong is set the moment the async clear begins; _aeDidClearChainForNewSong
             // is set on resolution. Checking both prevents a second clearChain racing with a slow first one,
             // which could crash some JUCE bridges. preloadForSong calls clearChain itself anyway.
+            // Also skip when the song has no tone-switching configured —
+            // clearing here would destroy a hand-built chain (e.g. a VST set
+            // up in the Audio Engine panel) with nothing to replace it.
+            const songNeedsRebuild = !window._aeSongShouldRebuildChain
+                || window._aeSongShouldRebuildChain();
             const skipPreflightClear = (midiPreflight?.mode === 'midi' && Number(midiPreflight.vstSlotId) >= 0)
                 || !!window._aeDidClearChainForNewSong
-                || !!window._aeClearingChainForNewSong;
+                || !!window._aeClearingChainForNewSong
+                || !songNeedsRebuild;
             // Track whether the chain has been cleared by any path so the bypass preload
             // below can skip its own clearChain and avoid a redundant second IPC call.
             let chainClearedForLoad = skipPreflightClear;
