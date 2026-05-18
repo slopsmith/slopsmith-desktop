@@ -1113,20 +1113,17 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
             // (e.g. {"solo":"DeletedPreset"}) would otherwise force a clear
             // that the preload then can't rebuild — back to a silent chain.
             const presets = getPresets();
-            // A preset only counts as resolvable when it is actually
-            // rebuildable. The two preload branches consume different
-            // representations — the no-timeline branch loads the
-            // `nativePreset` blob, the timeline (bypass) branch rebuilds
-            // processor-by-processor from `items` — and this gate runs at the
-            // 400 ms clear, before highway tone data has arrived, so it cannot
-            // yet know which branch will run. Require BOTH so the preset is
-            // loadable whichever branch runs; a preset missing either form is
-            // treated as not-rebuildable and the clear is skipped (erring
-            // toward preserving the chain). Normally-saved presets always
-            // carry both.
-            const isLoadablePreset = (p) =>
-                !!p && !!p.nativePreset
-                && Array.isArray(p.items) && p.items.length > 0;
+            // A preset counts as resolvable only when it carries a
+            // `nativePreset` blob. That blob is what the no-timeline preload,
+            // manual load, TA's loadPresetByName, and the bypass path's VST
+            // state-restore all consume, and the normal "Save preset" flow
+            // always writes it. A mapping naming a preset with no blob would
+            // pass a bare existence check yet rebuild to nothing, stranding
+            // the chain. `items` is intentionally NOT also required: an
+            // empty-chain preset (blob, items:[]) and a legacy blob-only
+            // preset are both still loadable, and the save flow never
+            // produces an items-only preset.
+            const isLoadablePreset = (p) => !!p && !!p.nativePreset;
             const hasResolvablePreset = (mappingSet) =>
                 !!mappingSet
                 && typeof mappingSet === 'object'
