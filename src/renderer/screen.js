@@ -2614,7 +2614,13 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
     function aeSetMonitorMuteSuppressed(suppressed) {
         const api = window.slopsmithDesktop?.audio;
         // Optional-chained: a downlevel native addon simply ignores this.
-        try { api?.setMonitorMuteSuppressed?.(suppressed); } catch (_) { /* downlevel */ }
+        // setMonitorMuteSuppressed is async (ipcRenderer.invoke) — the sync
+        // try/catch only covers a missing method, so also swallow the
+        // returned promise's rejection to avoid an unhandled rejection.
+        try {
+            const r = api?.setMonitorMuteSuppressed?.(suppressed);
+            if (r && typeof r.catch === 'function') r.catch(() => {});
+        } catch (_) { /* downlevel */ }
     }
     // Called by clearChainForNewSong (IIFE 1) and the preload below.
     window._aeBeginChainRebuildGuard = function () { aeSetMonitorMuteSuppressed(true); };
@@ -2629,7 +2635,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
             toast.addEventListener('click', () => toast.remove());
             document.body.appendChild(toast);
         }
-        toast.textContent = 'Monitor mute is on and no tone is loaded — add an amp/VST or load a preset to hear your guitar.';
+        toast.textContent = 'Monitor mute is on and no tone is loaded — add an amp/VST or load a preset to hear a processed tone.';
         toast.style.opacity = '1';
         clearTimeout(toast._timer);
         toast._timer = setTimeout(() => { toast.style.opacity = '0'; }, 6000);

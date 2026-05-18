@@ -359,7 +359,10 @@ static Napi::Value SetMonitorMute(const Napi::CallbackInfo& info)
 
 static Napi::Value SetMonitorMuteSuppressed(const Napi::CallbackInfo& info)
 {
-    if (engine && info.Length() > 0)
+    // IsBoolean()-guarded so a mismatched renderer build / manual caller
+    // passing a non-boolean is a clean no-op rather than a hard N-API failure
+    // (NAPI_DISABLE_CPP_EXCEPTIONS is enabled). Mirrors SetNoiseGate's style.
+    if (engine && info.Length() > 0 && info[0].IsBoolean())
         engine->setMonitorMuteSuppressed(info[0].As<Napi::Boolean>().Value());
     return info.Env().Undefined();
 }

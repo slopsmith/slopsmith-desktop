@@ -162,8 +162,10 @@ export function initAudioBridge(): void {
     ipcMain.handle('audio:setMonitorMuteSuppressed', (_event, suppressed: boolean) => {
         // typeof-guarded: a downlevel addon without this method is a no-op
         // rather than a thrown IPC error (Constitution VII fail-soft).
+        // Coerce to a real boolean so an unexpected non-boolean caller can't
+        // make the N-API binding throw on As<Napi::Boolean>().
         if (audio && typeof audio.setMonitorMuteSuppressed === 'function') {
-            audio.setMonitorMuteSuppressed(suppressed);
+            audio.setMonitorMuteSuppressed(Boolean(suppressed));
         }
     });
 
