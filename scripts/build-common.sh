@@ -568,8 +568,11 @@ main() {
 validate_environment
 install_system_deps
 install_npm_deps
-build_native_addons
+# clone_slopsmith must precede build_native_addons: build-rscli.sh
+# (run by build_native_addons) compiles RsCli from the slopsmith
+# repo's rscli/ source and needs $SLOPSMITH_DIR already exported.
 clone_slopsmith
+build_native_addons
 bundle_slopsmith
 bundle_python
 bundle_binaries

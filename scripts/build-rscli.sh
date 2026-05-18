@@ -56,27 +56,33 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 git clone --quiet "https://github.com/$RS2014_REPO.git" "$TMP_DIR/rs2014net"
 git -C "$TMP_DIR/rs2014net" checkout --quiet "$RS2014_COMMIT"
 
-# Locate the Mac-capable RsCli tool source from the slopsmith repo.
-# Prefer an already-cloned slopsmith tree (SLOPSMITH_DIR, set by
-# build-common.sh's clone_slopsmith / local dev); otherwise shallow-
-# clone slopsmith just to obtain rscli/.
-RSCLI_SRC=""
-if [[ -n "${SLOPSMITH_DIR:-}" && -f "$SLOPSMITH_DIR/rscli/Program.fs" ]]; then
-    RSCLI_SRC="$SLOPSMITH_DIR/rscli"
-    echo "  RsCli source: $RSCLI_SRC (from SLOPSMITH_DIR)"
-else
-    echo "  Fetching RsCli source from slopsmith repo"
-    git clone --quiet --depth 1 \
-        https://github.com/byrongamatos/slopsmith.git "$TMP_DIR/slopsmith-src"
-    RSCLI_SRC="$TMP_DIR/slopsmith-src/rscli"
-fi
-
-for f in Program.fs RsCli.fsproj; do
-    if [[ ! -f "$RSCLI_SRC/$f" ]]; then
-        echo "ERROR: $RSCLI_SRC/$f not found — cannot build a Mac-capable RsCli." >&2
-        exit 1
+# Locate the slopsmith checkout — the Mac-capable RsCli tool source
+# lives in its rscli/ directory. Search order matches bundle-slopsmith.sh
+# / bundle-python.sh: an explicit $SLOPSMITH_DIR is honoured verbatim so
+# a typo or partial checkout is surfaced rather than masked; otherwise
+# fall back to ../slopsmith then ~/Repositories/slopsmith. In a full
+# desktop build, clone_slopsmith() in build-common.sh runs first and
+# exports $SLOPSMITH_DIR — so RsCli is built from the exact same
+# slopsmith checkout that gets bundled into the app.
+if [[ -z "${SLOPSMITH_DIR:-}" ]]; then
+    if [[ -d "$PROJECT_DIR/../slopsmith" ]]; then
+        SLOPSMITH_DIR="$PROJECT_DIR/../slopsmith"
+    elif [[ -d "$HOME/Repositories/slopsmith" ]]; then
+        SLOPSMITH_DIR="$HOME/Repositories/slopsmith"
     fi
-done
+fi
+RSCLI_SRC="${SLOPSMITH_DIR:-}/rscli"
+if [[ -z "${SLOPSMITH_DIR:-}" ]] || [[ ! -f "$RSCLI_SRC/Program.fs" ]] || [[ ! -f "$RSCLI_SRC/RsCli.fsproj" ]]; then
+    echo "ERROR: slopsmith rscli/ source not found — required to build a Mac-capable RsCli." >&2
+    echo "Searched:" >&2
+    echo "  \$SLOPSMITH_DIR=${SLOPSMITH_DIR:-<unset>}" >&2
+    echo "  $PROJECT_DIR/../slopsmith" >&2
+    echo "  $HOME/Repositories/slopsmith" >&2
+    echo "Expected \$SLOPSMITH_DIR to be exported by clone_slopsmith() in build-common.sh," >&2
+    echo "or clone slopsmith next to this repo: git clone https://github.com/byrongamatos/slopsmith.git $PROJECT_DIR/../slopsmith" >&2
+    exit 1
+fi
+echo "  RsCli source: $RSCLI_SRC"
 
 # Overlay slopsmith's tool source onto the Rocksmith2014.NET tree: the
 # build links against the pinned libraries but compiles the Mac-capable
