@@ -719,8 +719,9 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
 
     // Monitor mute: silence the guitar pass-through when no processors are loaded.
     // This prevents hearing raw/amp-processed input when the user hasn't set up a chain yet.
-    // Backing track still plays through.
-    if (monitorMuted.load() && !hasProcessors)
+    // Backing track still plays through. Suppressed during a song-load chain
+    // rebuild so the brief (or failed) empty-chain window doesn't silence the guitar.
+    if (monitorMuted.load() && !hasProcessors && !monitorMuteSuppressed.load())
         buffer.clear();
 
     // Chain output gain — the amp/tone's output level. Applied to the guitar

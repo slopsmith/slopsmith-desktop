@@ -99,6 +99,8 @@ contextBridge.exposeInMainWorld('slopsmithDesktop', {
         setGain: (which: string, value: number) => ipcRenderer.invoke('audio:setGain', which, value),
         setInputChannel: (channel: number) => ipcRenderer.invoke('audio:setInputChannel', channel),
         setMonitorMute: (mute: boolean) => ipcRenderer.invoke('audio:setMonitorMute', mute),
+        setMonitorMuteSuppressed: (suppressed: boolean) =>
+            ipcRenderer.invoke('audio:setMonitorMuteSuppressed', suppressed),
         isMonitorMuted: () => ipcRenderer.invoke('audio:isMonitorMuted'),
         setNoiseGate: (payload: {
             enabled: boolean;
@@ -168,6 +170,8 @@ contextBridge.exposeInMainWorld('slopsmithDesktop', {
         getParameters: (slotId: number) => ipcRenderer.invoke('audio:getParameters', slotId),
         setParameter: (slotId: number, paramIndex: number, value: number) =>
             ipcRenderer.invoke('audio:setParameter', slotId, paramIndex, value),
+        setSlotState: (slotId: number, base64State: string): Promise<boolean> =>
+            ipcRenderer.invoke('audio:setSlotState', slotId, base64State),
 
         // MIDI
         sendMidiToSlot: (slotId: number, msgType: number, channel: number, param1: number, param2?: number) =>

@@ -94,6 +94,11 @@ target_compile_definitions(slopsmith_audio PRIVATE
     JUCE_DISABLE_ASSERTIONS=1
     JUCE_USE_OGGVORBIS=1
     JUCE_USE_FLAC=1
+    # Backing tracks are commonly .mp3 (Rocksmith CDLC audio cache). Without
+    # this, registerBasicFormats() omits MP3 and loadBackingTrack() rejects
+    # every mp3, forcing the song onto the HTML5 path. JUCE's built-in MP3
+    # decoder is patent-unencumbered and ships with the framework.
+    JUCE_USE_MP3AUDIOFORMAT=1
 )
 
 # Platform-specific

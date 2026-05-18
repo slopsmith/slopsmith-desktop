@@ -93,6 +93,13 @@ public:
     void setMonitorMute(bool mute) { monitorMuted.store(mute); }
     bool isMonitorMuted() const { return monitorMuted.load(); }
 
+    // Monitor-mute suppression — when true, the monitor mute is temporarily
+    // overridden so the dry guitar stays audible even with an empty chain.
+    // The renderer sets this around a song-load chain rebuild (clear + reload),
+    // so the brief empty-chain window doesn't silence the player's guitar.
+    void setMonitorMuteSuppressed(bool suppressed) { monitorMuteSuppressed.store(suppressed); }
+    bool isMonitorMuteSuppressed() const { return monitorMuteSuppressed.load(); }
+
     // Noise gate (post-input-gain, pre FX chain; pitch detector sees ungated signal)
     void setNoiseGate(bool enabled, float thresholdDb, float releaseMs, float depthDb);
 
@@ -175,6 +182,7 @@ private:
     std::atomic<float> outputPeak{0.0f};
     std::atomic<int> selectedInputChannel{-1}; // -1 = mono mix
     std::atomic<bool> monitorMuted{true}; // mute pass-through by default
+    std::atomic<bool> monitorMuteSuppressed{false}; // overrides monitorMuted during chain rebuilds
 
     // Backing track
     std::unique_ptr<juce::AudioFormatReaderSource> backingSource;

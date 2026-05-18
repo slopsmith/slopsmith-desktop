@@ -357,6 +357,16 @@ static Napi::Value SetMonitorMute(const Napi::CallbackInfo& info)
     return info.Env().Undefined();
 }
 
+static Napi::Value SetMonitorMuteSuppressed(const Napi::CallbackInfo& info)
+{
+    // IsBoolean()-guarded so a mismatched renderer build / manual caller
+    // passing a non-boolean is a clean no-op rather than a hard N-API failure
+    // (NAPI_DISABLE_CPP_EXCEPTIONS is enabled). Mirrors SetNoiseGate's style.
+    if (engine && info.Length() > 0 && info[0].IsBoolean())
+        engine->setMonitorMuteSuppressed(info[0].As<Napi::Boolean>().Value());
+    return info.Env().Undefined();
+}
+
 static Napi::Value SetNoiseGate(const Napi::CallbackInfo& info)
 {
     auto env = info.Env();
@@ -1324,6 +1334,22 @@ static Napi::Value SetParameter(const Napi::CallbackInfo& info)
     return info.Env().Undefined();
 }
 
+// Restore a VST slot's full state from a base64 getStateInformation() blob.
+static Napi::Value SetSlotState(const Napi::CallbackInfo& info)
+{
+    // Type-guard both args (NAPI_DISABLE_CPP_EXCEPTIONS): a malformed IPC
+    // payload is a clean no-op rather than a hard addon failure.
+    if (engine && info.Length() >= 2 && info[0].IsNumber() && info[1].IsString())
+    {
+        int slotId = info[0].As<Napi::Number>().Int32Value();
+        auto base64 = info[1].As<Napi::String>().Utf8Value();
+        juce::MemoryBlock mb;
+        if (mb.fromBase64Encoding(juce::String(base64)) && mb.getSize() > 0)
+            engine->getSignalChain().setSlotState(slotId, mb);
+    }
+    return info.Env().Undefined();
+}
+
 // ── MIDI ──────────────────────────────────────────────────────────────────────
 
 static Napi::Value SendMidiToSlot(const Napi::CallbackInfo& info)
@@ -1679,6 +1705,7 @@ static Napi::Object InitModule(Napi::Env env, Napi::Object exports)
     exports.Set("setGain", Napi::Function::New(env, SetGain));
     exports.Set("setInputChannel", Napi::Function::New(env, SetInputChannel));
     exports.Set("setMonitorMute", Napi::Function::New(env, SetMonitorMute));
+    exports.Set("setMonitorMuteSuppressed", Napi::Function::New(env, SetMonitorMuteSuppressed));
     exports.Set("isMonitorMuted", Napi::Function::New(env, IsMonitorMuted));
     exports.Set("setNoiseGate", Napi::Function::New(env, SetNoiseGate));
 
@@ -1716,6 +1743,7 @@ static Napi::Object InitModule(Napi::Env env, Napi::Object exports)
     // Parameters
     exports.Set("getParameters", Napi::Function::New(env, GetParameters));
     exports.Set("setParameter", Napi::Function::New(env, SetParameter));
+    exports.Set("setSlotState", Napi::Function::New(env, SetSlotState));
 
     // MIDI
     exports.Set("sendMidiToSlot", Napi::Function::New(env, SendMidiToSlot));
