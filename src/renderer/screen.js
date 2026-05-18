@@ -1182,19 +1182,23 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
 
     /** Clears the native FX chain when a new song starts. Avoid calling getChainState right after
      *  clearChain — some JUCE bridges crash on that sequence; persist empty chain locally instead. */
+    /** @returns {Promise<boolean>} true only when the native chain was actually
+     *  cleared. The caller uses this to set window._aeDidClearChainForNewSong —
+     *  which must never be set on a path that preserved the chain, or a later
+     *  preload would treat the preserved chain as already cleared. */
     async function clearChainForNewSong() {
-        if (!api?.clearChain) return;
+        if (!api?.clearChain) return false;
         // Don't wipe a hand-built chain when the song has no tone-switching to
         // replace it with — that would silence the guitar (empty chain + monitor mute).
         if (!songShouldRebuildChain()) {
             console.log('[audio-engine] Song has no tone mappings — keeping current chain');
-            return;
+            return false;
         }
         try {
             await api.clearChain();
         } catch (e) {
             console.warn('[audio-engine] clearChain (native):', e);
-            return;
+            return false;
         }
         try {
             localStorage.setItem('slopsmith-signal-chain', '[]');
@@ -1207,6 +1211,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
         if (container) {
             container.innerHTML = '<div class="text-sm text-slate-500 italic">No processors loaded — add a VST, NAM model, or cabinet IR</div>';
         }
+        return true;
     }
     window._aeClearChainForNewSong = clearChainForNewSong;
 
@@ -2804,8 +2809,12 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
         setTimeout(() => {
             if (window._aeClearChainForNewSong) {
                 window._aeClearingChainForNewSong = true;
-                void window._aeClearChainForNewSong().then(() => {
-                    window._aeDidClearChainForNewSong = true;
+                void window._aeClearChainForNewSong().then((cleared) => {
+                    // Only true when the chain was genuinely cleared — the
+                    // skip path (chain preserved) must not set this flag, or
+                    // a later preload would treat the preserved chain as
+                    // already cleared and overlay processors onto it.
+                    window._aeDidClearChainForNewSong = cleared === true;
                 }).catch((e) => {
                     console.warn('[audio-engine] clearChainForNewSong failed:', e);
                 }).finally(() => {
