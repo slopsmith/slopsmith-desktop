@@ -409,6 +409,14 @@ export function initAudioBridge(): void {
         audio?.setParameter(slotId, paramIndex, value);
     });
 
+    ipcMain.handle('audio:setSlotState', (_event, slotId: number, base64State: string) => {
+        // typeof-guarded so a downlevel addon is a no-op rather than a thrown
+        // IPC error (Constitution VII fail-soft).
+        if (audio && typeof audio.setSlotState === 'function') {
+            audio.setSlotState(slotId, base64State);
+        }
+    });
+
     // ── MIDI ───────────────────────────────────────────────────────────────
 
     ipcMain.handle('audio:sendMidiToSlot', (_event, slotId: number, msgType: number, channel: number, param1: number, param2?: number) => {

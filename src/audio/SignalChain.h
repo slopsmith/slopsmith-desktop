@@ -59,6 +59,11 @@ public:
     juce::Array<ParamInfo> getParameters(int slotId) const;
     void setParameter(int slotId, int paramIndex, float value);
 
+    // Restore a processor's full state (a getStateInformation() blob) by slot
+    // id. Used to re-apply per-slot VST state when the tone-switcher rebuilds
+    // a chain processor-by-processor rather than via a whole-chain loadPreset.
+    void setSlotState(int slotId, const juce::MemoryBlock& state);
+
     // Preset serialization
     juce::String savePreset() const;
     void loadPreset(const juce::String& json);

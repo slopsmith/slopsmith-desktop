@@ -2968,12 +2968,29 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                     const preset = presets[presetName];
                     const slotIds = [];
                     const chainItems = Array.isArray(preset?.items) ? preset.items : [];
-                    for (const item of chainItems) {
+                    // Per-slot processor state lives only in the native preset
+                    // blob (savePreset's chain[].state), parallel to `items`.
+                    // NAM/IR are fully defined by their path; a VST also needs
+                    // its getStateInformation() blob (params + loaded model)
+                    // re-applied — loadVST() alone brings it up blank.
+                    let nativeChain = [];
+                    try {
+                        nativeChain = (JSON.parse(preset.nativePreset || '{}').chain) || [];
+                    } catch (_) { nativeChain = []; }
+                    for (let ci = 0; ci < chainItems.length; ci++) {
+                        const item = chainItems[ci];
                         let slotId = -1;
                         if (item.type === 'NAM' && item.path) slotId = await api.loadNAMModel(item.path);
                         else if (item.type === 'IR' && item.path) slotId = await api.loadIR(item.path);
                         else if (item.type === 'VST' && item.path) slotId = await api.loadVST(item.path);
-                        if (slotId >= 0) slotIds.push(slotId);
+                        if (slotId >= 0) {
+                            slotIds.push(slotId);
+                            const st = nativeChain[ci] && nativeChain[ci].state;
+                            if (item.type === 'VST' && st && typeof api.setSlotState === 'function') {
+                                try { await api.setSlotState(slotId, st); }
+                                catch (e) { console.warn('[tone-switcher] setSlotState failed:', e); }
+                            }
+                        }
                     }
                     toneSlotMap[toneName] = slotIds;
                     tonePresetMap[toneName] = preset;

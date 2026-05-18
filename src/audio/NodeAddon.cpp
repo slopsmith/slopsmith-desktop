@@ -1324,6 +1324,20 @@ static Napi::Value SetParameter(const Napi::CallbackInfo& info)
     return info.Env().Undefined();
 }
 
+// Restore a VST slot's full state from a base64 getStateInformation() blob.
+static Napi::Value SetSlotState(const Napi::CallbackInfo& info)
+{
+    if (engine && info.Length() >= 2 && info[1].IsString())
+    {
+        int slotId = info[0].As<Napi::Number>().Int32Value();
+        auto base64 = info[1].As<Napi::String>().Utf8Value();
+        juce::MemoryBlock mb;
+        if (mb.fromBase64Encoding(juce::String(base64)) && mb.getSize() > 0)
+            engine->getSignalChain().setSlotState(slotId, mb);
+    }
+    return info.Env().Undefined();
+}
+
 // ── MIDI ──────────────────────────────────────────────────────────────────────
 
 static Napi::Value SendMidiToSlot(const Napi::CallbackInfo& info)
@@ -1716,6 +1730,7 @@ static Napi::Object InitModule(Napi::Env env, Napi::Object exports)
     // Parameters
     exports.Set("getParameters", Napi::Function::New(env, GetParameters));
     exports.Set("setParameter", Napi::Function::New(env, SetParameter));
+    exports.Set("setSlotState", Napi::Function::New(env, SetSlotState));
 
     // MIDI
     exports.Set("sendMidiToSlot", Napi::Function::New(env, SendMidiToSlot));

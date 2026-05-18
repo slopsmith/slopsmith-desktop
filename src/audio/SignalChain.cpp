@@ -221,6 +221,14 @@ void SignalChain::setParameter(int slotId, int paramIndex, float value)
         params[paramIndex]->setValue(value);
 }
 
+void SignalChain::setSlotState(int slotId, const juce::MemoryBlock& state)
+{
+    const juce::ScopedLock sl(lock);
+    int idx = findSlotIndex(slotId);
+    if (idx >= 0)
+        slots[idx]->setState(state); // ProcessorSlot::setState() is null/empty-safe
+}
+
 // ── Presets ───────────────────────────────────────────────────────────────────
 
 juce::String SignalChain::savePreset() const
