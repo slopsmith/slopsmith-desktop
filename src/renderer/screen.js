@@ -1143,17 +1143,19 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
             }
             const raw = JSON.parse(localStorage.getItem('slopsmith-tone-mappings') || '{}') || {};
             const key = window._aeGetCurrentSongKey ? window._aeGetCurrentSongKey() : '';
+            // Global / per-song bypass mappings: rebuild only when at least
+            // one resolves to an existing preset. These checks also cover the
+            // bypass-mode ToneSwitcher, which is driven by getToneMappings()
+            // (= {...global, ...songs[key]}).
             if (hasResolvablePreset(raw.global)) return true;
             if (hasResolvablePreset(raw.songs && raw.songs[key])) return true;
-            // MIDI PC mode sends program changes to an *existing* VST slot
-            // rather than loading processors — clearing the chain would
-            // delete the very slot it targets. Only a non-MIDI-PC midiPC
-            // config (which falls through to a chain-loading ToneSwitcher)
-            // counts as needing a rebuild.
-            const midiCfg = raw.midiPC && raw.midiPC[key];
-            if (midiCfg && !(midiCfg.mode === 'midi' && Number(midiCfg.vstSlotId) >= 0)) {
-                return true;
-            }
+            // Note: a slopsmith-tone-mappings midiPC entry is intentionally
+            // NOT a rebuild trigger. A valid MIDI-PC config (mode 'midi' +
+            // vstSlotId >= 0) only sends program changes to an existing VST
+            // slot — no processors are loaded, so a clear would just delete
+            // that slot. An invalid/legacy midiPC entry provides no rebuild
+            // path either: the playback path falls through to bypass
+            // mappings, already covered by the global/per-song checks above.
         } catch (_) { /* ignore — fall through to false */ }
         return false;
     }
