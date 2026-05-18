@@ -1104,6 +1104,20 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
      *  be destroyed, leaving the guitar silent. */
     function songShouldRebuildChain() {
         try {
+            // A mapping/target only counts when it points at a preset that
+            // still exists: the preset-delete flow scrubs Tone Automation
+            // targets but NOT slopsmith-tone-mappings, so a stale mapping
+            // (e.g. {"solo":"DeletedPreset"}) would otherwise force a clear
+            // that the preload then can't rebuild — back to a silent chain.
+            const presets = getPresets();
+            const hasResolvablePreset = (mappingSet) =>
+                !!mappingSet
+                && typeof mappingSet === 'object'
+                && Object.values(mappingSet).some((name) => {
+                    const presetName = String(name || '').trim();
+                    return presetName && !!presets[presetName];
+                });
+
             // Tone Automation, when enabled, takes precedence over manual
             // tone mappings at playback time (installSwitcherForSong returns
             // before the manual ToneSwitcher is built). So if TA is enabled
@@ -1115,15 +1129,14 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                 && window._aeToneAutomation.isEnabled()) {
                 const taCfg = (window._aeToneAutomation.getConfig
                     && window._aeToneAutomation.getConfig()) || {};
-                const taTargets = taCfg.targets || {};
-                // Rebuild only when at least one target preset is configured;
-                // an enabled-but-empty TA switcher loads nothing.
-                return Object.values(taTargets).some(v => v);
+                // Rebuild only when at least one target resolves to an
+                // existing preset; an empty/stale TA switcher loads nothing.
+                return hasResolvablePreset(taCfg.targets || {});
             }
             const raw = JSON.parse(localStorage.getItem('slopsmith-tone-mappings') || '{}') || {};
             const key = window._aeGetCurrentSongKey ? window._aeGetCurrentSongKey() : '';
-            if (raw.global && Object.keys(raw.global).length > 0) return true;
-            if (raw.songs && raw.songs[key] && Object.keys(raw.songs[key]).length > 0) return true;
+            if (hasResolvablePreset(raw.global)) return true;
+            if (hasResolvablePreset(raw.songs && raw.songs[key])) return true;
             // MIDI PC mode sends program changes to an *existing* VST slot
             // rather than loading processors — clearing the chain would
             // delete the very slot it targets. Only a non-MIDI-PC midiPC
