@@ -1096,12 +1096,15 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
     window._aeLoadDefaultPreset = loadDefaultPreset;
     window._aeReplaceChainWithPresetBlob = replaceChainWithPresetBlob;
 
-    /** True when the song has tone-switching configured (global / per-song /
-     *  MIDI tone mappings, or Tone Automation) that will actually rebuild the
-     *  FX chain by loading processors. When false, song start must NOT clear
-     *  the FX chain — there is nothing to rebuild in its place, and a
-     *  hand-built chain (e.g. a VST loaded in the Audio Engine panel) would
-     *  be destroyed, leaving the guitar silent. */
+    /** True when the song has tone-switching configured — a resolvable
+     *  global / per-song bypass mapping, or Tone Automation with a resolvable
+     *  `idle` target — that will actually rebuild the FX chain by loading
+     *  processors. MIDI-PC mappings are deliberately NOT a rebuild trigger:
+     *  they only send program changes to an existing VST slot and load no
+     *  processors. When this returns false, song start must NOT clear the FX
+     *  chain — there is nothing to rebuild in its place, and a hand-built
+     *  chain (e.g. a VST loaded in the Audio Engine panel) would be
+     *  destroyed, leaving the guitar silent. */
     function songShouldRebuildChain() {
         try {
             // A mapping/target only counts when it points at a preset that
