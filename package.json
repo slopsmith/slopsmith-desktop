@@ -6,6 +6,7 @@
     "name": "Byron",
     "email": "byron@ougsoft.com"
   },
+  "license": "AGPL-3.0-only",
   "main": "dist/main/main.js",
   "scripts": {
     "build:ts": "tsc && node -e \"const fs=require('fs'),path=require('path');fs.copyFileSync('src/main/splash.html','dist/main/splash.html');fs.copyFileSync('src/main/spinner.json','dist/main/spinner.json');fs.copyFileSync('node_modules/lottie-web/build/player/lottie.min.js','dist/main/lottie.min.js');const dst='dist/main/images';if(fs.existsSync(dst))fs.rmSync(dst,{recursive:true});fs.mkdirSync(dst,{recursive:true});fs.readdirSync('src/main/images',{withFileTypes:true}).filter(d=>d.isFile()&&d.name.endsWith('.webp')).forEach(d=>fs.copyFileSync(path.join('src/main/images',d.name),path.join(dst,d.name)))\"",
