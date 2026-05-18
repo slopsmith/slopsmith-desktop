@@ -2987,13 +2987,16 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                         if (slotId >= 0) {
                             slotIds.push(slotId);
                             // Only apply the parallel native-chain entry when it
-                            // exists and its type matches — guards against an
-                            // items/nativePreset blob drift applying a wrong
-                            // state blob to a mismatched slot.
+                            // exists, is a VST, and refers to the same plugin
+                            // (path match) — guards against items/nativePreset
+                            // blob drift applying a wrong state blob to a
+                            // mismatched slot even when both positions are VSTs.
                             const nativeEntry = nativeChain[ci];
-                            const typesAligned = nativeEntry
-                                && Number(nativeEntry.type) === 0; // 0 = VST
-                            const st = typesAligned && nativeEntry.state;
+                            const entryAligned = nativeEntry
+                                && Number(nativeEntry.type) === 0 // 0 = VST
+                                && (!nativeEntry.path || !item.path
+                                    || nativeEntry.path === item.path);
+                            const st = entryAligned && nativeEntry.state;
                             if (item.type === 'VST' && st) {
                                 try {
                                     const applied = await api.setSlotState(slotId, st);
