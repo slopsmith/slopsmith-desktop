@@ -1104,15 +1104,21 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
      *  be destroyed, leaving the guitar silent. */
     function songShouldRebuildChain() {
         try {
-            // Tone Automation: enabled alone is not enough — if no target
-            // preset is configured the switcher loads nothing, so clearing
-            // here would leave an empty chain. Require at least one target.
+            // Tone Automation, when enabled, takes precedence over manual
+            // tone mappings at playback time (installSwitcherForSong returns
+            // before the manual ToneSwitcher is built). So if TA is enabled
+            // the decision MUST be based on TA targets alone — falling
+            // through to the manual-mapping checks below would clear the
+            // chain on stale global/per-song mappings that TA precedence
+            // then never rebuilds, leaving an empty chain.
             if (window._aeToneAutomation && window._aeToneAutomation.isEnabled
                 && window._aeToneAutomation.isEnabled()) {
                 const taCfg = (window._aeToneAutomation.getConfig
                     && window._aeToneAutomation.getConfig()) || {};
                 const taTargets = taCfg.targets || {};
-                if (Object.values(taTargets).some(v => v)) return true;
+                // Rebuild only when at least one target preset is configured;
+                // an enabled-but-empty TA switcher loads nothing.
+                return Object.values(taTargets).some(v => v);
             }
             const raw = JSON.parse(localStorage.getItem('slopsmith-tone-mappings') || '{}') || {};
             const key = window._aeGetCurrentSongKey ? window._aeGetCurrentSongKey() : '';
