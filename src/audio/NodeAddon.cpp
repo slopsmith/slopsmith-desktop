@@ -1327,7 +1327,9 @@ static Napi::Value SetParameter(const Napi::CallbackInfo& info)
 // Restore a VST slot's full state from a base64 getStateInformation() blob.
 static Napi::Value SetSlotState(const Napi::CallbackInfo& info)
 {
-    if (engine && info.Length() >= 2 && info[1].IsString())
+    // Type-guard both args (NAPI_DISABLE_CPP_EXCEPTIONS): a malformed IPC
+    // payload is a clean no-op rather than a hard addon failure.
+    if (engine && info.Length() >= 2 && info[0].IsNumber() && info[1].IsString())
     {
         int slotId = info[0].As<Napi::Number>().Int32Value();
         auto base64 = info[1].As<Napi::String>().Utf8Value();

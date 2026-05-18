@@ -2999,8 +2999,11 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                             const st = entryAligned && nativeEntry.state;
                             if (item.type === 'VST' && st) {
                                 try {
-                                    const applied = await api.setSlotState(slotId, st);
-                                    if (applied === false) {
+                                    // Return value is a feature-detect signal
+                                    // (addon supports the call), not proof the
+                                    // blob decoded/applied cleanly.
+                                    const supported = await api.setSlotState(slotId, st);
+                                    if (supported === false) {
                                         console.warn('[tone-switcher] setSlotState unsupported by native addon');
                                     }
                                 } catch (e) { console.warn('[tone-switcher] setSlotState failed:', e); }
