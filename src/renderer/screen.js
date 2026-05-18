@@ -1097,19 +1097,36 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
     window._aeReplaceChainWithPresetBlob = replaceChainWithPresetBlob;
 
     /** True when the song has tone-switching configured (global / per-song /
-     *  MIDI tone mappings, or Tone Automation). When false, song start must
-     *  NOT clear the FX chain — there is nothing to rebuild in its place, and
-     *  a hand-built chain (e.g. a VST loaded in the Audio Engine panel) would
+     *  MIDI tone mappings, or Tone Automation) that will actually rebuild the
+     *  FX chain by loading processors. When false, song start must NOT clear
+     *  the FX chain — there is nothing to rebuild in its place, and a
+     *  hand-built chain (e.g. a VST loaded in the Audio Engine panel) would
      *  be destroyed, leaving the guitar silent. */
     function songShouldRebuildChain() {
         try {
+            // Tone Automation: enabled alone is not enough — if no target
+            // preset is configured the switcher loads nothing, so clearing
+            // here would leave an empty chain. Require at least one target.
             if (window._aeToneAutomation && window._aeToneAutomation.isEnabled
-                && window._aeToneAutomation.isEnabled()) return true;
+                && window._aeToneAutomation.isEnabled()) {
+                const taCfg = (window._aeToneAutomation.getConfig
+                    && window._aeToneAutomation.getConfig()) || {};
+                const taTargets = taCfg.targets || {};
+                if (Object.values(taTargets).some(v => v)) return true;
+            }
             const raw = JSON.parse(localStorage.getItem('slopsmith-tone-mappings') || '{}') || {};
             const key = window._aeGetCurrentSongKey ? window._aeGetCurrentSongKey() : '';
             if (raw.global && Object.keys(raw.global).length > 0) return true;
             if (raw.songs && raw.songs[key] && Object.keys(raw.songs[key]).length > 0) return true;
-            if (raw.midiPC && raw.midiPC[key]) return true;
+            // MIDI PC mode sends program changes to an *existing* VST slot
+            // rather than loading processors — clearing the chain would
+            // delete the very slot it targets. Only a non-MIDI-PC midiPC
+            // config (which falls through to a chain-loading ToneSwitcher)
+            // counts as needing a rebuild.
+            const midiCfg = raw.midiPC && raw.midiPC[key];
+            if (midiCfg && !(midiCfg.mode === 'midi' && Number(midiCfg.vstSlotId) >= 0)) {
+                return true;
+            }
         } catch (_) { /* ignore — fall through to false */ }
         return false;
     }
