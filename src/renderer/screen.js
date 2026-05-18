@@ -1160,12 +1160,17 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
             }
             const raw = JSON.parse(localStorage.getItem('slopsmith-tone-mappings') || '{}') || {};
             const key = window._aeGetCurrentSongKey ? window._aeGetCurrentSongKey() : '';
-            // Global / per-song bypass mappings: rebuild only when at least
-            // one resolves to an existing preset. These checks also cover the
-            // bypass-mode ToneSwitcher, which is driven by getToneMappings()
-            // (= {...global, ...songs[key]}).
-            if (hasResolvablePreset(raw.global)) return true;
-            if (hasResolvablePreset(raw.songs && raw.songs[key])) return true;
+            // Global / per-song bypass mappings: rebuild only when the
+            // mapping resolves to a loadable preset. Evaluate the MERGED
+            // mapping that playback actually consumes — getToneMappings()
+            // returns {...global, ...songs[key]}, per-song entries overriding
+            // globals — not global and per-song independently. Checking them
+            // separately would pass a resolvable global that is shadowed by a
+            // stale per-song entry for the same key, letting the clear run
+            // while the preload then resolves to the stale preset.
+            const mergedMappings = Object.assign(
+                {}, raw.global || {}, (raw.songs && raw.songs[key]) || {});
+            if (hasResolvablePreset(mergedMappings)) return true;
             // Note: a slopsmith-tone-mappings midiPC entry is intentionally
             // NOT a rebuild trigger. A valid MIDI-PC config (mode 'midi' +
             // vstSlotId >= 0) only sends program changes to an existing VST
