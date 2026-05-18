@@ -2900,9 +2900,18 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                 console.log('[tone-switcher] Song has no rebuildable tone-switching — keeping current chain, skipping preload');
                 return;
             }
-            // Track whether the chain has been cleared by any path so the bypass preload
-            // below can skip its own clearChain and avoid a redundant second IPC call.
-            let chainClearedForLoad = skipPreflightClear;
+            // Track whether the chain has actually been cleared, so the bypass
+            // preload below can skip a redundant clearChain. This must mean
+            // "chain is in a cleared state", NOT merely "preflight was
+            // skipped": when skipPreflightClear is true only because the song
+            // has no rebuildable tone-switching (!songNeedsRebuild), nothing
+            // cleared the chain — so a path that still reaches the bypass
+            // preload (e.g. Tone Automation enabled but installSwitcherForSong
+            // fails to install) must do its own clearChain rather than overlay
+            // processors onto the preserved hand-built chain. The genuine
+            // skip reasons (already-cleared / clearing-in-flight) only occur
+            // with songNeedsRebuild true.
+            let chainClearedForLoad = skipPreflightClear && songNeedsRebuild;
             if (!skipPreflightClear) {
                 try {
                     await api.clearChain();
