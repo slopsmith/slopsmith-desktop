@@ -2892,7 +2892,13 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                 && Number(midiPreflight.vstSlotId) >= 0;
             const taEnabled = window._aeToneAutomation?.isEnabled?.() === true;
             if (!songNeedsRebuild && !isMidiPcPreflight && !taEnabled) {
+                // Tear down any switcher/monitor left over from a previous
+                // song — mirrors the empty-mapping path in
+                // _applyToneMappingsImpl. Nulling _toneSwitcher alone is not
+                // enough: the tone monitor's 50ms interval would keep calling
+                // the stale switcher against the new song's tone changes.
                 window._toneSwitcher = null;
+                if (window._aeStopToneMonitor) window._aeStopToneMonitor();
                 _preloadedToneCacheKey = null;
                 console.log('[tone-switcher] Song has no rebuildable tone-switching — keeping current chain, skipping preload');
                 return;
