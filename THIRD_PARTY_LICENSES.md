@@ -22,8 +22,9 @@ this software.
 ## JUCE 8
 
 - **Project:** https://juce.com / https://github.com/juce-framework/JUCE
-- **License:** AGPL-3.0-or-later **OR** the commercial JUCE 8 End User
-  Licence Agreement
+- **License:** AGPL-3.0-only **OR** the commercial JUCE 8 End User
+  Licence Agreement (the upstream `JUCE/LICENSE.md` does not grant the
+  "or any later version" option)
 - **Use:** Statically linked into the JUCE C++ audio engine
   (`src/audio/`, native addon `slopsmith_audio.node`).
 - **Notes:** Slopsmith Desktop is distributed under the AGPL-3.0 arm of
@@ -74,17 +75,67 @@ this software.
   file at the pinned commit; redistributed alongside the built binary
   in release packages.
 
-## FluidSynth (Windows builds only)
+## FluidSynth
 
 - **Project:** https://www.fluidsynth.org / https://github.com/FluidSynth/fluidsynth
 - **License:** LGPL-2.1-or-later
-- **Use:** Prebuilt Windows binaries downloaded at packaging time per
-  the `external.fluidsynth_windows` block in
-  [`.build-config.json`](.build-config.json) and bundled into the
-  Windows installer. Dynamically linked — users may relink against a
-  compatible FluidSynth build per LGPL terms.
+- **Use:** Bundled into `resources/bin/` for use by the embedded
+  Slopsmith server (Guitar Pro → audio rendering path). On Windows,
+  prebuilt binaries are downloaded at packaging time per the
+  `external.fluidsynth_windows` block in
+  [`.build-config.json`](.build-config.json). On macOS and Linux, the
+  build host's `fluidsynth` binary is copied from `$PATH` by
+  [`scripts/bundle-binaries.sh`](scripts/bundle-binaries.sh).
+  Dynamically linked — users may relink against a compatible
+  FluidSynth build per LGPL terms.
 - **Notice text:** Included in the upstream FluidSynth release archive
-  redistributed inside the installer.
+  redistributed inside the installer (Windows) and travelling with the
+  host's `fluidsynth` package (macOS/Linux).
+
+## FFmpeg / ffprobe
+
+- **Project:** https://ffmpeg.org / https://github.com/FFmpeg/FFmpeg
+- **License:** LGPL-2.1-or-later at minimum; the specific bundled
+  builds may be GPL-licensed (typically GPL-2.0-or-later or
+  GPL-3.0-or-later) if they were compiled with `--enable-gpl` and
+  linked against GPL components such as libx264 / libx265. The
+  third-party macOS builds we fetch (osxexperts.net, evermeet.cx) ship
+  with GPL components enabled, so on macOS the bundled `ffmpeg`/`ffprobe`
+  binaries are effectively under GPL terms. AGPL-3.0-only is compatible
+  with redistribution of GPL-2.0-or-later and GPL-3.0-or-later binaries
+  (FSF compatibility matrix), and FFmpeg is invoked as a separate
+  process — so its license terms do not propagate to the rest of the
+  desktop binary.
+- **Use:** Required by the embedded Slopsmith server for WAV → OGG
+  transcoding on Guitar Pro 5 imports (`ffmpeg`) and for stream
+  metadata reads by demucs during stem splitting (`ffprobe`). Bundled
+  into `resources/bin/` on all platforms by
+  [`scripts/bundle-binaries.sh`](scripts/bundle-binaries.sh):
+  - macOS: prebuilt binaries downloaded per the
+    `external.ffmpeg_macos_*` / `external.ffprobe_macos_*` blocks in
+    [`.build-config.json`](.build-config.json).
+  - Linux: copied from the build host's `$PATH` (e.g. apt `ffmpeg`).
+  - Windows: copied from the build host's `$PATH` (e.g. Chocolatey /
+    Scoop `ffmpeg`).
+- **Notice text:** Distributed inside the upstream FFmpeg source /
+  release archives (`COPYING.LGPLv2.1`, `COPYING.GPLv2`, etc.); the
+  source code is publicly available at the upstream URL above.
+
+## vgmstream-cli
+
+- **Project:** https://github.com/vgmstream/vgmstream
+- **License:** ISC-style permissive (see upstream
+  [`COPYING`](https://github.com/vgmstream/vgmstream/blob/master/COPYING)).
+- **Use:** Required by the embedded Slopsmith server for Rocksmith
+  `.wem` → `.wav` decoding. Bundled into `resources/bin/` on all
+  platforms by
+  [`scripts/bundle-binaries.sh`](scripts/bundle-binaries.sh): copied
+  from the build host's `$PATH` when available, or downloaded from the
+  upstream
+  [GitHub releases](https://github.com/vgmstream/vgmstream/releases/latest)
+  as a fallback.
+- **Notice text:** Distributed in the upstream release archive and
+  source repository.
 
 ## GeneralUser GS SoundFont
 
