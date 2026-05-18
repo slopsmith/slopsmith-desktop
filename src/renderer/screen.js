@@ -1114,15 +1114,19 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
             // that the preload then can't rebuild — back to a silent chain.
             const presets = getPresets();
             // A preset only counts as resolvable when it is actually
-            // rebuildable — either a `nativePreset` blob (loaded whole by
-            // replaceChainWithPresetBlob / loadPresetByName) or a non-empty
-            // `items` list (the bypass-mode preload rebuilds processor-by-
-            // processor from `items`, not from the blob). A named entry with
-            // neither would pass a bare existence check yet rebuild to
-            // nothing, stranding the chain.
+            // rebuildable. The two preload branches consume different
+            // representations — the no-timeline branch loads the
+            // `nativePreset` blob, the timeline (bypass) branch rebuilds
+            // processor-by-processor from `items` — and this gate runs at the
+            // 400 ms clear, before highway tone data has arrived, so it cannot
+            // yet know which branch will run. Require BOTH so the preset is
+            // loadable whichever branch runs; a preset missing either form is
+            // treated as not-rebuildable and the clear is skipped (erring
+            // toward preserving the chain). Normally-saved presets always
+            // carry both.
             const isLoadablePreset = (p) =>
-                !!p && (!!p.nativePreset
-                    || (Array.isArray(p.items) && p.items.length > 0));
+                !!p && !!p.nativePreset
+                && Array.isArray(p.items) && p.items.length > 0;
             const hasResolvablePreset = (mappingSet) =>
                 !!mappingSet
                 && typeof mappingSet === 'object'
@@ -1152,7 +1156,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                 // (a category target still rebuilds on its tone change, just
                 // without the destructive pre-clear).
                 const idleName = String(taTargets.idle || '').trim();
-                return !!idleName && !!presets[idleName]?.nativePreset;
+                return !!idleName && isLoadablePreset(presets[idleName]);
             }
             const raw = JSON.parse(localStorage.getItem('slopsmith-tone-mappings') || '{}') || {};
             const key = window._aeGetCurrentSongKey ? window._aeGetCurrentSongKey() : '';
