@@ -85,6 +85,24 @@ export function initAudioBridge(): void {
         }
     }
 
+    // Load the Basic Pitch ONNX model for the polyphonic ML note detector.
+    // Bundled offline (Constitution IV) under resources/models/. Fail-soft:
+    // a missing model / disabled ONNX support just leaves the engine on the
+    // YIN PitchDetector / ChordScorer fallback (Constitution VII).
+    if (audio && typeof audio.loadNoteModel === 'function') {
+        const modelPath = app.isPackaged
+            ? path.join(process.resourcesPath, 'models', 'basic_pitch.onnx')
+            : path.join(__dirname, '..', '..', 'resources', 'models', 'basic_pitch.onnx');
+        try {
+            const ok = audio.loadNoteModel(modelPath);
+            console.log(ok
+                ? `[audio] ML note detection model loaded from ${modelPath}`
+                : `[audio] ML note model unavailable (${modelPath}) — using YIN fallback`);
+        } catch (e: any) {
+            console.warn(`[audio] loadNoteModel failed: ${e.message} — using YIN fallback`);
+        }
+    }
+
     // Preset/plugin list paths
     const configDir = app.getPath('userData');
 
@@ -197,6 +215,18 @@ export function initAudioBridge(): void {
         return audio?.getPitchDetection() ?? { frequency: -1, confidence: 0, midiNote: -1, cents: 0, noteName: '' };
     });
 
+    // Whether the polyphonic ML note detector (Basic Pitch) is active. When
+    // false the engine is on the YIN PitchDetector / ChordScorer fallback.
+    // typeof-guarded so a downlevel addon simply reports false.
+    ipcMain.handle('audio:isMlNoteDetection', () => {
+        if (!audio || typeof audio.isMlNoteDetection !== 'function') return false;
+        try {
+            return audio.isMlNoteDetection() === true;
+        } catch {
+            return false;
+        }
+    });
+
     // ── Chord Scoring (polyphonic) ─────────────────────────────────────────
     // The notedetect plugin's chord-scoring branch hands us a chord
     // context — notes, arrangement, tuning offsets, thresholds — and
@@ -243,6 +273,20 @@ export function initAudioBridge(): void {
             return audio.scoreChord(ctx);
         } catch (e: unknown) {
             console.warn(`[audio] scoreChord failed: ${e instanceof Error ? e.message : String(e)}`);
+            return null;
+        }
+    });
+
+    // Raw polyphonic transcription — the ML detector's full active-pitch set.
+    // Returns null when the ML detector isn't active (downlevel addon, no ONNX
+    // support, or no model loaded) so the renderer feature-detects and falls
+    // back to the getPitchDetection / scoreChord path.
+    ipcMain.handle('audio:detectNotes', () => {
+        if (!audio || typeof audio.detectNotes !== 'function') return null;
+        try {
+            return audio.detectNotes();
+        } catch (e: unknown) {
+            console.warn(`[audio] detectNotes failed: ${e instanceof Error ? e.message : String(e)}`);
             return null;
         }
     });
