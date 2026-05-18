@@ -1113,12 +1113,22 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
             // (e.g. {"solo":"DeletedPreset"}) would otherwise force a clear
             // that the preload then can't rebuild — back to a silent chain.
             const presets = getPresets();
+            // A preset only counts as resolvable when it is actually
+            // rebuildable — either a `nativePreset` blob (loaded whole by
+            // replaceChainWithPresetBlob / loadPresetByName) or a non-empty
+            // `items` list (the bypass-mode preload rebuilds processor-by-
+            // processor from `items`, not from the blob). A named entry with
+            // neither would pass a bare existence check yet rebuild to
+            // nothing, stranding the chain.
+            const isLoadablePreset = (p) =>
+                !!p && (!!p.nativePreset
+                    || (Array.isArray(p.items) && p.items.length > 0));
             const hasResolvablePreset = (mappingSet) =>
                 !!mappingSet
                 && typeof mappingSet === 'object'
                 && Object.values(mappingSet).some((name) => {
                     const presetName = String(name || '').trim();
-                    return presetName && !!presets[presetName];
+                    return !!presetName && isLoadablePreset(presets[presetName]);
                 });
 
             // Tone Automation, when enabled, takes precedence over manual
@@ -1142,7 +1152,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                 // (a category target still rebuilds on its tone change, just
                 // without the destructive pre-clear).
                 const idleName = String(taTargets.idle || '').trim();
-                return !!idleName && !!presets[idleName];
+                return !!idleName && !!presets[idleName]?.nativePreset;
             }
             const raw = JSON.parse(localStorage.getItem('slopsmith-tone-mappings') || '{}') || {};
             const key = window._aeGetCurrentSongKey ? window._aeGetCurrentSongKey() : '';
