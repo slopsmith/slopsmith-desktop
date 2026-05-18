@@ -2967,7 +2967,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                     if (!presetName || !presets[presetName]) continue;
                     const preset = presets[presetName];
                     const slotIds = [];
-                    const chainItems = Array.isArray(preset?.items) ? preset.items : [];
+                    const chainItems = getPresetItems(preset);
                     // Per-slot processor state lives only in the native preset
                     // blob (savePreset's chain[].state), parallel to `items`.
                     // NAM/IR are fully defined by their path; a VST also needs
@@ -2975,7 +2975,8 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                     // re-applied — loadVST() alone brings it up blank.
                     let nativeChain = [];
                     try {
-                        nativeChain = (JSON.parse(preset.nativePreset || '{}').chain) || [];
+                        const parsed = JSON.parse(preset.nativePreset || '{}').chain;
+                        if (Array.isArray(parsed)) nativeChain = parsed;
                     } catch (_) { nativeChain = []; }
                     for (let ci = 0; ci < chainItems.length; ci++) {
                         const item = chainItems[ci];
@@ -2985,10 +2986,21 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                         else if (item.type === 'VST' && item.path) slotId = await api.loadVST(item.path);
                         if (slotId >= 0) {
                             slotIds.push(slotId);
-                            const st = nativeChain[ci] && nativeChain[ci].state;
-                            if (item.type === 'VST' && st && typeof api.setSlotState === 'function') {
-                                try { await api.setSlotState(slotId, st); }
-                                catch (e) { console.warn('[tone-switcher] setSlotState failed:', e); }
+                            // Only apply the parallel native-chain entry when it
+                            // exists and its type matches — guards against an
+                            // items/nativePreset blob drift applying a wrong
+                            // state blob to a mismatched slot.
+                            const nativeEntry = nativeChain[ci];
+                            const typesAligned = nativeEntry
+                                && Number(nativeEntry.type) === 0; // 0 = VST
+                            const st = typesAligned && nativeEntry.state;
+                            if (item.type === 'VST' && st) {
+                                try {
+                                    const applied = await api.setSlotState(slotId, st);
+                                    if (applied === false) {
+                                        console.warn('[tone-switcher] setSlotState unsupported by native addon');
+                                    }
+                                } catch (e) { console.warn('[tone-switcher] setSlotState failed:', e); }
                             }
                         }
                     }

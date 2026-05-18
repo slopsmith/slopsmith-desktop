@@ -409,12 +409,17 @@ export function initAudioBridge(): void {
         audio?.setParameter(slotId, paramIndex, value);
     });
 
-    ipcMain.handle('audio:setSlotState', (_event, slotId: number, base64State: string) => {
+    ipcMain.handle('audio:setSlotState', (_event, slotId: number, base64State: string): boolean => {
         // typeof-guarded so a downlevel addon is a no-op rather than a thrown
-        // IPC error (Constitution VII fail-soft).
+        // IPC error (Constitution VII fail-soft). Returns true when the native
+        // addon actually supports the call so the renderer can feature-detect
+        // (the preload always exposes the method, so a typeof check there
+        // cannot tell a downlevel addon apart).
         if (audio && typeof audio.setSlotState === 'function') {
             audio.setSlotState(slotId, base64State);
+            return true;
         }
+        return false;
     });
 
     // ── MIDI ───────────────────────────────────────────────────────────────

@@ -168,7 +168,7 @@ contextBridge.exposeInMainWorld('slopsmithDesktop', {
         getParameters: (slotId: number) => ipcRenderer.invoke('audio:getParameters', slotId),
         setParameter: (slotId: number, paramIndex: number, value: number) =>
             ipcRenderer.invoke('audio:setParameter', slotId, paramIndex, value),
-        setSlotState: (slotId: number, base64State: string) =>
+        setSlotState: (slotId: number, base64State: string): Promise<boolean> =>
             ipcRenderer.invoke('audio:setSlotState', slotId, base64State),
 
         // MIDI
