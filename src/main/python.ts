@@ -380,6 +380,15 @@ export async function startPython(): Promise<void> {
         cwd: slopsmithDir,
         env: pythonEnv,
         stdio: ['pipe', 'pipe', 'pipe'],
+        // POSIX: give the child its own process group so stopPython() can kill
+        // the whole tree (uvicorn can spawn worker/reloader children). Without
+        // this, a plain kill leaves orphans holding the server port — the next
+        // launch then drifts to 18001+, changing the renderer origin and
+        // wiping origin-keyed localStorage (plugin settings reset every start).
+        // The handle is deliberately NOT unref()'d — the main process keeps
+        // tracking the child so shutdown() / stopPython() can terminate it
+        // (detached only controls the process group, not the child's lifetime).
+        detached: process.platform !== 'win32',
     });
     pythonProcess = child;
 
@@ -523,6 +532,39 @@ export async function getStartupStatus(): Promise<StartupStatus | null> {
     };
 }
 
+// Kill the Python child *and any subprocesses it spawned* (uvicorn worker /
+// reloader children). The child is spawned `detached` on POSIX so it leads its
+// own process group; signalling the negated PID reaps the whole group, so no
+// orphan survives holding the server port. Windows has no POSIX process
+// groups here — fall back to a plain kill of the child itself.
+function killPythonTree(proc: ChildProcess, signal: NodeJS.Signals): void {
+    if (process.platform !== 'win32' && typeof proc.pid === 'number') {
+        try {
+            process.kill(-proc.pid, signal);
+            return;
+        } catch (e: unknown) {
+            const code = (e as NodeJS.ErrnoException)?.code;
+            // ESRCH — the process group has already exited. Nothing to do.
+            if (code === 'ESRCH') return;
+            // EPERM / EINVAL / anything else: the group kill did not land, so
+            // fall through to a plain single-process kill rather than leaving
+            // the server (and the port) alive silently.
+            console.warn(`[python] process-group ${signal} failed (${code}); `
+                + 'falling back to single-process kill');
+        }
+    }
+    try {
+        proc.kill(signal);
+    } catch (e: unknown) {
+        const code = (e as NodeJS.ErrnoException)?.code;
+        // ESRCH — the child is already gone. Anything else (EPERM/…) means
+        // the kill did not land; log it so a failed shutdown is diagnosable.
+        if (code !== 'ESRCH') {
+            console.warn(`[python] ${signal} of child failed (${code})`);
+        }
+    }
+}
+
 export function stopPython(): void {
     // Capture the child being stopped. During restartPython the global
     // pythonProcess may already point at a new child by the time the
@@ -545,22 +587,29 @@ export function stopPython(): void {
     startupComplete = false;
     serverReady = false;
 
-    // Try graceful shutdown first
     let exited = false;
-    proc.kill('SIGTERM');
+    let killTimeout: ReturnType<typeof setTimeout> | undefined;
 
-    // Force kill after timeout
-    const killTimeout = setTimeout(() => {
-        if (!exited) {
-            console.log('[python] Force killing...');
-            proc.kill('SIGKILL');
-        }
-    }, 5000);
-
+    // Register the exit handler BEFORE signalling — a child that dies between
+    // SIGTERM and here must still flip `exited` and cancel the force-kill, so
+    // the timer can't fire a SIGKILL at a since-reused PID's process group.
     proc.once('close', () => {
         exited = true;
-        clearTimeout(killTimeout);
+        if (killTimeout) clearTimeout(killTimeout);
     });
+
+    // Try graceful shutdown first — signal the whole process group so uvicorn's
+    // children exit too and release the port.
+    killPythonTree(proc, 'SIGTERM');
+
+    // Force kill after a timeout — but skip it if the child is already gone
+    // (exitCode/signalCode go non-null once it exits); signalling a stale,
+    // possibly PID-reused process group otherwise.
+    killTimeout = setTimeout(() => {
+        if (exited || proc.exitCode !== null || proc.signalCode !== null) return;
+        console.log('[python] Force killing...');
+        killPythonTree(proc, 'SIGKILL');
+    }, 5000);
 }
 
 export function restartPython(): void {
