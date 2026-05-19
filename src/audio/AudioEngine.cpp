@@ -539,6 +539,7 @@ void AudioEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
     signalChain.prepare(sr, bs);
     pitchDetector.prepare(sr, bs);
     mlNoteDetector.prepare(sr, bs);
+    noteVerifier.prepare(sr, bs);
     noiseGate.prepare(sr, bs);
 
     const juce::ScopedLock sl(backingLock);
@@ -554,6 +555,10 @@ void AudioEngine::audioDeviceStopped()
     // alive after a stop/device-removal and getPitchDetection()/detectNotes()
     // could keep serving the last session's stale notes.
     mlNoteDetector.stop();
+    // Stop the chart-verification thread too — audioDeviceAboutToStart()
+    // restarts it on the next start. Without this the worker stays alive
+    // after a device stop and would keep scoring stale input-ring samples.
+    noteVerifier.stop();
     // Flatten the input ring index on stop so a getInputFrame() call
     // made between stopAudio() and the next startAudio() returns the
     // cold-start zero-padded frame rather than stale samples from the
@@ -799,7 +804,11 @@ ChordScorer::Result AudioEngine::scoreChord(const ChordScorer::Request& req)
     // detector's active-pitch set — genuine polyphonic transcription rather
     // than the per-string energy/constraint check. Returns the identical
     // Result shape so the N-API wrapper and the plugin need no change.
-    if (mlNoteDetector.isReady())
+    //
+    // `req.bypassMl` overrides this: the ML path is onset-driven and drops
+    // notes the detector never onsets, so the renderer can force the DSP
+    // band-energy scorer to verify a chart note from spectral energy alone.
+    if (! req.bypassMl && mlNoteDetector.isReady())
         return scoreChordWithMl(req);
 
     // Snapshot the input ring at the requested window size and forward
@@ -854,6 +863,31 @@ std::vector<float> AudioEngine::getInputFrame(int numSamples) const
         out[(size_t) i]
             = inputFrameRing[(start + (uint64_t) i) & kMask].load(std::memory_order_relaxed);
     return out;
+}
+
+uint64_t AudioEngine::getInputSince(uint64_t fromIndex, std::vector<float>& out) const
+{
+    out.clear();
+    // Acquire pairs with the audio thread's release store — every sample
+    // written before `w` is visible here.
+    const uint64_t w = inputFrameRingWriteIndex.load(std::memory_order_acquire);
+    if (fromIndex >= w) return w;  // nothing new
+
+    constexpr uint64_t kCap  = (uint64_t) kInputFrameRingCapacity;
+    constexpr uint64_t kMask = kCap - 1;
+
+    // If the caller fell more than a ring behind, the oldest samples were
+    // overwritten — start at the oldest still-live sample. The worker drives
+    // this every ~10 ms (~480 samples) so a kCap-sample (170 ms) gap never
+    // happens in practice; the clamp just keeps the copy in-bounds.
+    uint64_t start = fromIndex;
+    if (w - start > kCap) start = w - kCap;
+
+    const size_t n = (size_t) (w - start);
+    out.resize(n);
+    for (size_t i = 0; i < n; ++i)
+        out[i] = inputFrameRing[(start + (uint64_t) i) & kMask].load(std::memory_order_relaxed);
+    return w;
 }
 
 // ── ML note detection ─────────────────────────────────────────────────────────

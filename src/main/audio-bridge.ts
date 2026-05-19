@@ -287,6 +287,41 @@ export function initAudioBridge(): void {
         }
     });
 
+    // Push the song's note chart into the engine for continuous, background
+    // verification. The notedetect plugin calls this once per arrangement
+    // load; the engine's NoteVerifier thread then scores each note against
+    // the live playhead, replacing the renderer's per-tick scoreChord loop.
+    // Returns null on a downlevel addon (pre-NoteVerifier) so the renderer
+    // feature-detects and keeps the old matchNotes path.
+    ipcMain.handle('audio:setChart', (_event, chart: unknown) => {
+        if (!audio || typeof audio.setChart !== 'function') return null;
+        try {
+            return audio.setChart(chart);
+        } catch (e: unknown) {
+            console.warn(`[audio] setChart failed: ${e instanceof Error ? e.message : String(e)}`);
+            return null;
+        }
+    });
+
+    // Drain the verdicts the NoteVerifier thread has finalized since the last
+    // call. Returns null on a downlevel addon so the renderer feature-detects.
+    // The optional (songTime, playing) args push the renderer's unified
+    // playhead — the plugin calls this once per detect tick, so the push rides
+    // the same IPC as the drain.
+    ipcMain.handle('audio:getNoteVerdicts', (_event, songTime: unknown, playing: unknown) => {
+        if (!audio || typeof audio.getNoteVerdicts !== 'function') return null;
+        try {
+            if (typeof songTime === 'number' && Number.isFinite(songTime)
+                && typeof playing === 'boolean') {
+                return audio.getNoteVerdicts(songTime, playing);
+            }
+            return audio.getNoteVerdicts();
+        } catch (e: unknown) {
+            console.warn(`[audio] getNoteVerdicts failed: ${e instanceof Error ? e.message : String(e)}`);
+            return null;
+        }
+    });
+
     // Raw polyphonic transcription — the ML detector's full active-pitch set.
     // Returns null when the ML detector isn't active (downlevel addon, no ONNX
     // support, or no model loaded) so the renderer feature-detects and falls

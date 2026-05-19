@@ -82,6 +82,25 @@ public:
         int capo = 0;
         float pitchCheckCents = 0.0f;   // 0 = energy-only chord check
         float minHitRatio = 0.6f;
+        // Force the DSP band-energy scorer even when an ML model is
+        // loaded. The ML path is onset-driven and silently drops notes
+        // the detector never fires an onset for; the renderer sets this
+        // to verify a chart note purely from spectral energy at its
+        // expected fundamental (the Rocksmith-style check).
+        bool bypassMl = false;
+        // Harmonic-comb verification. The default per-note check sums energy
+        // across a whole string's frequency band and divides by the total
+        // spectrum — a metric a bright or broadband signal dilutes to ~1-3%,
+        // below threshold, so correctly-played notes are rejected. With this
+        // set, each note is instead scored by the energy at its EXPECTED
+        // harmonics (f, 2f, 3f, 4f, 5f) relative to the off-harmonic spectral
+        // floor between them. That is the Rocksmith-style targeted check:
+        // robust to brightness/distortion because distortion adds energy AT
+        // the harmonics, and free of whole-spectrum dilution.
+        bool harmonicVerify = false;
+        // Minimum harmonic-to-floor ratio for a note to count as present.
+        // Tunable over IPC so the renderer can calibrate without a rebuild.
+        float harmonicSnr = 3.0f;
         std::vector<Note> notes;
     };
 

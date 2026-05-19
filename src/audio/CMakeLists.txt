@@ -12,6 +12,8 @@ set(AUDIO_SOURCES
     PitchDetector.cpp
     ChordScorer.cpp
     MlNoteDetector.cpp
+    OnsetDetector.cpp
+    NoteVerifier.cpp
     Sandbox/Protocol.cpp
 )
 

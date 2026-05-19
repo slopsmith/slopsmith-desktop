@@ -573,6 +573,13 @@ static Napi::Value GetPitchDetection(const Napi::CallbackInfo& info)
 //   capo?: number,                  // default 0
 //   pitchCheckCents?: number,       // 0 = energy-only chord check (default 0)
 //   minHitRatio?: number,           // default 0.6
+//   bypassMl?: boolean,             // force the DSP band-energy scorer even
+//                                   //  when an ML model is loaded (default false)
+//   harmonicVerify?: boolean,       // score each note by harmonic-comb energy
+//                                   //  (f,2f..5f vs the floor between) instead
+//                                   //  of band-energy/total (default false)
+//   harmonicSnr?: number,           // min harmonic-to-floor ratio for a hit
+//                                   //  when harmonicVerify is set (default 3.0)
 // }
 static Napi::Value ScoreChord(const Napi::CallbackInfo& info)
 {
@@ -670,6 +677,12 @@ static Napi::Value ScoreChord(const Napi::CallbackInfo& info)
         req.pitchCheckCents = reqObj.Get("pitchCheckCents").As<Napi::Number>().FloatValue();
     if (reqObj.Has("minHitRatio") && reqObj.Get("minHitRatio").IsNumber())
         req.minHitRatio = reqObj.Get("minHitRatio").As<Napi::Number>().FloatValue();
+    if (reqObj.Has("bypassMl") && reqObj.Get("bypassMl").IsBoolean())
+        req.bypassMl = reqObj.Get("bypassMl").As<Napi::Boolean>().Value();
+    if (reqObj.Has("harmonicVerify") && reqObj.Get("harmonicVerify").IsBoolean())
+        req.harmonicVerify = reqObj.Get("harmonicVerify").As<Napi::Boolean>().Value();
+    if (reqObj.Has("harmonicSnr") && reqObj.Get("harmonicSnr").IsNumber())
+        req.harmonicSnr = reqObj.Get("harmonicSnr").As<Napi::Number>().FloatValue();
 
     if (reqObj.Has("offsets") && reqObj.Get("offsets").IsArray())
     {
@@ -768,6 +781,169 @@ static Napi::Value ScoreChord(const Napi::CallbackInfo& info)
     }
     out.Set("results", resultsArr);
     return out;
+}
+
+// Push the song's note chart into the engine for continuous, background
+// verification. The notedetect plugin calls this once per arrangement load;
+// the engine's NoteVerifier thread then scores each note's timing window
+// against the live playhead and input ring, so the renderer no longer runs a
+// per-tick scoreChord IPC loop (which starved during dense passages).
+//
+// Expected payload:
+// {
+//   arrangement?: 'guitar'|'bass',  // default 'guitar'
+//   stringCount?: number,           // default 6
+//   tuningOffsets: number[],        // length should equal stringCount
+//   capo?: number,                  // default 0
+//   pitchCheckCents?: number,       // default 0 (energy-only)
+//   harmonicSnr?: number,           // default 3.0
+//   timingTolerance?: number,       // seconds, default 0.1
+//   notes: [{ id:string, t:number, s:number, f:number, sus:number,
+//             ho?,po?,b?,sl?,hm?:boolean }, ...]
+// }
+// Returns true when the chart was accepted, false on a malformed payload or
+// when no engine exists.
+static Napi::Value SetChart(const Napi::CallbackInfo& info)
+{
+    auto env = info.Env();
+
+    // Generous cap on the chart length — a full song's note list is well
+    // under this, but it bounds the worst-case allocation a malformed payload
+    // (claiming a gigantic JS array length) could force over IPC.
+    static constexpr uint32_t kMaxChartNotes = 8192;
+
+    // Rejecting a malformed chart must also drop whatever chart the verifier
+    // currently holds — otherwise a failed (re)load leaves the previous
+    // song's chart active and getNoteVerdicts() keeps emitting stale verdicts.
+    auto reject = [&]() -> Napi::Value {
+        if (engine) engine->clearChart();
+        return Napi::Boolean::New(info.Env(), false);
+    };
+
+    if (!engine || info.Length() < 1 || !info[0].IsObject())
+        return reject();
+
+    auto reqObj = info[0].As<Napi::Object>();
+
+    NoteVerifier::ChartUpdate chart;
+    if (reqObj.Has("arrangement") && reqObj.Get("arrangement").IsString())
+        chart.arrangement = reqObj.Get("arrangement").As<Napi::String>().Utf8Value();
+    if (reqObj.Has("stringCount") && reqObj.Get("stringCount").IsNumber())
+        chart.stringCount = reqObj.Get("stringCount").As<Napi::Number>().Int32Value();
+    if (reqObj.Has("capo") && reqObj.Get("capo").IsNumber())
+        chart.capo = reqObj.Get("capo").As<Napi::Number>().Int32Value();
+    if (reqObj.Has("pitchCheckCents") && reqObj.Get("pitchCheckCents").IsNumber())
+        chart.pitchCheckCents = reqObj.Get("pitchCheckCents").As<Napi::Number>().FloatValue();
+    if (reqObj.Has("harmonicSnr") && reqObj.Get("harmonicSnr").IsNumber())
+        chart.harmonicSnr = reqObj.Get("harmonicSnr").As<Napi::Number>().FloatValue();
+    if (reqObj.Has("timingTolerance") && reqObj.Get("timingTolerance").IsNumber())
+        chart.timingTolerance = reqObj.Get("timingTolerance").As<Napi::Number>().DoubleValue();
+
+    if (reqObj.Has("tuningOffsets") && reqObj.Get("tuningOffsets").IsArray())
+    {
+        auto arr = reqObj.Get("tuningOffsets").As<Napi::Array>();
+        if (arr.Length() > 32) return reject();
+        chart.tuningOffsets.reserve(arr.Length());
+        for (uint32_t i = 0; i < arr.Length(); ++i)
+        {
+            auto v = arr.Get(i);
+            if (!v.IsNumber()) return reject();
+            chart.tuningOffsets.push_back(v.As<Napi::Number>().Int32Value());
+        }
+    }
+
+    // ChordScorer requires exactly one tuning offset per string and otherwise
+    // fails every note closed. Reject the chart here so a malformed payload
+    // surfaces as setChart() == false rather than a silently all-miss session
+    // the caller believes loaded fine.
+    if ((int) chart.tuningOffsets.size() != chart.stringCount)
+        return reject();
+
+    Napi::Value notesVal = reqObj.Has("notes") ? reqObj.Get("notes") : env.Null();
+    if (!notesVal.IsArray()) return reject();
+    auto notesArr = notesVal.As<Napi::Array>();
+    if (notesArr.Length() > kMaxChartNotes) return reject();
+
+    chart.notes.reserve(notesArr.Length());
+    for (uint32_t i = 0; i < notesArr.Length(); ++i)
+    {
+        auto v = notesArr.Get(i);
+        if (!v.IsObject()) return reject();
+        auto noteObj = v.As<Napi::Object>();
+
+        // Every chart note must carry all five required fields with the right
+        // type. Filling defaults for a missing field would push a bogus
+        // time-0 note with an empty id — that breaks verdict-by-id alignment
+        // — so reject the whole chart instead.
+        const bool validNote =
+            noteObj.Has("id")  && noteObj.Get("id").IsString() &&
+            noteObj.Has("t")   && noteObj.Get("t").IsNumber() &&
+            noteObj.Has("s")   && noteObj.Get("s").IsNumber() &&
+            noteObj.Has("f")   && noteObj.Get("f").IsNumber() &&
+            noteObj.Has("sus") && noteObj.Get("sus").IsNumber();
+        if (!validNote) return reject();
+
+        NoteVerifier::ChartNote n{};
+        n.id = noteObj.Get("id").As<Napi::String>().Utf8Value();
+        n.t = noteObj.Get("t").As<Napi::Number>().DoubleValue();
+        n.string = noteObj.Get("s").As<Napi::Number>().Int32Value();
+        n.fret = noteObj.Get("f").As<Napi::Number>().Int32Value();
+        n.sus = noteObj.Get("sus").As<Napi::Number>().DoubleValue();
+        auto truthy = [&noteObj](const char* key) {
+            if (!noteObj.Has(key)) return false;
+            return noteObj.Get(key).ToBoolean().Value();
+        };
+        n.ho = truthy("ho");
+        n.po = truthy("po");
+        n.b  = truthy("b");
+        n.sl = truthy("sl");
+        n.hm = truthy("hm");
+        chart.notes.push_back(std::move(n));
+    }
+
+    engine->setChart(chart);
+    return Napi::Boolean::New(env, true);
+}
+
+// Drain the verdicts the NoteVerifier thread has finalized since the last
+// call. Returns an array of { id, detected, detectedSongTime, centsError, snr }.
+//
+// Optionally also pushes the renderer's playhead: getNoteVerdicts(songTime,
+// playing). The plugin calls this once per detect tick, so folding the push in
+// here advances the verifier's clock without a second IPC round-trip. A
+// downlevel caller passing no args still just drains.
+static Napi::Value GetNoteVerdicts(const Napi::CallbackInfo& info)
+{
+    auto env = info.Env();
+    // Null (not an empty array) on a missing engine — the bridge/preload
+    // contract treats null as "unsupported/unavailable" so the renderer
+    // feature-detects, matching detectNotes' no-engine path.
+    if (!engine) return env.Null();
+
+    // Push the playhead before draining so this tick's verdicts reflect it.
+    // A JS NaN/Infinity passes IsNumber() — guard with isfinite so a bad
+    // value can't corrupt the verifier's interpolated timing.
+    if (info.Length() >= 2 && info[0].IsNumber() && info[1].IsBoolean())
+    {
+        const double songTime = info[0].As<Napi::Number>().DoubleValue();
+        if (std::isfinite(songTime))
+            engine->setPlayhead(songTime, info[1].As<Napi::Boolean>().Value());
+    }
+
+    const auto verdicts = engine->getNoteVerdicts();
+    auto arr = Napi::Array::New(env, verdicts.size());
+    for (size_t i = 0; i < verdicts.size(); ++i)
+    {
+        const auto& v = verdicts[i];
+        auto entry = Napi::Object::New(env);
+        entry.Set("id", v.id);
+        entry.Set("detected", v.detected);
+        entry.Set("detectedSongTime", v.detectedSongTime);
+        entry.Set("centsError", v.centsError);
+        entry.Set("snr", v.snr);
+        arr.Set((uint32_t) i, entry);
+    }
+    return arr;
 }
 
 // Sample rate the audio device is running at. Notedetect's chord scorer
@@ -1716,6 +1892,8 @@ static Napi::Object InitModule(Napi::Env env, Napi::Object exports)
     // Pitch detection
     exports.Set("getPitchDetection", Napi::Function::New(env, GetPitchDetection));
     exports.Set("scoreChord", Napi::Function::New(env, ScoreChord));
+    exports.Set("setChart", Napi::Function::New(env, SetChart));
+    exports.Set("getNoteVerdicts", Napi::Function::New(env, GetNoteVerdicts));
     exports.Set("getSampleRate", Napi::Function::New(env, GetSampleRate));
     exports.Set("loadNoteModel", Napi::Function::New(env, LoadNoteModel));
     exports.Set("isMlNoteDetection", Napi::Function::New(env, IsMlNoteDetection));

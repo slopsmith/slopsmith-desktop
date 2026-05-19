@@ -58,6 +58,39 @@ export interface ChordScoreResult {
     results: ChordScoreNoteResult[];
 }
 
+// One note in a chart pushed to the engine for continuous verification.
+export interface ChartNote {
+    id: string;        // stable note key (matches the plugin's noteKey)
+    t: number;         // chart time of the onset, seconds
+    s: number;         // string index
+    f: number;         // fret
+    sus: number;       // sustain length, seconds
+    ho?: boolean;      // hammer-on
+    po?: boolean;      // pull-off
+    b?: boolean;       // bend
+    sl?: boolean;      // slide
+    hm?: boolean;      // harmonic
+}
+// The full song chart + scoring context, pushed once per arrangement load.
+export interface ChartUpdate {
+    arrangement?: 'guitar' | 'bass';
+    stringCount?: number;
+    tuningOffsets: number[];
+    capo?: number;
+    pitchCheckCents?: number;
+    harmonicSnr?: number;
+    timingTolerance?: number;  // seconds — half-width of the scoring window
+    notes: ChartNote[];
+}
+// A finalized per-note verdict drained from the engine's NoteVerifier.
+export interface NoteVerdict {
+    id: string;
+    detected: boolean;
+    detectedSongTime: number;
+    centsError: number;
+    snr: number;
+}
+
 // Raw polyphonic transcription from the ML note detector (Basic Pitch).
 export interface DetectedNote {
     midi: number;       // MIDI pitch, 21..108
@@ -137,6 +170,24 @@ contextBridge.exposeInMainWorld('slopsmithDesktop', {
         // can fall back gracefully.
         scoreChord: (ctx: ChordScoreRequest): Promise<ChordScoreResult | null> =>
             ipcRenderer.invoke('audio:scoreChord', ctx),
+
+        // Push the song's note chart into the engine for continuous,
+        // background verification. The notedetect plugin calls this once per
+        // arrangement load; the engine's NoteVerifier thread scores each note
+        // against the live playhead, replacing the renderer's per-tick
+        // scoreChord loop. Resolves null on a downlevel addon (pre-NoteVerifier)
+        // so the caller feature-detects and keeps the old matchNotes path.
+        setChart: (chart: ChartUpdate): Promise<boolean | null> =>
+            ipcRenderer.invoke('audio:setChart', chart),
+
+        // Drain the verdicts the engine's NoteVerifier has finalized since the
+        // last call. Resolves null on a downlevel addon so the caller
+        // feature-detects. The optional (songTime, playing) args push the
+        // renderer's unified, already-corrected playhead — the verifier scores
+        // against this rather than the JUCE backing transport (frozen for
+        // HTML5-routed sloppak songs). Pass them every detect tick.
+        getNoteVerdicts: (songTime?: number, playing?: boolean): Promise<NoteVerdict[] | null> =>
+            ipcRenderer.invoke('audio:getNoteVerdicts', songTime, playing),
 
         // Raw polyphonic transcription — the ML note detector's full
         // active-pitch set. Resolves null when the ML detector isn't active

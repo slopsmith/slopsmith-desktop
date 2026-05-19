@@ -4,6 +4,7 @@
 #include "PitchDetector.h"
 #include "ChordScorer.h"
 #include "MlNoteDetector.h"
+#include "NoteVerifier.h"
 #include <juce_audio_devices/juce_audio_devices.h>
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <array>
@@ -142,12 +143,39 @@ public:
     // request fewer; anything larger than the ring capacity gets clamped.
     std::vector<float> getInputFrame(int numSamples = 4096) const;
 
+    // Gapless input-ring consumption for the onset detector. Copies every
+    // sample written since monotonic index `fromIndex` into `out`, and
+    // returns the current write index. The samples in `out` span monotonic
+    // indices [returnedWriteIndex - out.size(), returnedWriteIndex); when no
+    // samples were lost that lower bound equals `fromIndex`. If the gap
+    // exceeds the ring capacity the oldest samples are gone and `out` starts
+    // later than `fromIndex` (out.size() < writeIndex - fromIndex) — the
+    // caller detects the loss by that shortfall. Unlike getInputFrame (which
+    // returns overlapping most-recent-N snapshots), consecutive calls here
+    // consume each sample exactly once.
+    uint64_t getInputSince(uint64_t fromIndex, std::vector<float>& out) const;
+
     // Score a chord against the latest input-ring samples. The chord
     // context (notes, arrangement, thresholds) comes from the renderer
     // over IPC; audio data stays inside the engine so no buffers cross
     // the N-API boundary. Returns the same `{score, hitStrings,
     // totalStrings, isHit, results[]}` shape as the JS implementation.
     ChordScorer::Result scoreChord(const ChordScorer::Request& req);
+
+    // Continuous engine-side chart verification (notedetect). The renderer
+    // pushes the song's note chart once via setChart(); a background
+    // NoteVerifier thread scores each note's timing window against the live
+    // playhead and input ring, and the renderer drains finalized verdicts
+    // via getNoteVerdicts(). This replaces the renderer's per-tick
+    // scoreChord IPC loop, which starved during dense passages.
+    void setChart(const NoteVerifier::ChartUpdate& chart) { noteVerifier.setChart(chart); }
+    void clearChart() { noteVerifier.clearChart(); }
+    std::vector<NoteVerifier::Verdict> getNoteVerdicts() { return noteVerifier.drainVerdicts(); }
+
+    // Renderer's unified, already-corrected playhead — the verifier scores
+    // against this rather than getBackingPosition(), which is frozen for
+    // HTML5-routed (sloppak) songs. Pushed each detect tick via getNoteVerdicts.
+    void setPlayhead(double songTime, bool playing) { noteVerifier.setPlayhead(songTime, playing); }
 
 private:
     void audioDeviceIOCallbackWithContext(const float* const* inputData,
@@ -170,6 +198,11 @@ private:
     MlNoteDetector mlNoteDetector;
     NoiseGate noiseGate;
     ChordScorer chordScorer;
+    // Background chart-verification thread. Constructed with `*this` so it can
+    // read the engine's input ring (getInputFrame) and playhead
+    // (getBackingPosition); valid because the reference is bound during
+    // AudioEngine construction and the thread is only started in prepare().
+    NoteVerifier noteVerifier{ *this };
     juce::AudioFormatManager formatManager;
 
     std::atomic<float> inputGain{1.0f};
