@@ -25,6 +25,30 @@ const vstSlotPaths = new Map<number, string>();
 // window was ever shown).
 let armedEditorSlotId: number | null = null;
 
+// Restore the previous editor arm if a fresh open attempt failed. Called from
+// the audio:openPluginEditor handler's failure paths so a still-open editor
+// on another slot keeps its sentinel rather than being wiped out by an
+// unrelated failing open.
+function restorePreviousEditorArm(prev: number | null): void {
+    // No overwrite happened (the failing open had no pluginPath, so nothing
+    // was armed for this call) — the previous arm is still intact.
+    if (armedEditorSlotId === prev) return;
+
+    // An overwrite did happen. Try to re-arm the previous slot's editor.
+    if (prev !== null) {
+        const prevPath = vstSlotPaths.get(prev);
+        if (prevPath) {
+            armEditorSentinel(prevPath);
+            armedEditorSlotId = prev;
+            return;
+        }
+    }
+    // No previous arm, or we no longer know the previous slot's path — fall
+    // back to a clean disarm rather than leaving a stale sentinel.
+    disarmSentinel();
+    armedEditorSlotId = null;
+}
+
 function loadNativeAddon(): AudioModule | null {
     const addonPaths = [
         // Development build
@@ -470,6 +494,9 @@ export function initAudioBridge(): void {
             const slot = (audio?.getChainState() ?? []).find((s: any) => s?.id === slotId);
             if (slot && typeof slot.path === 'string') pluginPath = slot.path;
         }
+        // Snapshot the currently-armed slot so a failed open can restore it
+        // — not wipe protection for an already-open editor on another slot.
+        const prevArmedSlotId = armedEditorSlotId;
         if (pluginPath) {
             armEditorSentinel(pluginPath);
             armedEditorSlotId = slotId;
@@ -478,26 +505,18 @@ export function initAudioBridge(): void {
         try {
             opened = audio?.openPluginEditor(slotId) ?? false;
         } catch (e) {
-            // A thrown call is a clean failure, not a hard crash — disarm so
-            // the plugin isn't falsely blocklisted on next startup. Only
-            // disarm when *we* just armed for this slot, so a concurrent
-            // editor-open on a different slot keeps its sentinel.
-            if (armedEditorSlotId === slotId) {
-                disarmSentinel();
-                armedEditorSlotId = null;
-            }
+            // A thrown call is a clean failure, not a hard crash. Restore
+            // the previous arm rather than disarming outright.
+            restorePreviousEditorArm(prevArmedSlotId);
             throw e;
         }
         // A synchronous false means no editor window was created (the plugin
         // has none, or the open failed cleanly) — nothing can fault, so
-        // clear the sentinel now. On a true return the sentinel stays armed
-        // for the editor's lifetime so a late crash gets attributed; the
-        // periodic editor-state watcher below disarms it if the editor goes
-        // away without an audio:closePluginEditor call.
-        if (!opened && armedEditorSlotId === slotId) {
-            disarmSentinel();
-            armedEditorSlotId = null;
-        }
+        // restore the previous arm. On a true return the sentinel stays
+        // armed for the editor's lifetime so a late crash gets attributed;
+        // the periodic editor-state watcher below disarms it if the editor
+        // goes away without an audio:closePluginEditor call.
+        if (!opened) restorePreviousEditorArm(prevArmedSlotId);
         return opened;
     });
 
