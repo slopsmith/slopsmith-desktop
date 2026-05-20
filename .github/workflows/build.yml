@@ -273,6 +273,7 @@ jobs:
             release/*.dmg
             release/*.zip
             release/*.exe
+            release/win-unpacked/**/*
             release/velopack/**/*
           if-no-files-found: warn
 

@@ -987,6 +987,10 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
         checkBtn.addEventListener('click', async () => {
             checkBtn.disabled = true;
             statusEl.textContent = 'Checking for updates…';
+            // Track whether we should re-enable the button in finally. On
+            // unsupported platforms showLinuxFallback() permanently disables
+            // the button; the finally block must not undo that.
+            let reEnableBtn = true;
             try {
                 const result = await updateApi.checkNow();
                 const status = result?.status || 'unknown';
@@ -1004,6 +1008,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                         msg = 'Update downloaded — restart to apply.';
                         break;
                     case 'unsupported':
+                        reEnableBtn = false;
                         showLinuxFallback('Auto-update is not available on Linux.');
                         return;
                     case 'error':
@@ -1017,7 +1022,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                 console.warn('[updater] checkNow failed:', e);
                 statusEl.textContent = `Update check failed: ${e?.message || e}`;
             } finally {
-                checkBtn.disabled = false;
+                if (reEnableBtn) checkBtn.disabled = false;
             }
         });
 

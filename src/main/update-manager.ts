@@ -1,6 +1,6 @@
 // Velopack-backed auto-updater for Slopsmith Desktop (Windows + macOS).
 //
-// Architecture per /home/byron/.claude/plans/optimized-snacking-babbage.md:
+// Architecture:
 //   - The renderer persists the user's release channel in localStorage and
 //     calls setChannel() on boot so this module's UpdateManager is bound to
 //     the right feed (stable | rc | beta | alpha).
@@ -55,6 +55,7 @@ const POLL_INTERVAL_MS = 4 * 60 * 60 * 1000;
 let velopackUm: import('velopack').UpdateManager | null = null;
 let currentChannel: UpdateChannel = 'stable';
 let pollTimer: NodeJS.Timeout | null = null;
+let initialCheckTimer: NodeJS.Timeout | null = null;
 let inFlightCheck: Promise<UpdateInfo | null> | null = null;
 // Generation counter: incremented every time setChannel() replaces velopackUm
 // so that in-flight checks from the old channel can detect they are stale and
@@ -122,8 +123,12 @@ export function init(channel: UpdateChannel = 'stable'): void {
         return;
     }
     // Kick the first check shortly after launch so we don't compete with the
-    // splash/audio-engine bring-up for CPU + network.
-    setTimeout(() => { void checkNow(); }, 30_000);
+    // splash/audio-engine bring-up for CPU + network. Store the handle so
+    // shutdown() can cancel it if the user quits within the 30s window.
+    initialCheckTimer = setTimeout(() => {
+        initialCheckTimer = null;
+        void checkNow();
+    }, 30_000);
     pollTimer = setInterval(() => { void checkNow(); }, POLL_INTERVAL_MS);
 }
 
@@ -302,8 +307,12 @@ export function getStatus(): UpdateStatus {
     }
 }
 
-/** Tear down the background poll timer. Safe to call multiple times. */
+/** Tear down the background poll and initial-check timers. Safe to call multiple times. */
 export function shutdown(): void {
+    if (initialCheckTimer) {
+        clearTimeout(initialCheckTimer);
+        initialCheckTimer = null;
+    }
     if (pollTimer) {
         clearInterval(pollTimer);
         pollTimer = null;
