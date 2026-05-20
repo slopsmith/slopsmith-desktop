@@ -92,8 +92,12 @@ function currentVersion(): string | null {
 }
 
 function createManager(channel: UpdateChannel): void {
-    // Lazy require so a packaging mishap that leaves velopack unresolvable
-    // doesn't crash the whole app at import time — we'd rather log + degrade.
+    // Note: main.ts already requires('velopack') unconditionally at the top
+    // for the VelopackApp startup hook; if that require fails the app exits
+    // before reaching here. The lazy require here is specifically to protect
+    // against a constructor-level failure (e.g. bad options, corrupted state
+    // dir) being thrown inside init()/setChannel() — callers catch that throw
+    // and transition to the 'error' state rather than crashing the whole process.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { UpdateManager } = require('velopack') as typeof import('velopack');
     velopackUm = new UpdateManager(FEED_URL, {

@@ -296,15 +296,17 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          # Explicitly select only real distributables — exclude win-unpacked/**
-          # (added to build artifacts for CI inspection only) so it doesn't
-          # bloat the public GitHub Release with hundreds of unpacked app files.
+          # Explicitly select only real distributables. win-unpacked/** and
+          # the .exe glob are excluded because:
+          # - win-unpacked/** is in CI artifacts for inspection only, not a distributable
+          # - artifacts/**/*.exe would match win-unpacked/Slopsmith.exe in addition to
+          #   the Velopack Setup.exe; the Velopack Setup.exe is already captured by
+          #   the velopack/**/* glob below.
           files: |
             artifacts/**/*.AppImage
             artifacts/**/*.deb
             artifacts/**/*.dmg
             artifacts/**/*.zip
-            artifacts/**/*.exe
             artifacts/**/release/velopack/**/*
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-alpha.') || contains(github.ref_name, '-beta.') || contains(github.ref_name, '-rc.') }}

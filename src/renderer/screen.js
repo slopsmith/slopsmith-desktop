@@ -945,6 +945,13 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                         showLinuxFallback('Auto-update is not available on Linux.');
                         return;
                     }
+                    if (s.status === 'error') {
+                        // Surface the error message so users can tell why update
+                        // checks are failing rather than seeing a healthy status.
+                        const errMsg = s.message ? `Update error: ${s.message}` : 'Update check failed.';
+                        statusEl.textContent = extra ? `${extra} · ${errMsg}` : errMsg;
+                        return;
+                    }
                     const parts = [
                         `Version ${s.currentVersion || '?'}`,
                         `channel ${s.channel || channelSelect.value}`,
