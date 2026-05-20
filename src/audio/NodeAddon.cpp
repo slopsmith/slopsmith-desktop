@@ -28,7 +28,12 @@ static void cancelAllPendingLoads();
 #include <juce_events/juce_events.h>
 
 static std::unique_ptr<AudioEngine> engine;
-static std::unique_ptr<VSTHost> vstHost;
+// shared_ptr (not unique_ptr) so async-load lambdas + their JUCE
+// createPluginInstanceAsync continuations can hold a reference for the
+// duration of the load. Without that, a shutdown that runs vstHost.reset()
+// while createPluginInstanceAsync is mid-load tears down the formatManager
+// underneath JUCE's in-flight work and crashes during teardown.
+static std::shared_ptr<VSTHost> vstHost;
 static std::thread juceMessageThread;
 static std::atomic<bool> juceRunning{false};
 static std::atomic<bool> alreadyShutDown{false};
@@ -124,7 +129,7 @@ static Napi::Value Init(const Napi::CallbackInfo& info)
     // Create engine on the JUCE message thread (or inline on macOS)
     dispatchOnMessageThread([]() {
         engine = std::make_unique<AudioEngine>();
-        vstHost = std::make_unique<VSTHost>();
+        vstHost = std::make_shared<VSTHost>();
 
         auto types = engine->getDeviceTypes();
         fprintf(stderr, "[audio-native] Init complete. Device types: %d\n", types.size());
@@ -1262,18 +1267,27 @@ static std::unique_ptr<juce::AudioProcessor> loadVstSandboxAware(
         return nullptr;
     }
 
+    // Snapshot a shared_ptr to vstHost so the async load and its inner
+    // continuation can keep VSTHost (and thus formatManager) alive even if
+    // shutdown resets the global mid-load. The inner callback captures the
+    // same hostKeeper, so JUCE retains it until createPluginInstanceAsync
+    // completes; once the callback destructs, the keeper drops, and if the
+    // global has been reset by then the VSTHost destructor runs safely
+    // (no work in flight).
+    auto hostKeeper = vstHost;
+
     const bool scheduled = juce::MessageManager::callAsync(
-        [pluginPath, sr, bs, instance, loadError, done]()
+        [hostKeeper, pluginPath, sr, bs, instance, loadError, done]()
         {
-            if (! vstHost)
+            if (! hostKeeper)
             {
                 *loadError = "vstHost not initialised";
                 done->signal();
                 return;
             }
-            vstHost->loadPluginAsync(
+            hostKeeper->loadPluginAsync(
                 pluginPath, sr, bs,
-                [instance, loadError, done]
+                [hostKeeper, instance, loadError, done]
                 (std::unique_ptr<juce::AudioPluginInstance> inst, juce::String err)
                 {
                     *instance  = std::move(inst);
