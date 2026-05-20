@@ -401,6 +401,32 @@ static Napi::Value SetNoiseGate(const Napi::CallbackInfo& info)
     return env.Undefined();
 }
 
+static Napi::Value SetTonePolish(const Napi::CallbackInfo& info)
+{
+    // Tone Polish — { enabled: bool }. Mirrors SetNoiseGate's defensive
+    // shape so a mismatched renderer build / manual caller passing a
+    // non-object is a clean no-op rather than a hard N-API failure
+    // (NAPI_DISABLE_CPP_EXCEPTIONS).
+    auto env = info.Env();
+    if (!engine || info.Length() < 1 || !info[0].IsObject())
+        return env.Undefined();
+
+    auto o = info[0].As<Napi::Object>();
+
+    bool enabled = true;
+    if (o.Has("enabled"))
+    {
+        auto v = o.Get("enabled");
+        if (v.IsBoolean())
+            enabled = v.As<Napi::Boolean>().Value();
+        else if (v.IsNumber())
+            enabled = v.As<Napi::Number>().DoubleValue() != 0.0;
+    }
+
+    engine->setTonePolishEnabled(enabled);
+    return env.Undefined();
+}
+
 static Napi::Value IsMonitorMuted(const Napi::CallbackInfo& info)
 {
     return Napi::Boolean::New(info.Env(), engine ? engine->isMonitorMuted() : true);
@@ -1884,6 +1910,7 @@ static Napi::Object InitModule(Napi::Env env, Napi::Object exports)
     exports.Set("setMonitorMuteSuppressed", Napi::Function::New(env, SetMonitorMuteSuppressed));
     exports.Set("isMonitorMuted", Napi::Function::New(env, IsMonitorMuted));
     exports.Set("setNoiseGate", Napi::Function::New(env, SetNoiseGate));
+    exports.Set("setTonePolish", Napi::Function::New(env, SetTonePolish));
 
     // Metering
     exports.Set("getLevels", Napi::Function::New(env, GetLevels));

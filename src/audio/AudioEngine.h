@@ -1,5 +1,6 @@
 #pragma once
 #include "NoiseGate.h"
+#include "TonePolish.h"
 #include "SignalChain.h"
 #include "PitchDetector.h"
 #include "ChordScorer.h"
@@ -104,6 +105,13 @@ public:
     // Noise gate (post-input-gain, pre FX chain; pitch detector sees ungated signal)
     void setNoiseGate(bool enabled, float thresholdDb, float releaseMs, float depthDb);
 
+    // Tone Polish — fixed 3-band mastering EQ (HPF 80 Hz, low shelf -3 dB
+    // @ 180 Hz, peak -0.5 dB @ 200 Hz Q=1). Applied on the guitar bus only,
+    // between chainOutputGain and the backing-track mix, so the backing
+    // track and master output gain stay bit-untouched. Defaults on;
+    // renderer exposes a per-preset toggle.
+    void setTonePolishEnabled(bool enabled);
+
     // Backing track
     void setBackingVolume(float vol) { backingVolume.store(vol); }
     bool loadBackingTrack(const juce::File& file);
@@ -197,6 +205,7 @@ private:
     PitchDetector pitchDetector;
     MlNoteDetector mlNoteDetector;
     NoiseGate noiseGate;
+    TonePolish tonePolish;
     ChordScorer chordScorer;
     // Background chart-verification thread. Constructed with `*this` so it can
     // read the engine's input ring (getInputFrame) and playhead

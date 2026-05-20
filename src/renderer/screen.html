@@ -135,6 +135,24 @@
         </div>
     </div>
 
+    <!-- Tone Polish — fixed 3-band mastering EQ on the live guitar bus
+         (HPF 80 Hz, low shelf -3 dB @ 180 Hz, peak -0.5 dB @ 200 Hz Q=1).
+         Saved per chain preset; default on. -->
+    <div class="mb-6">
+        <h3 class="text-lg font-semibold mb-3 text-slate-200">Tone Polish</h3>
+        <label class="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" id="ae-tone-polish-enable" checked
+                   class="w-4 h-4 rounded bg-slate-700 border-slate-600 accent-emerald-500">
+            <span class="text-sm text-slate-300">
+                Apply Tone Polish
+            </span>
+        </label>
+        <p class="mt-1 text-xs text-slate-500">
+            HPF 80 Hz · low shelf −3 dB @ 180 Hz · bell −0.5 dB @ 200 Hz Q=1.
+            Affects the live guitar only — backing track is untouched.
+        </p>
+    </div>
+
     <!-- Signal Chain -->
     <div class="mb-6">
         <h3 class="text-lg font-semibold mb-3 text-slate-200">Signal Chain</h3>

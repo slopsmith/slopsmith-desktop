@@ -209,6 +209,15 @@ export function initAudioBridge(): void {
         },
     );
 
+    ipcMain.handle(
+        'audio:setTonePolish',
+        (_event, payload: { enabled: boolean }) => {
+            if (audio && typeof audio.setTonePolish === 'function') {
+                audio.setTonePolish(payload);
+            }
+        },
+    );
+
     // ── Metering ───────────────────────────────────────────────────────────
 
     ipcMain.handle('audio:getLevels', () => {

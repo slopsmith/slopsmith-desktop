@@ -71,6 +71,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
     const noiseGateReleaseLabel = $('ae-noise-gate-release-label');
     const noiseGateDepthSlider = $('ae-noise-gate-depth');
     const noiseGateDepthLabel = $('ae-noise-gate-depth-label');
+    const tonePolishEnable = $('ae-tone-polish-enable');
 
     /** Sliders show dB; `api.setGain` and saved presets use linear amplitude gain (legacy presets unchanged). */
     const GAIN_SLIDER_DB_MIN = -60;
@@ -263,6 +264,45 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
         });
     }
 
+    // ── Tone Polish (fixed 3-band mastering EQ on the guitar bus) ──
+    // Single on/off toggle; defaults on. Saved per chain preset so older presets
+    // without `tonePolish` fall back to the default-on behaviour.
+    const AE_TONE_POLISH_DEFAULT_ENABLED = true;
+
+    function captureCurrentTonePolishState() {
+        // Fall back to the design default when the element is missing (DOM
+        // mismatch / server render) so a preset save never persists
+        // { enabled: false } due to a null checkbox rather than user intent.
+        return { enabled: tonePolishEnable ? !!tonePolishEnable.checked : AE_TONE_POLISH_DEFAULT_ENABLED };
+    }
+
+    function applyPresetTonePolish(preset) {
+        const tp = preset && typeof preset.tonePolish === 'object' && preset.tonePolish !== null
+            ? preset.tonePolish
+            : null;
+        const enabled = tp && typeof tp.enabled === 'boolean'
+            ? tp.enabled
+            : AE_TONE_POLISH_DEFAULT_ENABLED;
+        if (tonePolishEnable) tonePolishEnable.checked = enabled;
+        aeApplyTonePolishToEngine();
+    }
+
+    function aeInitTonePolishUi() {
+        if (tonePolishEnable) tonePolishEnable.checked = AE_TONE_POLISH_DEFAULT_ENABLED;
+    }
+
+    function aeApplyTonePolishToEngine() {
+        const bridge = window.slopsmithDesktop?.audio;
+        if (!bridge || typeof bridge.setTonePolish !== 'function') {
+            if (bridge && !window._aeTonePolishBridgeWarned) {
+                window._aeTonePolishBridgeWarned = true;
+                console.warn('[audio-engine] audio.setTonePolish is not available — rebuild the native engine.');
+            }
+            return;
+        }
+        bridge.setTonePolish({ enabled: tonePolishEnable ? !!tonePolishEnable.checked : AE_TONE_POLISH_DEFAULT_ENABLED });
+    }
+
     // ── Init ──────────────────────────────────────────────────────────────────
     async function init() {
         const available = await api.isAvailable();
@@ -279,6 +319,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
         await refreshChain();
         api.loadPluginList();
         aeInitNoiseGateUi();
+        aeInitTonePolishUi();
         setupEvents();
         startMetering();
 
@@ -313,6 +354,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                 statusDot.className = 'w-3 h-3 rounded-full bg-emerald-500';
                 statusText.textContent = 'Audio running';
                 aeApplyNoiseGateToEngine();
+                aeApplyTonePolishToEngine();
             }
         }
 
@@ -352,6 +394,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
         }
 
         aeApplyNoiseGateToEngine();
+        aeApplyTonePolishToEngine();
     }
 
     function saveChainStateFromChain(chain) {
@@ -606,6 +649,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                 statusDot.className = 'w-3 h-3 rounded-full bg-emerald-500';
                 statusText.textContent = 'Audio running';
                 aeApplyNoiseGateToEngine();
+                aeApplyTonePolishToEngine();
             }
         });
 
@@ -638,6 +682,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                 statusDot.className = 'w-3 h-3 rounded-full bg-emerald-500';
                 statusText.textContent = 'Audio running';
                 aeApplyNoiseGateToEngine();
+                aeApplyTonePolishToEngine();
                 saveDeviceSettings();
             } else {
                 statusText.textContent = 'Failed to configure device';
@@ -692,6 +737,11 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
             noiseGateDepthSlider.addEventListener('input', () => {
                 aeSyncNoiseGateDepthLabel();
                 aeApplyNoiseGateToEngine();
+            });
+        }
+        if (tonePolishEnable) {
+            tonePolishEnable.addEventListener('change', () => {
+                aeApplyTonePolishToEngine();
             });
         }
 
@@ -787,8 +837,9 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                 }));
                 const gains = captureCurrentGainLevels();
                 const noiseGate = captureCurrentNoiseGateState();
+                const tonePolish = captureCurrentTonePolishState();
                 const presets = getPresets();
-                presets[name] = { nativePreset, items, ...gains, noiseGate, created: Date.now() };
+                presets[name] = { nativePreset, items, ...gains, noiseGate, tonePolish, created: Date.now() };
                 localStorage.setItem('slopsmith-chain-presets', JSON.stringify(presets));
                 wrapper.remove();
                 renderPresetList();
@@ -1029,6 +1080,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
             }
             applyPresetGainLevels(preset);
             applyPresetNoiseGate(preset);
+            applyPresetTonePolish(preset);
             // Share the single getChainState() result between refreshChain and saveChainState
             // to avoid two back-to-back native bridge round-trips.
             const chain = await refreshChain();
@@ -1093,6 +1145,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
     window._aeGetPresets = getPresets;
     window._aeApplyPresetGainLevels = applyPresetGainLevels;
     window._aeApplyPresetNoiseGate = applyPresetNoiseGate;
+    window._aeApplyPresetTonePolish = applyPresetTonePolish;
     window._aeLoadDefaultPreset = loadDefaultPreset;
     window._aeReplaceChainWithPresetBlob = replaceChainWithPresetBlob;
 
@@ -1370,6 +1423,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
             if (initialPreset) {
                 applyPresetGainLevels(initialPreset);
                 applyPresetNoiseGate(initialPreset);
+                applyPresetTonePolish(initialPreset);
             }
             await refreshChain();
             console.log('[tone-switcher] Preloaded tones:', Object.keys(this.toneSlotMap));
@@ -1395,6 +1449,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
             if (newPreset) {
                 applyPresetGainLevels(newPreset);
                 applyPresetNoiseGate(newPreset);
+                applyPresetTonePolish(newPreset);
             }
             console.log('[tone-switcher] Switched to:', toneName);
         }
@@ -2777,6 +2832,15 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
         void preset;
     }
 
+    function applyPresetTonePolish(_api, preset) {
+        if (window._aeApplyPresetTonePolish) {
+            window._aeApplyPresetTonePolish(preset);
+            return;
+        }
+        void _api;
+        void preset;
+    }
+
     window._aeStartToneAutoSwitch = function() { startToneAutoSwitch(); };
     window._aeStopToneMonitor = function() {
         // Public teardown used by _applyToneMappingsImpl; clear both monitors so
@@ -3040,6 +3104,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                     if (p) {
                         applyPresetGainLevels(api, p);
                         applyPresetNoiseGate(api, p);
+                        applyPresetTonePolish(api, p);
                     }
                     return;
                 }
@@ -3223,6 +3288,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                 if (initialPreset) {
                     applyPresetGainLevels(api, initialPreset);
                     applyPresetNoiseGate(api, initialPreset);
+                    applyPresetTonePolish(api, initialPreset);
                 }
 
                 window._toneSwitcher = {
@@ -3243,6 +3309,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                         if (newPreset) {
                             applyPresetGainLevels(api, newPreset);
                             applyPresetNoiseGate(api, newPreset);
+                            applyPresetTonePolish(api, newPreset);
                         }
                         console.log('[tone-switcher] Switched to:', name);
                     }
