@@ -876,6 +876,153 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
 
         setupAudioQualityControls();
         setupToneAutomationSettingsEvents();
+        setupUpdateChannelControls();
+    }
+
+    // ── Updater (Velopack) settings UI ────────────────────────────────────────
+    // Reads/writes the persisted channel in localStorage and talks to the main
+    // process via window.slopsmithDesktop.update (added by the main-process slice).
+    // Designed to degrade gracefully when the updater IPC namespace is missing
+    // (dev builds before the main slice lands) or when running on Linux.
+    function setupUpdateChannelControls() {
+        const channelSelect = document.getElementById('update-channel');
+        const checkBtn = document.getElementById('update-check-now');
+        const statusEl = document.getElementById('update-status');
+        const linuxNote = document.getElementById('update-linux-note');
+        if (!channelSelect || !checkBtn || !statusEl) return;
+
+        const VALID_CHANNELS = ['stable', 'rc', 'beta', 'alpha'];
+        const storedChannelRaw = localStorage.getItem('slopsmith-update-channel');
+        const storedChannel = VALID_CHANNELS.includes(storedChannelRaw) ? storedChannelRaw : 'stable';
+        channelSelect.value = storedChannel;
+
+        const updateApi = window.slopsmithDesktop?.update;
+        const isLinux = (() => {
+            const p = (navigator.platform || '').toLowerCase();
+            return p.includes('linux');
+        })();
+
+        function showLinuxFallback(message) {
+            if (linuxNote) linuxNote.classList.remove('hidden');
+            channelSelect.disabled = true;
+            checkBtn.disabled = true;
+            statusEl.textContent = message || 'Auto-update is not available on this platform.';
+        }
+
+        if (!updateApi) {
+            statusEl.textContent = 'Updater not initialized (running in dev or unsupported build).';
+            channelSelect.disabled = true;
+            checkBtn.disabled = true;
+            return;
+        }
+
+        if (isLinux) {
+            showLinuxFallback('Auto-update is not available on Linux.');
+            // Still inform main of the persisted channel so cross-platform logic stays consistent.
+            try { void updateApi.setChannel(storedChannel); } catch (_) { /* defensive */ }
+            return;
+        }
+
+        function fmtTimestamp(ts) {
+            if (!ts) return 'never';
+            try {
+                const d = new Date(ts);
+                if (Number.isNaN(d.getTime())) return 'never';
+                return d.toLocaleString();
+            } catch (_) {
+                return 'never';
+            }
+        }
+
+        function renderStatus(extra) {
+            try {
+                void updateApi.getStatus().then((s) => {
+                    if (!s) {
+                        statusEl.textContent = extra || 'Updater status unavailable.';
+                        return;
+                    }
+                    if (s.status === 'unsupported' || s.platform === 'linux') {
+                        showLinuxFallback('Auto-update is not available on Linux.');
+                        return;
+                    }
+                    const parts = [
+                        `Version ${s.currentVersion || '?'}`,
+                        `channel ${s.channel || channelSelect.value}`,
+                        `last checked ${fmtTimestamp(s.lastCheckedAt)}`,
+                    ];
+                    statusEl.textContent = extra ? `${extra} · ${parts.join(' · ')}` : parts.join(' · ');
+                }).catch((e) => {
+                    console.warn('[updater] getStatus failed:', e);
+                    statusEl.textContent = extra || 'Failed to read updater status.';
+                });
+            } catch (e) {
+                console.warn('[updater] getStatus threw:', e);
+                statusEl.textContent = extra || 'Failed to read updater status.';
+            }
+        }
+
+        // Inform main of the persisted channel on panel load.
+        try {
+            void Promise.resolve(updateApi.setChannel(storedChannel)).catch((e) => {
+                console.warn('[updater] setChannel(initial) failed:', e);
+            });
+        } catch (e) {
+            console.warn('[updater] setChannel(initial) threw:', e);
+        }
+
+        channelSelect.addEventListener('change', () => {
+            const val = channelSelect.value;
+            if (!VALID_CHANNELS.includes(val)) return;
+            try { localStorage.setItem('slopsmith-update-channel', val); } catch (_) {}
+            try {
+                void Promise.resolve(updateApi.setChannel(val)).catch((e) => {
+                    console.warn('[updater] setChannel failed:', e);
+                });
+            } catch (e) {
+                console.warn('[updater] setChannel threw:', e);
+            }
+            renderStatus(`Channel set to ${val}.`);
+        });
+
+        checkBtn.addEventListener('click', async () => {
+            checkBtn.disabled = true;
+            statusEl.textContent = 'Checking for updates…';
+            try {
+                const result = await updateApi.checkNow();
+                const status = result?.status || 'unknown';
+                let msg;
+                switch (status) {
+                    case 'up-to-date':
+                        msg = 'You’re on the newest version in this channel.';
+                        break;
+                    case 'available':
+                        msg = `Update available${result?.version ? ` (${result.version})` : ''} — downloading…`;
+                        break;
+                    case 'downloading':
+                        msg = 'Downloading update…';
+                        break;
+                    case 'downloaded':
+                        msg = 'Update downloaded — restart to apply.';
+                        break;
+                    case 'unsupported':
+                        showLinuxFallback('Auto-update is not available on Linux.');
+                        return;
+                    case 'error':
+                        msg = `Update check failed${result?.message ? `: ${result.message}` : '.'}`;
+                        break;
+                    default:
+                        msg = `Update check returned: ${status}`;
+                }
+                renderStatus(msg);
+            } catch (e) {
+                console.warn('[updater] checkNow failed:', e);
+                statusEl.textContent = `Update check failed: ${e?.message || e}`;
+            } finally {
+                checkBtn.disabled = false;
+            }
+        });
+
+        renderStatus();
     }
 
     // ── Audio Quality (soundfont) ─────────────────────────────────────────────
@@ -3380,4 +3527,113 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
     }
     // Allow app.js to finish initialising before querying the DOM.
     setTimeout(tryInjectChainButton, 0);
+})();
+
+// ── Update-downloaded restart banner (top-level, runs even without audio API) ──
+// Subscribes to window.slopsmithDesktop.update.onDownloaded and renders a
+// persistent banner with a "Restart now" button. Degrades silently when the
+// updater IPC namespace is unavailable (e.g. dev builds before the main slice
+// lands, or unsupported platforms).
+(function() {
+    'use strict';
+    const updateApi = window.slopsmithDesktop?.update;
+    if (!updateApi || typeof updateApi.onDownloaded !== 'function') return;
+
+    const BANNER_ID = 'slopsmith-update-banner';
+
+    function renderUpdateBanner(payload) {
+        // Avoid stacking duplicate banners if onDownloaded fires more than once.
+        if (document.getElementById(BANNER_ID)) return;
+
+        const banner = document.createElement('div');
+        banner.id = BANNER_ID;
+        banner.setAttribute('role', 'status');
+        banner.style.cssText = [
+            'position:fixed',
+            'top:0',
+            'left:0',
+            'right:0',
+            'z-index:99999',
+            'padding:10px 16px',
+            'background:linear-gradient(90deg,#1e3a8a,#4338ca)',
+            'color:#fff',
+            'font-size:13px',
+            'font-family:system-ui,sans-serif',
+            'display:flex',
+            'align-items:center',
+            'justify-content:space-between',
+            'gap:12px',
+            'box-shadow:0 2px 8px rgba(0,0,0,0.4)',
+        ].join(';');
+
+        const text = document.createElement('span');
+        const version = payload && payload.version ? ` (${payload.version})` : '';
+        text.textContent = `Update downloaded${version} — restart to apply.`;
+
+        const actions = document.createElement('span');
+        actions.style.cssText = 'display:flex;gap:8px;align-items:center';
+
+        const restartBtn = document.createElement('button');
+        restartBtn.textContent = 'Restart now';
+        restartBtn.style.cssText = [
+            'padding:4px 12px',
+            'border-radius:4px',
+            'background:#fff',
+            'color:#1e3a8a',
+            'border:none',
+            'font-weight:600',
+            'cursor:pointer',
+            'font-size:13px',
+        ].join(';');
+        restartBtn.addEventListener('click', async () => {
+            restartBtn.disabled = true;
+            restartBtn.textContent = 'Restarting…';
+            try {
+                await updateApi.apply();
+            } catch (e) {
+                console.warn('[updater] apply failed:', e);
+                restartBtn.disabled = false;
+                restartBtn.textContent = 'Restart now';
+            }
+        });
+
+        const dismissBtn = document.createElement('button');
+        dismissBtn.textContent = 'Later';
+        dismissBtn.setAttribute('aria-label', 'Dismiss update banner');
+        dismissBtn.style.cssText = [
+            'padding:4px 10px',
+            'border-radius:4px',
+            'background:transparent',
+            'color:#fff',
+            'border:1px solid rgba(255,255,255,0.4)',
+            'cursor:pointer',
+            'font-size:13px',
+        ].join(';');
+        dismissBtn.addEventListener('click', () => {
+            banner.remove();
+        });
+
+        actions.appendChild(restartBtn);
+        actions.appendChild(dismissBtn);
+        banner.appendChild(text);
+        banner.appendChild(actions);
+
+        const insert = () => {
+            if (document.body) document.body.appendChild(banner);
+            else document.addEventListener('DOMContentLoaded', () => document.body.appendChild(banner), { once: true });
+        };
+        insert();
+    }
+
+    try {
+        updateApi.onDownloaded((payload) => {
+            try {
+                renderUpdateBanner(payload);
+            } catch (e) {
+                console.warn('[updater] renderUpdateBanner failed:', e);
+            }
+        });
+    } catch (e) {
+        console.warn('[updater] onDownloaded subscribe failed:', e);
+    }
 })();
