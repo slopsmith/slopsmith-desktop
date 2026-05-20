@@ -1433,9 +1433,55 @@ static Napi::Value LoadVST(const Napi::CallbackInfo& info)
     }
 
     auto pluginPath = info[0].As<Napi::String>().Utf8Value();
+
+   #if JUCE_MAC
+    // On macOS the JUCE MessageManager is bound to the Node/main thread.
+    // Running this as an AsyncWorker would call vstHost->loadPlugin on a
+    // libuv worker thread, which JUCE documents as unsupported for VST/AU
+    // instantiation. Do the load synchronously on the Node/main thread
+    // (same as the pre-PR LoadVST) and return a resolved Promise to match
+    // the new signature. Pays the foreground-block cost the AsyncWorker
+    // path was supposed to avoid, but that's the existing macOS reality —
+    // dispatchOnMessageThread already runs inline there. The async-load
+    // motivation (AmpliTube blocking the background JUCE message thread
+    // under Electron) is a Windows-only problem.
+    juce::String error;
+    bool sandboxRequired = false;
+    auto processor = loadVstSandboxAware(
+        juce::String(pluginPath),
+        engine->getCurrentSampleRate(),
+        engine->getCurrentBlockSize(),
+        error, sandboxRequired);
+
+    if (sandboxRequired && !processor)
+    {
+        fprintf(stderr, "[LoadVST] Failed: %s\n", error.toRawUTF8());
+        deferred.Reject(
+            Napi::Error::New(env, error.toStdString()).Value());
+        return deferred.Promise();
+    }
+
+    int slotId = -1;
+    if (processor)
+    {
+        auto name = processor->getName();
+        slotId = engine->getSignalChain().addProcessor(
+            std::move(processor),
+            ProcessorSlot::Type::VST,
+            name,
+            juce::String(pluginPath));
+    }
+    else
+    {
+        fprintf(stderr, "[LoadVST] Failed: %s\n", error.toRawUTF8());
+    }
+    deferred.Resolve(Napi::Number::New(env, slotId));
+    return deferred.Promise();
+   #else
     auto* worker = new LoadVSTWorker(env, deferred, std::move(pluginPath));
     worker->Queue();
     return deferred.Promise();
+   #endif
 }
 
 class LoadNAMWorker : public Napi::AsyncWorker
