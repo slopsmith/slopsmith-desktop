@@ -186,7 +186,7 @@ static void doShutdown()
     // implementation lives near loadVstSandboxAware.
     cancelAllPendingLoads();
 
-    if (juceRunning.load() || engine || vstHost)
+    if (juceRunning.load() || engine || snapshotVstHost())
     {
         dispatchOnMessageThread([]() {
             if (engine) { engine->stopAudio(); engine.reset(); }
@@ -1040,8 +1040,9 @@ public:
 
     void Execute() override
     {
-        if (!vstHost) return;
-        vstHost->scanDirectories(directories, [](float, const juce::String&) {});
+        auto host = snapshotVstHost();
+        if (!host) return;
+        host->scanDirectories(directories, [](float, const juce::String&) {});
     }
 
     void OnOK() override
@@ -1049,9 +1050,9 @@ public:
         auto env = Env();
         auto result = Napi::Array::New(env);
 
-        if (vstHost)
+        if (auto host = snapshotVstHost())
         {
-            auto plugins = vstHost->getKnownPlugins();
+            auto plugins = host->getKnownPlugins();
             for (int i = 0; i < plugins.size(); ++i)
             {
                 auto obj = Napi::Object::New(env);
@@ -1106,9 +1107,9 @@ static Napi::Value GetKnownPlugins(const Napi::CallbackInfo& info)
     auto env = info.Env();
     auto result = Napi::Array::New(env);
 
-    if (vstHost)
+    if (auto host = snapshotVstHost())
     {
-        auto plugins = vstHost->getKnownPlugins();
+        auto plugins = host->getKnownPlugins();
         for (int i = 0; i < plugins.size(); ++i)
         {
             auto obj = Napi::Object::New(env);
@@ -1128,15 +1129,17 @@ static Napi::Value GetKnownPlugins(const Napi::CallbackInfo& info)
 
 static Napi::Value SavePluginList(const Napi::CallbackInfo& info)
 {
-    if (vstHost && info.Length() > 0)
-        vstHost->savePluginList(juce::File(juce::String(info[0].As<Napi::String>().Utf8Value())));
+    if (info.Length() == 0) return info.Env().Undefined();
+    if (auto host = snapshotVstHost())
+        host->savePluginList(juce::File(juce::String(info[0].As<Napi::String>().Utf8Value())));
     return info.Env().Undefined();
 }
 
 static Napi::Value LoadPluginList(const Napi::CallbackInfo& info)
 {
-    if (vstHost && info.Length() > 0)
-        vstHost->loadPluginList(juce::File(juce::String(info[0].As<Napi::String>().Utf8Value())));
+    if (info.Length() == 0) return info.Env().Undefined();
+    if (auto host = snapshotVstHost())
+        host->loadPluginList(juce::File(juce::String(info[0].As<Napi::String>().Utf8Value())));
     return info.Env().Undefined();
 }
 
@@ -1258,8 +1261,10 @@ static std::unique_ptr<juce::AudioProcessor> loadVstSandboxAware(
     // this PR targets is Windows-specific (Electron owns the OS main
     // thread, forcing JUCE's MessageManager onto a background thread that
     // createPluginInstance then blocks); macOS doesn't have that mismatch.
+    auto host = snapshotVstHost();
+    if (! host) { error = "vstHost not initialised"; return nullptr; }
     juce::String err;
-    auto instance = vstHost->loadPlugin(pluginPath, sr, bs, err);
+    auto instance = host->loadPlugin(pluginPath, sr, bs, err);
     if (! instance) error = err.isNotEmpty() ? err : juce::String("load failed");
     return instance;
    #else
@@ -1392,8 +1397,10 @@ public:
         // alreadyShutDown is true that reset is on its way (or already
         // ran), so the raw deref below would race. The atomic flag is the
         // authoritative "should I still be touching engine?" signal.
+        // vstHost is read via the mutex-protected snapshot helper (see the
+        // vstHost decl comment).
         if (alreadyShutDown.load(std::memory_order_acquire)
-            || !engine || !vstHost)
+            || !engine || !snapshotVstHost())
         {
             error_ = "engine not initialised";
             return;
@@ -1438,7 +1445,7 @@ public:
         // the pointers from this worker thread is racy. The atomic check is
         // the authoritative "should I still be touching engine?" signal.
         if (alreadyShutDown.load(std::memory_order_acquire)
-            || !engine || !vstHost)
+            || !engine || !snapshotVstHost())
         {
             error_ = "engine torn down during load";
             return;
@@ -1480,7 +1487,7 @@ static Napi::Value LoadVST(const Napi::CallbackInfo& info)
     auto env = info.Env();
     auto deferred = Napi::Promise::Deferred::New(env);
 
-    if (!engine || !vstHost || info.Length() < 1)
+    if (!engine || !snapshotVstHost() || info.Length() < 1)
     {
         deferred.Resolve(Napi::Number::New(env, -1));
         return deferred.Promise();
@@ -1985,7 +1992,7 @@ public:
 
             std::unique_ptr<juce::AudioProcessor> processor;
 
-            if (type == (int)ProcessorSlot::Type::VST && vstHost)
+            if (type == (int)ProcessorSlot::Type::VST && snapshotVstHost())
             {
                 // Sandbox-aware load: a crash-blocklisted plugin restored
                 // from a preset must still go out-of-process, otherwise the
