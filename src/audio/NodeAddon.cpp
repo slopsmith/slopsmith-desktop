@@ -202,10 +202,11 @@ static void doShutdown()
     // implementation lives near loadVstSandboxAware.
     cancelAllPendingLoads();
 
-    if (juceRunning.load() || engine || snapshotVstHost())
+    if (juceRunning.load() || snapshotEngine() || snapshotVstHost())
     {
         dispatchOnMessageThread([]() {
-            if (engine) { engine->stopAudio(); }
+            if (auto liveEngine = snapshotEngine())
+                liveEngine->stopAudio();
             {
                 std::lock_guard<std::mutex> lock(engineMutex);
                 engine.reset();
@@ -1523,7 +1524,7 @@ static Napi::Value LoadVST(const Napi::CallbackInfo& info)
     auto env = info.Env();
     auto deferred = Napi::Promise::Deferred::New(env);
 
-    if (!engine || !snapshotVstHost() || info.Length() < 1)
+    if (!snapshotEngine() || !snapshotVstHost() || info.Length() < 1)
     {
         deferred.Resolve(Napi::Number::New(env, -1));
         return deferred.Promise();
