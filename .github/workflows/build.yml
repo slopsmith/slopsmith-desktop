@@ -296,7 +296,16 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/*
+          # Explicitly select only real distributables — exclude win-unpacked/**
+          # (added to build artifacts for CI inspection only) so it doesn't
+          # bloat the public GitHub Release with hundreds of unpacked app files.
+          files: |
+            artifacts/**/*.AppImage
+            artifacts/**/*.deb
+            artifacts/**/*.dmg
+            artifacts/**/*.zip
+            artifacts/**/*.exe
+            artifacts/**/release/velopack/**/*
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-alpha.') || contains(github.ref_name, '-beta.') || contains(github.ref_name, '-rc.') }}
 

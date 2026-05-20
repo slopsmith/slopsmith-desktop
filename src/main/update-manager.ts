@@ -64,7 +64,8 @@ let inFlightCheck: Promise<UpdateInfo | null> | null = null;
 // broadcast update:available/downloaded after the channel switch.
 let checkGeneration = 0;
 let lastChecked: number | null = null;
-let pendingDownloaded: { version: string } | null = null;
+let pendingVersion: string | null = null;   // set as soon as a target version is known (download starting)
+let pendingDownloaded: { version: string } | null = null;  // set after download completes
 let lastError: string | null = null;
 let activeState: 'idle' | 'checking' | 'downloading' | 'downloaded' | 'error' = 'idle';
 
@@ -142,6 +143,7 @@ export function setChannel(channel: UpdateChannel): void {
     if (isLinux) return;
     if (channel === currentChannel && velopackUm) return;
     currentChannel = channel;
+    pendingVersion = null;
     pendingDownloaded = null;
     lastError = null;
     activeState = 'idle';
@@ -204,10 +206,16 @@ export async function checkNow(): Promise<UpdateStatus> {
         lastError = null;
         if (!info) {
             activeState = 'idle';
+            pendingVersion = null;
             pendingDownloaded = null;
             return getStatus();
         }
         const targetVersion = info.TargetFullRelease.Version;
+        // Set pendingVersion immediately so getStatus() can surface the target
+        // version in the 'downloading' state (before the download completes and
+        // pendingDownloaded is set). Without this, the renderer shows version: ''
+        // while the download is in progress.
+        pendingVersion = targetVersion;
         activeState = 'downloading';
         broadcast('update:available', { version: targetVersion, channel: currentChannel });
         await um.downloadUpdateAsync(info);
@@ -291,7 +299,10 @@ export function getStatus(): UpdateStatus {
             return {
                 status: 'downloading',
                 ...base,
-                pending: pendingDownloaded ?? { version: '' },
+                // Use pendingVersion (set when download starts) so the renderer
+                // can show the target version even before the download completes
+                // and pendingDownloaded is populated.
+                pending: { version: pendingVersion ?? '' },
             };
         case 'downloaded':
             return {
