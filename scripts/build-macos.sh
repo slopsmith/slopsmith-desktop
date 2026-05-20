@@ -261,9 +261,9 @@ bundle_binaries_impl() {
     # vgmstream (download release)
     echo -e "${BLUE}=== Downloading vgmstream-cli ===${NC}"
     curl -sL --fail --retry 5 --retry-delay 5 --retry-all-errors \
-        "https://github.com/vgmstream/vgmstream/releases/latest/download/vgmstream-mac-cli.zip" \
+        "https://github.com/vgmstream/vgmstream/releases/latest/download/vgmstream-mac.zip" \
         -o /tmp/vgmstream.zip
-    echo "Downloaded vgmstream-mac-cli.zip"
+    echo "Downloaded vgmstream-mac.zip"
     unzip -q /tmp/vgmstream.zip -d /tmp/vgmstream
     echo "Extracted to /tmp/vgmstream"
     echo "Contents of /tmp/vgmstream:"
