@@ -300,7 +300,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
             }
             return;
         }
-        bridge.setTonePolish({ enabled: !!tonePolishEnable?.checked });
+        bridge.setTonePolish({ enabled: tonePolishEnable ? !!tonePolishEnable.checked : AE_TONE_POLISH_DEFAULT_ENABLED });
     }
 
     // ── Init ──────────────────────────────────────────────────────────────────
