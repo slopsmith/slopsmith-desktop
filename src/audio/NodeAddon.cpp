@@ -1273,6 +1273,16 @@ public:
             return;
         }
 
+        // Engine may have been torn down while we were waiting on the async
+        // load. The shared_ptr captures keep `processor` alive; just don't
+        // touch a freed engine. The processor destructs cleanly when this
+        // scope exits.
+        if (!engine || !vstHost)
+        {
+            error_ = "engine torn down during load";
+            return;
+        }
+
         auto name = processor->getName();
         slotId_ = engine->getSignalChain().addProcessor(
             std::move(processor),
