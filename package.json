@@ -93,7 +93,7 @@
     },
     "mac": {
       "target": [
-        "dmg",
+        "dir",
         "zip"
       ],
       "category": "public.app-category.music",
@@ -109,7 +109,7 @@
     },
     "win": {
       "target": [
-        "nsis"
+        "dir"
       ],
       "icon": "resources/icons/icon.ico",
       "files": [
@@ -118,10 +118,6 @@
       "asarUnpack": [
         "build/Release/slopsmith-vst-host.exe"
       ]
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true
     }
   },
   "dependencies": {
