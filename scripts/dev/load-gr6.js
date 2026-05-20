@@ -13,13 +13,13 @@ const addon = require(addonPath);
 console.log('[test] addon loaded; methods:', Object.keys(addon).slice(0, 10).join(', '), '...');
 
 // Global watchdog — best-effort coverage for *asynchronous* hang paths
-// (event-loop livelocks, setTimeout-stacked cleanup). Cannot pre-empt a
-// *synchronous* native block: loadVST and addon.shutdown both park the
-// event loop via dispatchOnMessageThread → done->wait(15000) inside the
-// addon, so if those block the timer callback never fires. The
-// synchronous-native-hang case is bounded by JUCE's own 15 s timeout
-// inside the addon; a proper supervisor-process + SIGKILL watchdog
-// belongs in the CI harness (tracked in the test-suite follow-up).
+// (event-loop livelocks, setTimeout-stacked cleanup). loadVST is now a
+// Napi::AsyncWorker, so the libuv event loop continues to fire timers
+// while the load runs on a worker thread; this watchdog can pre-empt
+// a hung async load. addon.shutdown still parks the event loop
+// synchronously inside dispatchOnMessageThread, so if shutdown itself
+// hangs the timer callback never fires — a proper supervisor-process
+// + SIGKILL watchdog belongs in the CI harness (test-suite follow-up).
 //
 // The timer callback hard-exits — do NOT call addon.shutdown() here,
 // it would block on the same dispatchOnMessageThread the addon is
@@ -55,7 +55,7 @@ try {
     failExit('EXCEPTION on init: ' + e.message);
 }
 
-setTimeout(() => {
+setTimeout(async () => {
     // Allow override for CI / dev machines whose VST3 layout differs from
     // the standard "C:\Program Files\Common Files\VST3" install location.
     // The default Native Instruments install ships "Guitar Rig 6.vst3";
@@ -88,7 +88,9 @@ setTimeout(() => {
     console.log('[test] calling addon.loadVST(' + gr6 + ')');
     let slot;
     try {
-        slot = addon.loadVST(gr6);
+        // addon.loadVST is now a Promise<number> (Napi::AsyncWorker); await
+        // it. The enclosing setTimeout callback was made async above.
+        slot = await addon.loadVST(gr6);
         console.log('[test] loadVST returned slot:', slot);
     } catch (e) {
         failExit('EXCEPTION on loadVST: ' + e.message);
