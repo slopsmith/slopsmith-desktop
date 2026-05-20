@@ -384,6 +384,7 @@ bool AudioEngine::setAudioDevice(const juce::String& inputName, const juce::Stri
 
         signalChain.prepare(sr, bs);
         noiseGate.prepare(sr, bs);
+        tonePolish.prepare(sr);
     }
     else
     {
@@ -512,6 +513,11 @@ void AudioEngine::setNoiseGate(bool enabled, float thresholdDb, float releaseMs,
     noiseGate.setParameters(enabled, thresholdDb, releaseMs, depthDb);
 }
 
+void AudioEngine::setTonePolishEnabled(bool enabled)
+{
+    tonePolish.setEnabled(enabled);
+}
+
 // ── Audio Callback ────────────────────────────────────────────────────────────
 
 void AudioEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
@@ -541,6 +547,7 @@ void AudioEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
     mlNoteDetector.prepare(sr, bs);
     noteVerifier.prepare(sr, bs);
     noiseGate.prepare(sr, bs);
+    tonePolish.prepare(sr);
 
     const juce::ScopedLock sl(backingLock);
     if (backingTransport)
@@ -733,6 +740,13 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
     // signal ONLY, before the backing track is mixed in, so switching tone
     // presets changes the guitar level without touching the song volume.
     buffer.applyGain(chainOutputGain.load());
+
+    // Tone Polish — fixed 3-band mastering EQ (HPF 80 Hz, low shelf -3 dB
+    // @ 180 Hz, peak -0.5 dB @ 200 Hz Q=1). Sits on the guitar bus only,
+    // between chain output gain and the backing-track mix, so the backing
+    // track and master output gain stay bit-untouched. Bypassed at a
+    // single atomic load when disabled.
+    tonePolish.processBlock(buffer);
 
     // Mix backing track
     {

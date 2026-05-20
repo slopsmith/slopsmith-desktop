@@ -141,6 +141,8 @@ contextBridge.exposeInMainWorld('slopsmithDesktop', {
             releaseMs: number;
             depthDb: number;
         }) => ipcRenderer.invoke('audio:setNoiseGate', payload),
+        setTonePolish: (payload: { enabled: boolean }) =>
+            ipcRenderer.invoke('audio:setTonePolish', payload),
 
         // Metering (polled at 60fps from renderer)
         getLevels: () => ipcRenderer.invoke('audio:getLevels'),
