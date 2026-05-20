@@ -270,7 +270,10 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
     const AE_TONE_POLISH_DEFAULT_ENABLED = true;
 
     function captureCurrentTonePolishState() {
-        return { enabled: !!tonePolishEnable?.checked };
+        // Fall back to the design default when the element is missing (DOM
+        // mismatch / server render) so a preset save never persists
+        // { enabled: false } due to a null checkbox rather than user intent.
+        return { enabled: tonePolishEnable ? !!tonePolishEnable.checked : AE_TONE_POLISH_DEFAULT_ENABLED };
     }
 
     function applyPresetTonePolish(preset) {
