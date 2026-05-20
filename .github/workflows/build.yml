@@ -147,13 +147,6 @@ jobs:
         with:
           wait-timeout-minutes: 5
 
-      # macOS only: drop the temporary keychain so a re-run doesn't see
-      # leftover state. always() so this still runs when the build fails.
-      - name: Clean up signing keychain
-        if: always() && matrix.platform == 'mac'
-        run: |
-          security delete-keychain build.keychain 2>/dev/null || true
-
       # Velopack: derive update channel from tag name. Only runs for
       # tag pushes (refs/tags/v*) on win + mac — Linux still ships via
       # electron-builder AppImage/deb with no auto-update.
@@ -260,6 +253,15 @@ jobs:
               --notaryPassword "$APPLE_APP_SPECIFIC_PASSWORD" \
               --notaryTeamId "$APPLE_TEAM_ID"
           fi
+
+      # macOS only: drop the temporary keychain so a re-run doesn't see
+      # leftover state. Placed AFTER the Velopack pack steps (which call
+      # codesign + notarytool and need the keychain present on tag builds).
+      # always() ensures cleanup even on Velopack pack failures.
+      - name: Clean up signing keychain
+        if: always() && matrix.platform == 'mac'
+        run: |
+          security delete-keychain build.keychain 2>/dev/null || true
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
