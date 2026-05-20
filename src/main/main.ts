@@ -631,8 +631,15 @@ async function startup(): Promise<void> {
     // if the renderer hasn't paged in yet. On Linux every call short-circuits
     // to { status: "unsupported", platform: "linux" } inside update-manager.
     ipcMain.handle(IPC_UPDATE_GET_STATUS, () => updateManager.getStatus());
-    ipcMain.handle(IPC_UPDATE_SET_CHANNEL, (_event, channel: UpdateChannel) => {
-        updateManager.setChannel(channel);
+    ipcMain.handle(IPC_UPDATE_SET_CHANNEL, (_event, channel: unknown) => {
+        // IPC is untyped at runtime — validate the channel string before forwarding
+        // so a renderer bug or compromised page can't pass arbitrary values into
+        // the Velopack SDK.
+        const VALID_CHANNELS: readonly string[] = ['stable', 'rc', 'beta', 'alpha'];
+        if (typeof channel !== 'string' || !VALID_CHANNELS.includes(channel)) {
+            return updateManager.getStatus();
+        }
+        updateManager.setChannel(channel as UpdateChannel);
         return updateManager.getStatus();
     });
     ipcMain.handle(IPC_UPDATE_CHECK_NOW, () => updateManager.checkNow());

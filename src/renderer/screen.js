@@ -992,14 +992,13 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                 const status = result?.status || 'unknown';
                 let msg;
                 switch (status) {
-                    case 'up-to-date':
-                        msg = 'You’re on the newest version in this channel.';
+                    case ‘idle’:
+                        // checkNow() returned null info — no update available in this channel.
+                        msg = ‘You’re on the newest version in this channel.’;
                         break;
-                    case 'available':
-                        msg = `Update available${result?.version ? ` (${result.version})` : ''} — downloading…`;
-                        break;
-                    case 'downloading':
-                        msg = 'Downloading update…';
+                    case ‘downloading’:
+                        // Update found; download kicked off automatically by checkNow().
+                        msg = `Update available — downloading…`;
                         break;
                     case 'downloaded':
                         msg = 'Update downloaded — restart to apply.';

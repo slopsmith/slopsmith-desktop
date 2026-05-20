@@ -134,6 +134,11 @@ export function setChannel(channel: UpdateChannel): void {
     pendingDownloaded = null;
     lastError = null;
     activeState = 'idle';
+    // Discard any in-flight check against the old channel. checkNow() coalesces
+    // on inFlightCheck — if we leave it non-null the new checkNow() call below
+    // would await the stale promise and could broadcast update:available /
+    // update:downloaded using the old feed's data.
+    inFlightCheck = null;
     try {
         createManager(channel);
     } catch (err) {
