@@ -1212,6 +1212,19 @@ static std::unique_ptr<juce::AudioProcessor> loadVstSandboxAware(
         return processor;
     }
 
+   #if JUCE_MAC
+    // macOS has no separate JUCE message thread (see dispatchOnMessageThread);
+    // a callAsync + done->wait pattern from the libuv worker thread would
+    // queue a callback to a pump that may never run in this context. Fall
+    // back to the existing sync loadPlugin on the worker thread — identical
+    // to what the pre-PR code did on macOS. The AmpliTube-class self-message
+    // problem is Windows-specific (background-thread JUCE MessageManager
+    // under Electron); macOS doesn't have that mismatch.
+    juce::String err;
+    auto instance = vstHost->loadPlugin(pluginPath, sr, bs, err);
+    if (! instance) error = err.isNotEmpty() ? err : juce::String("load failed");
+    return instance;
+   #else
     // In-process: kick off createPluginInstanceAsync on the message thread,
     // block *this* (libuv worker) thread on a WaitableEvent until the load
     // callback fires. The message thread keeps pumping during the wait so
@@ -1291,6 +1304,7 @@ static std::unique_ptr<juce::AudioProcessor> loadVstSandboxAware(
     }
     error = *loadError;
     return std::move(*instance);
+   #endif
 }
 
 // AsyncWorker wrapper for LoadVST. Execute() runs on a libuv worker thread,
