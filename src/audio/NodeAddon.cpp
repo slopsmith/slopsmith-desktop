@@ -1358,7 +1358,14 @@ public:
         // load. The shared_ptr captures keep `processor` alive; just don't
         // touch a freed engine. The processor destructs cleanly when this
         // scope exits.
-        if (!engine || !vstHost)
+        //
+        // Gate on alreadyShutDown (atomic, properly synchronised) before the
+        // raw engine/vstHost pointer reads — once that flag is set, the
+        // dispatched reset of engine/vstHost is on its way and any use of
+        // the pointers from this worker thread is racy. The atomic check is
+        // the authoritative "should I still be touching engine?" signal.
+        if (alreadyShutDown.load(std::memory_order_acquire)
+            || !engine || !vstHost)
         {
             error_ = "engine torn down during load";
             return;
