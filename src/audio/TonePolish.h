@@ -55,6 +55,10 @@ private:
     // Set to true at the end of prepare() and cleared in the constructor so
     // processBlock() is a no-op until DSP state is fully initialised.
     std::atomic<bool> paramPrepared{false};
+    // Set by setEnabled(true) on the UI thread so processBlock() clears stale
+    // IIR delay-line state before the first enabled block, preventing clicks
+    // at the bypass re-enable boundary.
+    std::atomic<bool> paramNeedsReset{false};
 
     double sampleRate = 48000.0;
 

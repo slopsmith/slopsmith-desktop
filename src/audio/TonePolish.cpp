@@ -29,9 +29,11 @@ void TonePolish::reset()
 
 void TonePolish::setEnabled(bool enabled)
 {
-    // Release-store so the audio thread's acquire-load in processBlock
-    // pairs cleanly. No other params to publish — coefficients are
-    // already in place from prepare(), so a toggle is just a guard flip.
+    // When re-enabling, mark that filter state needs to be cleared before the
+    // next block so stale IIR delay lines don't produce a click at the bypass
+    // boundary. Release-store pairs with the acquire-load in processBlock().
+    if (enabled)
+        paramNeedsReset.store(true, std::memory_order_release);
     paramEnabled.store(enabled, std::memory_order_release);
 }
 
@@ -72,6 +74,11 @@ void TonePolish::processBlock(juce::AudioBuffer<float>& buffer)
 
     if (! paramEnabled.load(std::memory_order_acquire))
         return;
+
+    // Clear stale IIR delay-line state on re-enable so the first active block
+    // starts clean and does not produce a click at the bypass boundary.
+    if (paramNeedsReset.exchange(false, std::memory_order_acq_rel))
+        reset();
 
     const int numChannels = buffer.getNumChannels();
     const int numSamples = buffer.getNumSamples();

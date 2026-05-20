@@ -408,7 +408,7 @@ static Napi::Value SetTonePolish(const Napi::CallbackInfo& info)
     // non-object is a clean no-op rather than a hard N-API failure
     // (NAPI_DISABLE_CPP_EXCEPTIONS).
     auto env = info.Env();
-    if (! engine || info.Length() < 1 || ! info[0].IsObject())
+    if (!engine || info.Length() < 1 || !info[0].IsObject())
         return env.Undefined();
 
     auto o = info[0].As<Napi::Object>();
