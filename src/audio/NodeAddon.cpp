@@ -1600,13 +1600,14 @@ public:
 
     void Execute() override
     {
-        if (!engine) { slotId_ = -1; return; }
+        auto liveEngine = snapshotEngine();
+        if (!liveEngine) { slotId_ = -1; return; }
 
         auto processor = std::make_unique<NAMProcessor>();
         if (processor->loadModel(juce::File(juce::String(modelPath_))))
         {
             auto name = processor->getModelName();
-            slotId_ = engine->getSignalChain().addProcessor(
+            slotId_ = liveEngine->getSignalChain().addProcessor(
                 std::move(processor),
                 ProcessorSlot::Type::NAM,
                 "NAM: " + name,
@@ -1628,7 +1629,7 @@ static Napi::Value LoadNAMModel(const Napi::CallbackInfo& info)
     auto env = info.Env();
     auto deferred = Napi::Promise::Deferred::New(env);
 
-    if (!engine || info.Length() < 1) {
+    if (!snapshotEngine() || info.Length() < 1) {
         deferred.Resolve(Napi::Number::New(env, -1));
         return deferred.Promise();
     }
@@ -1647,15 +1648,18 @@ public:
 
     void Execute() override
     {
-        if (!engine) { slotId_ = -1; return; }
+        auto liveEngine = snapshotEngine();
+        if (!liveEngine) { slotId_ = -1; return; }
 
+        const auto sr = liveEngine->getCurrentSampleRate();
+        const auto bs = liveEngine->getCurrentBlockSize();
         auto processor = std::make_unique<IRLoader>();
-        processor->setPlayConfigDetails(2, 2, engine->getCurrentSampleRate(), engine->getCurrentBlockSize());
-        processor->prepareToPlay(engine->getCurrentSampleRate(), engine->getCurrentBlockSize());
+        processor->setPlayConfigDetails(2, 2, sr, bs);
+        processor->prepareToPlay(sr, bs);
         if (processor->loadIR(juce::File(juce::String(irPath_))))
         {
             auto name = processor->getIRName();
-            slotId_ = engine->getSignalChain().addProcessor(
+            slotId_ = liveEngine->getSignalChain().addProcessor(
                     std::move(processor),
                     ProcessorSlot::Type::IR,
                     "IR: " + name,
@@ -1677,7 +1681,7 @@ static Napi::Value LoadIR(const Napi::CallbackInfo& info)
     auto env = info.Env();
     auto deferred = Napi::Promise::Deferred::New(env);
 
-    if (!engine || info.Length() < 1) {
+    if (!snapshotEngine() || info.Length() < 1) {
         deferred.Resolve(Napi::Number::New(env, -1));
         return deferred.Promise();
     }
@@ -2008,7 +2012,8 @@ public:
 
     void Execute() override
     {
-        if (!engine) { success_ = false; error_ = "No engine"; return; }
+        auto liveEngine = snapshotEngine();
+        if (!liveEngine) { success_ = false; error_ = "No engine"; return; }
 
         auto parsed = juce::JSON::parse(juce::String(presetJson_));
         if (!parsed.isObject()) { success_ = false; error_ = "Invalid JSON"; return; }
@@ -2021,10 +2026,10 @@ public:
         if (!chainArray) { success_ = false; error_ = "No chain array"; return; }
 
         // Clear existing chain
-        engine->getSignalChain().clear();
+        liveEngine->getSignalChain().clear();
 
-        double sr = engine->getCurrentSampleRate();
-        int bs = engine->getCurrentBlockSize();
+        double sr = liveEngine->getCurrentSampleRate();
+        int bs = liveEngine->getCurrentBlockSize();
 
         for (auto& slotVar : *chainArray)
         {
@@ -2078,13 +2083,13 @@ public:
             }
             else continue;
 
-            int slotId = engine->getSignalChain().addProcessor(
+            int slotId = liveEngine->getSignalChain().addProcessor(
                 std::move(processor),
                 (ProcessorSlot::Type)type,
                 name, path);
 
             if (bypassed && slotId >= 0)
-                engine->getSignalChain().setBypass(slotId, true);
+                liveEngine->getSignalChain().setBypass(slotId, true);
 
             // Restore processor state
             if (stateB64.isNotEmpty() && slotId >= 0)
@@ -2092,7 +2097,7 @@ public:
                 juce::MemoryBlock state;
                 if (state.fromBase64Encoding(stateB64))
                 {
-                    auto* slot = const_cast<ProcessorSlot*>(engine->getSignalChain().getSlot(slotId));
+                    auto* slot = const_cast<ProcessorSlot*>(liveEngine->getSignalChain().getSlot(slotId));
                     if (slot) slot->setState(state);
                 }
             }
