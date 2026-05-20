@@ -1183,7 +1183,7 @@ static std::unique_ptr<juce::AudioProcessor> loadVstSandboxAware(
     auto loadError = std::make_shared<juce::String>();
     auto done      = std::make_shared<juce::WaitableEvent>();
 
-    juce::MessageManager::callAsync(
+    const bool scheduled = juce::MessageManager::callAsync(
         [pluginPath, sr, bs, instance, loadError, done]()
         {
             if (! vstHost)
@@ -1202,6 +1202,15 @@ static std::unique_ptr<juce::AudioProcessor> loadVstSandboxAware(
                     done->signal();
                 });
         });
+
+    if (! scheduled)
+    {
+        // The message queue is gone (typically: shutdown in flight). The
+        // lambda will never run, so done would never signal — surface the
+        // failure rather than hanging the worker forever.
+        error = "message manager unavailable (shutdown?)";
+        return nullptr;
+    }
 
     // No timeout: createPluginInstanceAsync is genuinely async (the message
     // thread keeps pumping), so a slow first-run plugin (e.g. one doing a
