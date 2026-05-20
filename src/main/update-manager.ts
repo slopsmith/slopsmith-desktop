@@ -56,6 +56,12 @@ let velopackUm: import('velopack').UpdateManager | null = null;
 let currentChannel: UpdateChannel = 'stable';
 let pollTimer: NodeJS.Timeout | null = null;
 let inFlightCheck: Promise<UpdateInfo | null> | null = null;
+// Generation counter: incremented every time setChannel() replaces velopackUm
+// so that in-flight checks from the old channel can detect they are stale and
+// skip all state mutations + broadcasts. Without this, a check running on the
+// old manager's promise would still write activeState/pendingDownloaded and
+// broadcast update:available/downloaded after the channel switch.
+let checkGeneration = 0;
 let lastChecked: number | null = null;
 let pendingDownloaded: { version: string } | null = null;
 let lastError: string | null = null;
@@ -134,10 +140,12 @@ export function setChannel(channel: UpdateChannel): void {
     pendingDownloaded = null;
     lastError = null;
     activeState = 'idle';
-    // Discard any in-flight check against the old channel. checkNow() coalesces
-    // on inFlightCheck — if we leave it non-null the new checkNow() call below
-    // would await the stale promise and could broadcast update:available /
-    // update:downloaded using the old feed's data.
+    // Bump the generation counter so any still-running check from the old
+    // channel sees its epoch is stale and skips all state mutations +
+    // broadcasts when its promise resolves. Also null inFlightCheck so the
+    // new checkNow() below starts a fresh lock rather than coalescing onto
+    // the old (stale) promise.
+    checkGeneration++;
     inFlightCheck = null;
     try {
         createManager(channel);
@@ -173,11 +181,20 @@ export async function checkNow(): Promise<UpdateStatus> {
         await inFlightCheck.catch(() => undefined);
         return getStatus();
     }
+    // Capture the current generation before any await so we can detect a
+    // concurrent setChannel() call that happened while this check was in flight.
+    const myGeneration = checkGeneration;
     activeState = 'checking';
     const um = velopackUm;
-    inFlightCheck = um.checkForUpdatesAsync();
+    const thisCheck = um.checkForUpdatesAsync();
+    inFlightCheck = thisCheck;
     try {
-        const info = await inFlightCheck;
+        const info = await thisCheck;
+        // If the channel was switched while we were awaiting, discard all results
+        // from this check — they belong to the old channel's feed.
+        if (checkGeneration !== myGeneration) {
+            return getStatus();
+        }
         lastChecked = Date.now();
         lastError = null;
         if (!info) {
@@ -189,16 +206,28 @@ export async function checkNow(): Promise<UpdateStatus> {
         activeState = 'downloading';
         broadcast('update:available', { version: targetVersion, channel: currentChannel });
         await um.downloadUpdateAsync(info);
+        // Re-check generation after the (potentially long) download.
+        if (checkGeneration !== myGeneration) {
+            return getStatus();
+        }
         pendingDownloaded = { version: targetVersion };
         activeState = 'downloaded';
         broadcast('update:downloaded', { version: targetVersion, channel: currentChannel });
     } catch (err) {
+        if (checkGeneration !== myGeneration) {
+            return getStatus();
+        }
         const message = err instanceof Error ? err.message : String(err);
         console.error('[update-manager] checkNow failed:', message);
         lastError = message;
         activeState = 'error';
     } finally {
-        inFlightCheck = null;
+        // Only clear the lock if this invocation still owns it. If setChannel()
+        // already nulled inFlightCheck and a new check started, we must not
+        // clear that new check's lock.
+        if (inFlightCheck === thisCheck) {
+            inFlightCheck = null;
+        }
     }
     return getStatus();
 }
