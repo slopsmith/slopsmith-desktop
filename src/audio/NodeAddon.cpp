@@ -9,6 +9,8 @@
 #include <cstdio>
 #include <cerrno>
 #include <cmath>
+#include <mutex>
+#include <set>
 #include <string>
 
 #include "AudioEngine.h"
@@ -149,6 +151,12 @@ static void doShutdown()
     // once execution of the gated body, even under teardown races.
     bool expected = false;
     if (!alreadyShutDown.compare_exchange_strong(expected, true)) return;
+
+    // Release any LoadVSTWorker / LoadPresetWorker currently blocked on a
+    // pending async load. Without this they'd wait forever on the
+    // WaitableEvent — the createPluginInstanceAsync callback can't fire
+    // once the message thread is gone.
+    cancelAllPendingLoads();
 
     if (juceRunning.load() || engine || vstHost)
     {
@@ -1124,6 +1132,33 @@ static Napi::Value SetCrashedPlugins(const Napi::CallbackInfo& info)
 
 // ── Signal Chain Management ──────────────────────────────────────────────────
 
+// Pending in-process loads: each LoadVSTWorker / LoadPresetWorker that's
+// currently blocked on `done->wait()` registers its event here. doShutdown
+// signals them all so the workers unblock and return a clean "cancelled"
+// error instead of hanging forever when the JUCE message thread is about
+// to be stopped (and any unfired callback would never arrive).
+static std::mutex pendingLoadsMutex;
+static std::set<std::shared_ptr<juce::WaitableEvent>> pendingLoads;
+
+static void registerPendingLoad(std::shared_ptr<juce::WaitableEvent> evt)
+{
+    std::lock_guard<std::mutex> lock(pendingLoadsMutex);
+    pendingLoads.insert(std::move(evt));
+}
+
+static void unregisterPendingLoad(const std::shared_ptr<juce::WaitableEvent>& evt)
+{
+    std::lock_guard<std::mutex> lock(pendingLoadsMutex);
+    pendingLoads.erase(evt);
+}
+
+static void cancelAllPendingLoads()
+{
+    std::lock_guard<std::mutex> lock(pendingLoadsMutex);
+    for (auto& evt : pendingLoads) evt->signal();
+    pendingLoads.clear();
+}
+
 // Load a VST3, routing it through the out-of-process sandbox when
 // shouldSandbox() says so (the filename pre-seed or the runtime crash
 // blocklist), otherwise loading it in-process. The in-process load uses
@@ -1212,6 +1247,11 @@ static std::unique_ptr<juce::AudioProcessor> loadVstSandboxAware(
         return nullptr;
     }
 
+    // Register the event so doShutdown can signal it if shutdown lands
+    // during the load and the lambda would never fire its callback
+    // (because the message thread is being torn down).
+    registerPendingLoad(done);
+
     // No timeout: createPluginInstanceAsync is genuinely async (the message
     // thread keeps pumping), so a slow first-run plugin (e.g. one doing a
     // license check that exceeds 15 s) is allowed to take however long it
@@ -1222,6 +1262,16 @@ static std::unique_ptr<juce::AudioProcessor> loadVstSandboxAware(
     // the message thread while the user had already moved on. That race is
     // gone with this design.
     done->wait();
+    unregisterPendingLoad(done);
+
+    // Distinguish "shutdown cancelled us before the callback fired"
+    // (instance null AND error empty) from a normal load failure (instance
+    // null with error set) and a normal success.
+    if (! *instance && loadError->isEmpty())
+    {
+        error = "load cancelled (shutdown)";
+        return nullptr;
+    }
     error = *loadError;
     return std::move(*instance);
 }
