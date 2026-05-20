@@ -1505,16 +1505,25 @@ static Napi::Value ClosePluginEditor(const Napi::CallbackInfo& info)
 // user closed it via the OS title-bar X (PluginEditorWindow::closeButtonPressed
 // erases the entry directly), or createEditor returned null inside the async
 // open callback so no PluginEditorWindow was ever created.
+//
+// editorWindows is owned by JUCE's message thread (mutations happen there
+// via callAsync), so the read is marshalled onto it rather than racing the
+// map / isVisible() call from the Node thread. The result is routed back
+// through a shared_ptr so a dispatchOnMessageThread timeout that releases
+// the caller's stack can't dangle the destination.
 static Napi::Value IsPluginEditorOpen(const Napi::CallbackInfo& info)
 {
     auto env = info.Env();
     if (info.Length() < 1) return Napi::Boolean::New(env, false);
     int slotId = info[0].As<Napi::Number>().Int32Value();
-    auto it = editorWindows.find(slotId);
-    const bool open = it != editorWindows.end()
-                      && it->second
-                      && it->second->isVisible();
-    return Napi::Boolean::New(env, open);
+    auto open = std::make_shared<bool>(false);
+    dispatchOnMessageThread([slotId, open]() {
+        auto it = editorWindows.find(slotId);
+        *open = it != editorWindows.end()
+                && it->second
+                && it->second->isVisible();
+    });
+    return Napi::Boolean::New(env, *open);
 }
 
 // ── Parameters ────────────────────────────────────────────────────────────────

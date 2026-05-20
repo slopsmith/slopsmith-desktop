@@ -570,8 +570,10 @@ export function initAudioBridge(): void {
             // on downlevel addons, but avoids a sentinel armed forever.
             if (typeof audio?.isPluginEditorOpen !== 'function') {
                 setTimeout(() => {
-                    if (openEditors.delete(slotId))
-                        rearmSentinelForMostRecentEditor();
+                    const wasOpen = openEditors.delete(slotId);
+                    confirmedEditors.delete(slotId);
+                    openedAt.delete(slotId);
+                    if (wasOpen) rearmSentinelForMostRecentEditor();
                 }, EDITOR_GRACE_MS_NO_NATIVE_QUERY).unref();
             }
         } else {
