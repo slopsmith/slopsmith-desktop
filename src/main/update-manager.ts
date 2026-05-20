@@ -123,6 +123,22 @@ export function init(channel: UpdateChannel = 'stable'): void {
         activeState = 'error';
         return;
     }
+    // Hydrate pending-restart state from the previous session. If the user
+    // already downloaded an update and the app was restarted without applying
+    // (or the apply failed), getUpdatePendingRestart() returns the pending
+    // release from disk — no network call needed. Surfacing this immediately
+    // ensures the restart banner renders without waiting for a fresh download.
+    const alreadyPending = velopackUm!.getUpdatePendingRestart();
+    if (alreadyPending) {
+        // getUpdatePendingRestart() returns a VelopackAsset with a Version field
+        // (not UpdateInfo.TargetFullRelease.Version — VelopackAsset is flat).
+        const v = alreadyPending.Version;
+        pendingVersion = v;
+        pendingDownloaded = { version: v };
+        activeState = 'downloaded';
+        // Broadcast so any already-open windows show the banner immediately.
+        broadcast('update:downloaded', { version: v, channel: currentChannel });
+    }
     // Kick the first check shortly after launch so we don't compete with the
     // splash/audio-engine bring-up for CPU + network. Store the handle so
     // shutdown() can cancel it if the user quits within the 30s window.

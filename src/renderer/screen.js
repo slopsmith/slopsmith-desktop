@@ -3640,4 +3640,21 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
     } catch (e) {
         console.warn('[updater] onDownloaded subscribe failed:', e);
     }
+
+    // Check on init for an already-downloaded update (e.g. the user restarted
+    // the app without applying a pending update, or the update was downloaded
+    // in a previous session). The onDownloaded event only fires when a download
+    // completes in the *current* session, so we need an explicit status check
+    // to catch pre-existing pending updates.
+    try {
+        void Promise.resolve(updateApi.getStatus()).then((status) => {
+            if (status && status.status === 'downloaded' && status.pending && status.pending.version) {
+                renderUpdateBanner({ version: status.pending.version, channel: status.channel });
+            }
+        }).catch((e) => {
+            console.warn('[updater] getStatus on init failed:', e);
+        });
+    } catch (e) {
+        console.warn('[updater] getStatus on init threw:', e);
+    }
 })();
