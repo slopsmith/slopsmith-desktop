@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cerrno>
 #include <cmath>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <string>
@@ -1543,12 +1544,21 @@ static Napi::Value LoadVST(const Napi::CallbackInfo& info)
     // dispatchOnMessageThread already runs inline there. The async-load
     // motivation (AmpliTube blocking the background JUCE message thread
     // under Electron) is a Windows-only problem.
+    // Snapshot once for the whole load so the same AudioEngine is used for
+    // the sr/bs reads and the addProcessor mutation, even if shutdown
+    // resets the global mid-call.
+    auto liveEngine = snapshotEngine();
+    if (! liveEngine)
+    {
+        deferred.Resolve(Napi::Number::New(env, -1));
+        return deferred.Promise();
+    }
     juce::String error;
     bool sandboxRequired = false;
     auto processor = loadVstSandboxAware(
         juce::String(pluginPath),
-        engine->getCurrentSampleRate(),
-        engine->getCurrentBlockSize(),
+        liveEngine->getCurrentSampleRate(),
+        liveEngine->getCurrentBlockSize(),
         error, sandboxRequired);
 
     if (sandboxRequired && !processor)
@@ -1563,7 +1573,7 @@ static Napi::Value LoadVST(const Napi::CallbackInfo& info)
     if (processor)
     {
         auto name = processor->getName();
-        slotId = engine->getSignalChain().addProcessor(
+        slotId = liveEngine->getSignalChain().addProcessor(
             std::move(processor),
             ProcessorSlot::Type::VST,
             name,
