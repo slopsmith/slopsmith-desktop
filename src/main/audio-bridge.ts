@@ -18,6 +18,13 @@ let audio: AudioModule | null = null;
 // across moves so a reorder needs no upkeep.
 const vstSlotPaths = new Map<number, string>();
 
+// The slotId whose editor the crash sentinel is currently armed for, if any.
+// Tracked so a periodic watcher can disarm when the editor closes without
+// going through audio:closePluginEditor (e.g. the user clicks the OS title-bar
+// X, or createEditor returned null inside the async open callback so no
+// window was ever shown).
+let armedEditorSlotId: number | null = null;
+
 function loadNativeAddon(): AudioModule | null {
     const addonPaths = [
         // Development build
@@ -83,6 +90,26 @@ export function initAudioBridge(): void {
         } catch (e: any) {
             console.warn(`[audio] VST crash guard init failed: ${e.message}`);
         }
+
+        // Periodic editor-state watcher: if the crash sentinel is armed for
+        // an editor whose window has gone away without going through
+        // audio:closePluginEditor — the OS title-bar X
+        // (PluginEditorWindow::closeButtonPressed) and async editor-creation
+        // failure (createEditor returned null inside the open lambda) are
+        // both routes that vanish a window outside IPC — disarm the sentinel
+        // so a later unrelated crash isn't falsely attributed to this plugin.
+        // Unref'd so it never holds the process open on its own.
+        const editorWatcher = setInterval(() => {
+            if (armedEditorSlotId === null) return;
+            if (typeof audio?.isPluginEditorOpen !== 'function') return;
+            try {
+                if (!audio.isPluginEditorOpen(armedEditorSlotId)) {
+                    disarmSentinel();
+                    armedEditorSlotId = null;
+                }
+            } catch { /* best-effort */ }
+        }, 3000);
+        editorWatcher.unref();
     }
 
     // Load the Basic Pitch ONNX model for the polyphonic ML note detector.
@@ -404,6 +431,7 @@ export function initAudioBridge(): void {
         vstSlotPaths.delete(slotId);
         if (typeof pluginPath === 'string' && pluginPath)
             disarmSentinelForPath(pluginPath);
+        if (armedEditorSlotId === slotId) armedEditorSlotId = null;
     });
 
     ipcMain.handle('audio:moveProcessor', (_event, from: number, to: number) => {
@@ -420,6 +448,7 @@ export function initAudioBridge(): void {
         // Every editor window is destroyed by clearChain — no plugin's
         // identity needs preserving, so disarm any sentinel.
         disarmSentinel();
+        armedEditorSlotId = null;
     });
 
     ipcMain.handle('audio:getChainState', () => {
@@ -443,7 +472,10 @@ export function initAudioBridge(): void {
             const slot = (audio?.getChainState() ?? []).find((s: any) => s?.id === slotId);
             if (slot && typeof slot.path === 'string') pluginPath = slot.path;
         }
-        if (pluginPath) armEditorSentinel(pluginPath);
+        if (pluginPath) {
+            armEditorSentinel(pluginPath);
+            armedEditorSlotId = slotId;
+        }
         let opened = false;
         try {
             opened = audio?.openPluginEditor(slotId) ?? false;
@@ -451,13 +483,19 @@ export function initAudioBridge(): void {
             // A thrown call is a clean failure, not a hard crash — disarm so
             // the plugin isn't falsely blocklisted on next startup.
             if (pluginPath) disarmSentinelForPath(pluginPath);
+            armedEditorSlotId = null;
             throw e;
         }
         // A synchronous false means no editor window was created (the plugin
         // has none, or the open failed cleanly) — nothing can fault, so
         // clear the sentinel now. On a true return the sentinel stays armed
-        // for the editor's lifetime so a late crash gets attributed.
-        if (!opened && pluginPath) disarmSentinelForPath(pluginPath);
+        // for the editor's lifetime so a late crash gets attributed; the
+        // periodic editor-state watcher below disarms it if the editor goes
+        // away without an audio:closePluginEditor call.
+        if (!opened && pluginPath) {
+            disarmSentinelForPath(pluginPath);
+            armedEditorSlotId = null;
+        }
         return opened;
     });
 
@@ -469,6 +507,7 @@ export function initAudioBridge(): void {
         // disarm any sentinel armed for this slot's plugin.
         if (typeof pluginPath === 'string' && pluginPath)
             disarmSentinelForPath(pluginPath);
+        if (armedEditorSlotId === slotId) armedEditorSlotId = null;
         return result;
     });
 

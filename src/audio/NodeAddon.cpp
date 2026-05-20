@@ -1499,6 +1499,24 @@ static Napi::Value ClosePluginEditor(const Napi::CallbackInfo& info)
     return Napi::Boolean::New(env, false);
 }
 
+// Truthful answer to "is this slot's editor window currently on screen?".
+// Used by the renderer's VST crash guard to disarm the editor sentinel when
+// the window vanished without going through audio:closePluginEditor — the
+// user closed it via the OS title-bar X (PluginEditorWindow::closeButtonPressed
+// erases the entry directly), or createEditor returned null inside the async
+// open callback so no PluginEditorWindow was ever created.
+static Napi::Value IsPluginEditorOpen(const Napi::CallbackInfo& info)
+{
+    auto env = info.Env();
+    if (info.Length() < 1) return Napi::Boolean::New(env, false);
+    int slotId = info[0].As<Napi::Number>().Int32Value();
+    auto it = editorWindows.find(slotId);
+    const bool open = it != editorWindows.end()
+                      && it->second
+                      && it->second->isVisible();
+    return Napi::Boolean::New(env, open);
+}
+
 // ── Parameters ────────────────────────────────────────────────────────────────
 
 static Napi::Value GetParameters(const Napi::CallbackInfo& info)
@@ -1944,6 +1962,7 @@ static Napi::Object InitModule(Napi::Env env, Napi::Object exports)
     exports.Set("getChainState", Napi::Function::New(env, GetChainState));
     exports.Set("openPluginEditor", Napi::Function::New(env, OpenPluginEditor));
     exports.Set("closePluginEditor", Napi::Function::New(env, ClosePluginEditor));
+    exports.Set("isPluginEditorOpen", Napi::Function::New(env, IsPluginEditorOpen));
 
     // Parameters
     exports.Set("getParameters", Napi::Function::New(env, GetParameters));
