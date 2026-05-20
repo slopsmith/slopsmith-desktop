@@ -1423,7 +1423,7 @@ public:
         // continuing.
         if (alreadyShutDown.load(std::memory_order_acquire))
         {
-            error_ = "engine not initialised";
+            error_ = "shutdown in flight";
             return;
         }
         auto engineKeeper = snapshotEngine();
