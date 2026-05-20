@@ -418,14 +418,20 @@ export function initAudioBridge(): void {
         // means this call never returns and the `finally` never runs, leaving
         // the sentinel for the next startup to find. Any normal return OR a
         // thrown JS exception (loadVST throws on a required-sandbox spawn
-        // failure — a clean error, not a crash) means the process survived,
-        // so disarm in `finally` to avoid a false blocklist entry.
+        // failure — a clean error, not a crash) means the process survived.
+        //
+        // Note: the load sentinel overwrites whatever was on disk, including
+        // a still-open editor's sentinel. The finally clears it, then rearms
+        // for the most-recent still-open editor — otherwise a user loading
+        // another plugin while an editor is open would silently drop crash
+        // attribution for that editor.
         armSentinel(pluginPath, 'load');
         let slotId = -1;
         try {
             slotId = audio?.loadVST(pluginPath) ?? -1;
         } finally {
             disarmSentinel();
+            rearmSentinelForMostRecentEditor();
         }
         if (slotId >= 0) vstSlotPaths.set(slotId, pluginPath);
         return slotId;
