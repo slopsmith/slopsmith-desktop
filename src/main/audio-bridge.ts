@@ -48,6 +48,19 @@ const PENDING_TIMEOUT_MS = 30000;
 // than leaving a sentinel armed forever.
 const EDITOR_GRACE_MS_NO_NATIVE_QUERY = 6000;
 
+// Tracked downlevel-addon fallback timers, keyed by slot. Cancelled on
+// reopen of the same slot and on explicit close/remove/clear/preset so a
+// stale timer from an earlier session can't prune a freshly opened editor.
+const noQueryFallbackTimers = new Map<number, ReturnType<typeof setTimeout>>();
+
+function clearNoQueryFallbackTimer(slotId: number): void {
+    const t = noQueryFallbackTimers.get(slotId);
+    if (t !== undefined) {
+        clearTimeout(t);
+        noQueryFallbackTimers.delete(slotId);
+    }
+}
+
 // Refresh the on-disk sentinel from the current openEditors state. Arms for
 // the most-recent entry, or disarms when no editor is open.
 function rearmSentinelForMostRecentEditor(): void {
@@ -493,6 +506,7 @@ export function initAudioBridge(): void {
         const wasOpen = openEditors.delete(slotId);
         confirmedEditors.delete(slotId);
         openedAt.delete(slotId);
+        clearNoQueryFallbackTimer(slotId);
         if (wasOpen) rearmSentinelForMostRecentEditor();
     });
 
@@ -512,6 +526,8 @@ export function initAudioBridge(): void {
         openEditors.clear();
         confirmedEditors.clear();
         openedAt.clear();
+        for (const t of noQueryFallbackTimers.values()) clearTimeout(t);
+        noQueryFallbackTimers.clear();
         rearmSentinelForMostRecentEditor();
     });
 
@@ -569,12 +585,20 @@ export function initAudioBridge(): void {
             // Loses late-crash attribution for the AmpliTube-style pattern
             // on downlevel addons, but avoids a sentinel armed forever.
             if (typeof audio?.isPluginEditorOpen !== 'function') {
-                setTimeout(() => {
+                // Cancel any pending fallback timer from a prior open of
+                // this same slot — otherwise a quick close+reopen could
+                // let the old timer fire during the new session and drop
+                // the fresh entry.
+                clearNoQueryFallbackTimer(slotId);
+                const t = setTimeout(() => {
+                    noQueryFallbackTimers.delete(slotId);
                     const wasOpen = openEditors.delete(slotId);
                     confirmedEditors.delete(slotId);
                     openedAt.delete(slotId);
                     if (wasOpen) rearmSentinelForMostRecentEditor();
-                }, EDITOR_GRACE_MS_NO_NATIVE_QUERY).unref();
+                }, EDITOR_GRACE_MS_NO_NATIVE_QUERY);
+                t.unref();
+                noQueryFallbackTimers.set(slotId, t);
             }
         } else {
             // !opened: revert the pre-arm so a previous still-open editor's
@@ -595,6 +619,7 @@ export function initAudioBridge(): void {
         if (result && openEditors.delete(slotId)) {
             confirmedEditors.delete(slotId);
             openedAt.delete(slotId);
+            clearNoQueryFallbackTimer(slotId);
             rearmSentinelForMostRecentEditor();
         }
         return result;
@@ -665,6 +690,8 @@ export function initAudioBridge(): void {
         openEditors.clear();
         confirmedEditors.clear();
         openedAt.clear();
+        for (const t of noQueryFallbackTimers.values()) clearTimeout(t);
+        noQueryFallbackTimers.clear();
         rearmSentinelForMostRecentEditor();
         return result;
     });
