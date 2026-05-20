@@ -1213,13 +1213,23 @@ static std::unique_ptr<juce::AudioProcessor> loadVstSandboxAware(
     }
 
    #if JUCE_MAC
-    // macOS has no separate JUCE message thread (see dispatchOnMessageThread);
-    // a callAsync + done->wait pattern from the libuv worker thread would
-    // queue a callback to a pump that may never run in this context. Fall
-    // back to the existing sync loadPlugin on the worker thread — identical
-    // to what the pre-PR code did on macOS. The AmpliTube-class self-message
-    // problem is Windows-specific (background-thread JUCE MessageManager
-    // under Electron); macOS doesn't have that mismatch.
+    // macOS has no separate JUCE message thread (see startJuceMessageThread /
+    // dispatchOnMessageThread): the JUCE MessageManager is bound to the
+    // Node/main thread, and dispatchOnMessageThread historically ran inline
+    // on the caller. A callAsync + done->wait pattern from this worker
+    // thread would queue a callback to a pump that may never run.
+    //
+    // Fall back to the sync loadPlugin on the worker thread. Caveat: the
+    // existing dispatchOnMessageThread block on macOS already documents
+    // that "VST/AU plugin instantiation (which genuinely requires a message
+    // thread on macOS) is the one capability we give up until a proper
+    // libuv-based pump lands." LoadPresetWorker has called loadVstSandbox-
+    // Aware on a worker thread for ages under exactly the same constraint;
+    // moving LoadVST to AsyncWorker brings direct loads under the same
+    // (pre-existing) limitation. The AmpliTube-class self-message problem
+    // this PR targets is Windows-specific (Electron owns the OS main
+    // thread, forcing JUCE's MessageManager onto a background thread that
+    // createPluginInstance then blocks); macOS doesn't have that mismatch.
     juce::String err;
     auto instance = vstHost->loadPlugin(pluginPath, sr, bs, err);
     if (! instance) error = err.isNotEmpty() ? err : juce::String("load failed");
@@ -1291,6 +1301,15 @@ static std::unique_ptr<juce::AudioProcessor> loadVstSandboxAware(
     // destruct because no one held a reference — running VST teardown on
     // the message thread while the user had already moved on. That race is
     // gone with this design.
+    //
+    // Tradeoff: this call holds a libuv threadpool worker for the duration
+    // of the plugin's init. Multiple concurrent hung loads could in theory
+    // starve other AsyncWorkers (fs / crypto). In practice plugin loads are
+    // user-driven and serialised (LoadPresetWorker loads slots one at a
+    // time), and a truly stuck load is bounded by app shutdown via
+    // cancelAllPendingLoads. A proper "fire-and-forget with a TSFN
+    // completion callback" model would eliminate the block entirely but
+    // requires a bigger API restructure than this PR's scope.
     done->wait();
     unregisterPendingLoad(done);
 
