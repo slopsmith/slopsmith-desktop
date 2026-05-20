@@ -646,6 +646,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                 statusDot.className = 'w-3 h-3 rounded-full bg-emerald-500';
                 statusText.textContent = 'Audio running';
                 aeApplyNoiseGateToEngine();
+                aeApplyTonePolishToEngine();
             }
         });
 
@@ -678,6 +679,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                 statusDot.className = 'w-3 h-3 rounded-full bg-emerald-500';
                 statusText.textContent = 'Audio running';
                 aeApplyNoiseGateToEngine();
+                aeApplyTonePolishToEngine();
                 saveDeviceSettings();
             } else {
                 statusText.textContent = 'Failed to configure device';

@@ -212,7 +212,9 @@ export function initAudioBridge(): void {
     ipcMain.handle(
         'audio:setTonePolish',
         (_event, payload: { enabled: boolean }) => {
-            audio?.setTonePolish(payload);
+            if (audio && typeof audio.setTonePolish === 'function') {
+                audio.setTonePolish(payload);
+            }
         },
     );
 
