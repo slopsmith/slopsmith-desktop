@@ -992,11 +992,11 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                 const status = result?.status || 'unknown';
                 let msg;
                 switch (status) {
-                    case ‘idle’:
+                    case 'idle':
                         // checkNow() returned null info — no update available in this channel.
-                        msg = ‘You’re on the newest version in this channel.’;
+                        msg = "You're on the newest version in this channel.";
                         break;
-                    case ‘downloading’:
+                    case 'downloading':
                         // Update found; download kicked off automatically by checkNow().
                         msg = `Update available — downloading…`;
                         break;
