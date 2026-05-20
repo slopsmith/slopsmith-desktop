@@ -15,6 +15,11 @@
 
 #include "AudioEngine.h"
 #include "VSTHost.h"
+
+// Forward declaration — defined alongside loadVstSandboxAware further down.
+// doShutdown (below) needs it to release any LoadVSTWorker / LoadPreset-
+// Worker blocked on a pending async load before the message thread stops.
+static void cancelAllPendingLoads();
 #include "VSTTrace.h"
 #include "NAMProcessor.h"
 #include "IRLoader.h"
@@ -155,7 +160,8 @@ static void doShutdown()
     // Release any LoadVSTWorker / LoadPresetWorker currently blocked on a
     // pending async load. Without this they'd wait forever on the
     // WaitableEvent — the createPluginInstanceAsync callback can't fire
-    // once the message thread is gone.
+    // once the message thread is gone. Forward-declared above; the
+    // implementation lives near loadVstSandboxAware.
     cancelAllPendingLoads();
 
     if (juceRunning.load() || engine || vstHost)
@@ -1218,6 +1224,21 @@ static std::unique_ptr<juce::AudioProcessor> loadVstSandboxAware(
     auto loadError = std::make_shared<juce::String>();
     auto done      = std::make_shared<juce::WaitableEvent>();
 
+    // Register BEFORE scheduling so a shutdown that lands between callAsync
+    // and the wait below can't miss us — cancelAllPendingLoads would
+    // otherwise see an empty set and the worker would block forever.
+    registerPendingLoad(done);
+
+    // Check alreadyShutDown after registering to catch the inverse race
+    // (shutdown ran before we registered): if it's already set, the
+    // shutdown won't see this event and we must bail ourselves.
+    if (alreadyShutDown.load(std::memory_order_acquire))
+    {
+        unregisterPendingLoad(done);
+        error = "shutdown in flight";
+        return nullptr;
+    }
+
     const bool scheduled = juce::MessageManager::callAsync(
         [pluginPath, sr, bs, instance, loadError, done]()
         {
@@ -1243,14 +1264,10 @@ static std::unique_ptr<juce::AudioProcessor> loadVstSandboxAware(
         // The message queue is gone (typically: shutdown in flight). The
         // lambda will never run, so done would never signal — surface the
         // failure rather than hanging the worker forever.
+        unregisterPendingLoad(done);
         error = "message manager unavailable (shutdown?)";
         return nullptr;
     }
-
-    // Register the event so doShutdown can signal it if shutdown lands
-    // during the load and the lambda would never fire its callback
-    // (because the message thread is being torn down).
-    registerPendingLoad(done);
 
     // No timeout: createPluginInstanceAsync is genuinely async (the message
     // thread keeps pumping), so a slow first-run plugin (e.g. one doing a
