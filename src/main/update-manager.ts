@@ -227,7 +227,12 @@ export function applyAndRestart(): UpdateStatus {
         };
     }
     // silent=false (show Velopack's restart UI on Windows), restart=true.
+    // If waitExitThenApplyUpdate returns (i.e. the app does NOT immediately
+    // restart — e.g. on macOS the launcher re-opens in a new process rather
+    // than in-place), transition activeState so we don't leave the UI stuck
+    // in "downloaded" state. 'idle' is the safest no-op fallback.
     velopackUm.waitExitThenApplyUpdate(pending, false, true);
+    activeState = 'idle';
     return getStatus();
 }
 

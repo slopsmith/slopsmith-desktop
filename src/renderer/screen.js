@@ -948,7 +948,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                     const parts = [
                         `Version ${s.currentVersion || '?'}`,
                         `channel ${s.channel || channelSelect.value}`,
-                        `last checked ${fmtTimestamp(s.lastCheckedAt)}`,
+                        `last checked ${fmtTimestamp(s.lastChecked)}`,
                     ];
                     statusEl.textContent = extra ? `${extra} · ${parts.join(' · ')}` : parts.join(' · ');
                 }).catch((e) => {
