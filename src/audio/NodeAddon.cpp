@@ -33,7 +33,21 @@ static std::unique_ptr<AudioEngine> engine;
 // duration of the load. Without that, a shutdown that runs vstHost.reset()
 // while createPluginInstanceAsync is mid-load tears down the formatManager
 // underneath JUCE's in-flight work and crashes during teardown.
+//
+// The shared_ptr *object* is mutated from the message thread (Init,
+// doShutdown) and read from libuv worker threads (LoadVSTWorker /
+// LoadPresetWorker). A plain `auto local = vstHost;` copy on a worker
+// while the message thread reassigns the same shared_ptr is a data race
+// even though the refcount block itself is thread-safe — go through
+// vstHostMutex on every access.
 static std::shared_ptr<VSTHost> vstHost;
+static std::mutex vstHostMutex;
+
+static std::shared_ptr<VSTHost> snapshotVstHost()
+{
+    std::lock_guard<std::mutex> lock(vstHostMutex);
+    return vstHost;
+}
 static std::thread juceMessageThread;
 static std::atomic<bool> juceRunning{false};
 static std::atomic<bool> alreadyShutDown{false};
@@ -129,7 +143,10 @@ static Napi::Value Init(const Napi::CallbackInfo& info)
     // Create engine on the JUCE message thread (or inline on macOS)
     dispatchOnMessageThread([]() {
         engine = std::make_unique<AudioEngine>();
-        vstHost = std::make_shared<VSTHost>();
+        {
+            std::lock_guard<std::mutex> lock(vstHostMutex);
+            vstHost = std::make_shared<VSTHost>();
+        }
 
         auto types = engine->getDeviceTypes();
         fprintf(stderr, "[audio-native] Init complete. Device types: %d\n", types.size());
@@ -173,7 +190,10 @@ static void doShutdown()
     {
         dispatchOnMessageThread([]() {
             if (engine) { engine->stopAudio(); engine.reset(); }
-            vstHost.reset();
+            {
+                std::lock_guard<std::mutex> lock(vstHostMutex);
+                vstHost.reset();
+            }
         });
     }
 
@@ -1181,10 +1201,13 @@ static void cancelAllPendingLoads()
 // only gets written by a queued message stays null, and the editor crashes
 // on its first WindowProc dispatch — the AmpliTube failure signature).
 //
-// MUST be called from a libuv worker thread (NOT the JS main thread, NOT
-// the JUCE message thread). Block-waiting for the load on the message
-// thread would deadlock — the work has to happen there. Block-waiting on
-// the JS main thread would freeze Electron's UI.
+// Threading: on !JUCE_MAC must be called from a libuv worker thread (NOT
+// the JS main thread, NOT the JUCE message thread) — the done->wait below
+// has to be on a thread that *isn't* the one running JUCE's pump or the
+// load can't complete. On JUCE_MAC the inline sync fallback is used and
+// the caller can be the Node/main thread (which is also JUCE's message
+// thread there); LoadVST does exactly that, while LoadPresetWorker still
+// hits this from a worker (a pre-existing macOS limitation).
 //
 // On a *required*-sandbox failure (the plugin matched shouldSandbox but the
 // sandbox couldn't spawn) this returns nullptr with `error` set and
@@ -1273,12 +1296,23 @@ static std::unique_ptr<juce::AudioProcessor> loadVstSandboxAware(
     // same hostKeeper, so JUCE retains it until createPluginInstanceAsync
     // completes; once the callback destructs, the keeper drops, and if the
     // global has been reset by then the VSTHost destructor runs safely
-    // (no work in flight).
-    auto hostKeeper = vstHost;
+    // (no work in flight). The snapshot itself goes through vstHostMutex
+    // so the shared_ptr copy can't race with shutdown's vstHost.reset().
+    auto hostKeeper = snapshotVstHost();
 
     const bool scheduled = juce::MessageManager::callAsync(
         [hostKeeper, pluginPath, sr, bs, instance, loadError, done]()
         {
+            // Shutdown may have fired between callAsync queueing this
+            // lambda and the message thread picking it up. Bail before
+            // kicking off another in-flight createPluginInstanceAsync
+            // that the shutdown would otherwise have to wait on.
+            if (alreadyShutDown.load(std::memory_order_acquire))
+            {
+                *loadError = "shutdown in flight";
+                done->signal();
+                return;
+            }
             if (! hostKeeper)
             {
                 *loadError = "vstHost not initialised";
@@ -1353,7 +1387,13 @@ public:
 
     void Execute() override
     {
-        if (!engine || !vstHost)
+        // Check the atomic shutdown flag before any global pointer reads.
+        // engine is a unique_ptr reset on the message thread; once
+        // alreadyShutDown is true that reset is on its way (or already
+        // ran), so the raw deref below would race. The atomic flag is the
+        // authoritative "should I still be touching engine?" signal.
+        if (alreadyShutDown.load(std::memory_order_acquire)
+            || !engine || !vstHost)
         {
             error_ = "engine not initialised";
             return;
