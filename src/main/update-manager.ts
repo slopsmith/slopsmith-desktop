@@ -1,0 +1,272 @@
+// Velopack-backed auto-updater for Slopsmith Desktop (Windows + macOS).
+//
+// Architecture per /home/byron/.claude/plans/optimized-snacking-babbage.md:
+//   - The renderer persists the user's release channel in localStorage and
+//     calls setChannel() on boot so this module's UpdateManager is bound to
+//     the right feed (stable | rc | beta | alpha).
+//   - On init() and then every 4 hours we run checkForUpdatesAsync(); when a
+//     hit comes back we download in the background, broadcast
+//     update:available immediately and update:downloaded once the .nupkg is
+//     on disk. The renderer shows a banner whose "Restart to apply" button
+//     funnels back into applyAndRestart().
+//   - Linux has no Velopack pipeline (electron-builder AppImage/.deb only),
+//     so every method short-circuits to { status: "unsupported", ... } and
+//     never touches the SDK. The renderer can still render the channel
+//     dropdown — it just gets a clear "not supported here" status back.
+//
+// Velopack JS SDK API notes (verified against
+//   node_modules/velopack/lib/index.d.ts, package 0.0.1589-ga2c5a97):
+//   - There is **no** `GithubSource` class exported from the JS package
+//     (unlike the .NET SDK). `UpdateManager`'s constructor takes a plain
+//     `urlOrPath: string` — pointing it at the GitHub repo's HTML URL is
+//     enough because the Velopack server-side metadata (`releases.<ch>.json`
+//     uploaded by `vpk pack`) lives in the release assets and Velopack's
+//     native loader knows how to pull them via the GitHub Releases API.
+//   - `UpdateOptions` exposes `AllowVersionDowngrade` (plan called it
+//     `AllowDowngrade`; the actual key in the typings is the longer name) +
+//     `ExplicitChannel` (matches the plan).
+
+import { BrowserWindow } from 'electron';
+import type { UpdateInfo } from 'velopack';
+
+export type UpdateChannel = 'stable' | 'rc' | 'beta' | 'alpha';
+
+export type UpdateStatus =
+    | { status: 'unsupported'; platform: 'linux' }
+    | { status: 'idle'; channel: UpdateChannel; currentVersion: string | null; lastChecked: number | null }
+    | { status: 'checking'; channel: UpdateChannel; currentVersion: string | null; lastChecked: number | null }
+    | { status: 'downloading'; channel: UpdateChannel; currentVersion: string | null; lastChecked: number | null; pending: { version: string } }
+    | { status: 'downloaded'; channel: UpdateChannel; currentVersion: string | null; lastChecked: number | null; pending: { version: string } }
+    | { status: 'error'; channel: UpdateChannel; currentVersion: string | null; lastChecked: number | null; message: string };
+
+// Repo the Velopack feed lives in. Matches the existing electron-builder
+// release pipeline (byrongamatos/slopsmith-desktop) — Velopack's GitHub
+// loader looks for `releases.<channel>.json` + `*-full.nupkg` / `*-delta.nupkg`
+// assets attached to releases here.
+const FEED_URL = 'https://github.com/byrongamatos/slopsmith-desktop';
+
+// Background poll cadence. Velopack downloads are cheap when there's nothing
+// new (HEAD on the channel manifest), so 4h is a reasonable trade-off
+// between freshness and noise on the user's network.
+const POLL_INTERVAL_MS = 4 * 60 * 60 * 1000;
+
+// Held in module scope (singleton) — `main.ts` calls `init()` once after
+// `app.whenReady()` resolves and never reconstructs us.
+let velopackUm: import('velopack').UpdateManager | null = null;
+let currentChannel: UpdateChannel = 'stable';
+let pollTimer: NodeJS.Timeout | null = null;
+let inFlightCheck: Promise<UpdateInfo | null> | null = null;
+let lastChecked: number | null = null;
+let pendingDownloaded: { version: string } | null = null;
+let lastError: string | null = null;
+let activeState: 'idle' | 'checking' | 'downloading' | 'downloaded' | 'error' = 'idle';
+
+const isLinux = process.platform === 'linux';
+
+function broadcast(channel: string, payload: unknown): void {
+    for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) {
+            win.webContents.send(channel, payload);
+        }
+    }
+}
+
+function currentVersion(): string | null {
+    if (!velopackUm) return null;
+    try {
+        return velopackUm.getCurrentVersion();
+    } catch {
+        // Velopack throws when run from an unpackaged build (no manifest on
+        // disk). That's a normal dev-loop state — surface null rather than
+        // letting the throw bubble up into the IPC layer.
+        return null;
+    }
+}
+
+function createManager(channel: UpdateChannel): void {
+    // Lazy require so a packaging mishap that leaves velopack unresolvable
+    // doesn't crash the whole app at import time — we'd rather log + degrade.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { UpdateManager } = require('velopack') as typeof import('velopack');
+    velopackUm = new UpdateManager(FEED_URL, {
+        ExplicitChannel: channel,
+        AllowVersionDowngrade: false,
+        MaximumDeltasBeforeFallback: 10,
+    });
+}
+
+/**
+ * Initialize the updater. Must be called once after `app.whenReady()` and
+ * after at least one BrowserWindow exists (so the first broadcast lands).
+ * On Linux this is a no-op.
+ */
+export function init(channel: UpdateChannel = 'stable'): void {
+    if (isLinux) {
+        console.log('[update-manager] Linux: auto-update disabled (electron-builder AppImage/deb only).');
+        return;
+    }
+    currentChannel = channel;
+    try {
+        createManager(channel);
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error('[update-manager] Failed to construct Velopack UpdateManager:', message);
+        lastError = message;
+        activeState = 'error';
+        return;
+    }
+    // Kick the first check shortly after launch so we don't compete with the
+    // splash/audio-engine bring-up for CPU + network.
+    setTimeout(() => { void checkNow(); }, 30_000);
+    pollTimer = setInterval(() => { void checkNow(); }, POLL_INTERVAL_MS);
+}
+
+/**
+ * Switch release channel at runtime. Recreates the underlying Velopack
+ * UpdateManager (the SDK has no in-place channel swap) and triggers an
+ * immediate check so the renderer can update its banner without waiting for
+ * the next 4h tick. On Linux this is a no-op.
+ */
+export function setChannel(channel: UpdateChannel): void {
+    if (isLinux) return;
+    if (channel === currentChannel && velopackUm) return;
+    currentChannel = channel;
+    pendingDownloaded = null;
+    lastError = null;
+    activeState = 'idle';
+    try {
+        createManager(channel);
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error('[update-manager] Failed to switch channel:', message);
+        lastError = message;
+        activeState = 'error';
+        return;
+    }
+    void checkNow();
+}
+
+/**
+ * Trigger an immediate update check + download. Coalesces concurrent calls
+ * (renderer button-mashing, overlapping poll timer) onto the same promise
+ * so we don't fire parallel HTTP requests at the GitHub feed.
+ */
+export async function checkNow(): Promise<UpdateStatus> {
+    if (isLinux) {
+        return { status: 'unsupported', platform: 'linux' };
+    }
+    if (!velopackUm) {
+        return {
+            status: 'error',
+            channel: currentChannel,
+            currentVersion: null,
+            lastChecked,
+            message: lastError ?? 'Update manager not initialized',
+        };
+    }
+    if (inFlightCheck) {
+        await inFlightCheck.catch(() => undefined);
+        return getStatus();
+    }
+    activeState = 'checking';
+    const um = velopackUm;
+    inFlightCheck = um.checkForUpdatesAsync();
+    try {
+        const info = await inFlightCheck;
+        lastChecked = Date.now();
+        lastError = null;
+        if (!info) {
+            activeState = 'idle';
+            pendingDownloaded = null;
+            return getStatus();
+        }
+        const targetVersion = info.TargetFullRelease.Version;
+        activeState = 'downloading';
+        broadcast('update:available', { version: targetVersion, channel: currentChannel });
+        await um.downloadUpdateAsync(info);
+        pendingDownloaded = { version: targetVersion };
+        activeState = 'downloaded';
+        broadcast('update:downloaded', { version: targetVersion, channel: currentChannel });
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error('[update-manager] checkNow failed:', message);
+        lastError = message;
+        activeState = 'error';
+    } finally {
+        inFlightCheck = null;
+    }
+    return getStatus();
+}
+
+/**
+ * Apply the downloaded update and restart the app. Velopack will exit the
+ * current process, swap binaries, and re-launch. Returns immediately because
+ * by the time the swap is done this process is gone.
+ */
+export function applyAndRestart(): UpdateStatus {
+    if (isLinux) {
+        return { status: 'unsupported', platform: 'linux' };
+    }
+    if (!velopackUm) {
+        return {
+            status: 'error',
+            channel: currentChannel,
+            currentVersion: null,
+            lastChecked,
+            message: 'Update manager not initialized',
+        };
+    }
+    const pending = velopackUm.getUpdatePendingRestart();
+    if (!pending) {
+        return {
+            status: 'error',
+            channel: currentChannel,
+            currentVersion: currentVersion(),
+            lastChecked,
+            message: 'No update is ready to apply',
+        };
+    }
+    // silent=false (show Velopack's restart UI on Windows), restart=true.
+    velopackUm.waitExitThenApplyUpdate(pending, false, true);
+    return getStatus();
+}
+
+export function getStatus(): UpdateStatus {
+    if (isLinux) {
+        return { status: 'unsupported', platform: 'linux' };
+    }
+    const base = {
+        channel: currentChannel,
+        currentVersion: currentVersion(),
+        lastChecked,
+    };
+    switch (activeState) {
+        case 'checking':
+            return { status: 'checking', ...base };
+        case 'downloading':
+            return {
+                status: 'downloading',
+                ...base,
+                pending: pendingDownloaded ?? { version: '' },
+            };
+        case 'downloaded':
+            return {
+                status: 'downloaded',
+                ...base,
+                pending: pendingDownloaded ?? { version: '' },
+            };
+        case 'error':
+            return { status: 'error', ...base, message: lastError ?? 'Unknown error' };
+        case 'idle':
+        default:
+            return { status: 'idle', ...base };
+    }
+}
+
+/** Tear down the background poll timer. Safe to call multiple times. */
+export function shutdown(): void {
+    if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+    }
+}

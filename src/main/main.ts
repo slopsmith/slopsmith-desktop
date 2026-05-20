@@ -1,6 +1,19 @@
 // Slopsmith Desktop — Electron Main Process
 // Manages: window lifecycle, Python subprocess, audio engine bridge, plugin management
 
+// ── Velopack startup hook ─────────────────────────────────────────────────
+// MUST run before ANY other side-effecting code (crashReporter, app event
+// listeners, the rest of the imports below). When Windows invokes
+// `Update.exe` with `--veloapp-install`/`--veloapp-updated`/`--veloapp-firstrun`
+// it relaunches our exe with those flags; `VelopackApp.build().run()` is what
+// detects them, runs the appropriate hook, and exits. If the hook doesn't
+// run first the bootstrapper silently breaks install/upgrade flows.
+// On macOS + Linux this is effectively a no-op (the hook just returns).
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { VelopackApp } = require('velopack') as typeof import('velopack');
+VelopackApp.build().run();
+// ──────────────────────────────────────────────────────────────────────────
+
 import { app, BrowserWindow, ipcMain, dialog, shell, session, crashReporter } from 'electron';
 import * as path from 'path';
 
@@ -16,11 +29,21 @@ crashReporter.start({
     compress: false,
 });
 import { startPython, stopPython, waitForPython, getPythonPort, getStartupStatus, StartupStatus } from './python';
-import { IPC_STARTUP_STATUS, IPC_STARTUP_GET_STATUS, IPC_STARTUP_REQUEST_STATUS } from './ipc-channels';
+import {
+    IPC_STARTUP_STATUS,
+    IPC_STARTUP_GET_STATUS,
+    IPC_STARTUP_REQUEST_STATUS,
+    IPC_UPDATE_GET_STATUS,
+    IPC_UPDATE_SET_CHANNEL,
+    IPC_UPDATE_CHECK_NOW,
+    IPC_UPDATE_APPLY,
+} from './ipc-channels';
 import { initAudioBridge, shutdownAudio } from './audio-bridge';
 import { initDebugLogging, isDebugEnabled } from './debug-log';
 import { initPluginManager } from './plugin-manager';
 import { initSoundfontManager } from './soundfont-manager';
+import * as updateManager from './update-manager';
+import type { UpdateChannel } from './update-manager';
 
 // Linux: enable Chromium's PipeWire capturer feature so getUserMedia can see
 // audio devices on PipeWire-only distros (Fedora 36+, recent Ubuntu, Arch).
@@ -602,6 +625,24 @@ async function startup(): Promise<void> {
         return app.getPath('userData');
     });
 
+    // Auto-update (Velopack). The renderer Settings panel reads the persisted
+    // channel from localStorage and calls setChannel() on boot — we default
+    // to 'stable' here so the first check runs against the safest feed even
+    // if the renderer hasn't paged in yet. On Linux every call short-circuits
+    // to { status: "unsupported", platform: "linux" } inside update-manager.
+    ipcMain.handle(IPC_UPDATE_GET_STATUS, () => updateManager.getStatus());
+    ipcMain.handle(IPC_UPDATE_SET_CHANNEL, (_event, channel: UpdateChannel) => {
+        updateManager.setChannel(channel);
+        return updateManager.getStatus();
+    });
+    ipcMain.handle(IPC_UPDATE_CHECK_NOW, () => updateManager.checkNow());
+    ipcMain.handle(IPC_UPDATE_APPLY, () => updateManager.applyAndRestart());
+
+    // Boot the updater after the main window exists so the first
+    // update:available / update:downloaded broadcast has a renderer to land
+    // in. Renderer will call setChannel() once it reads localStorage.
+    updateManager.init('stable');
+
     const startupDeadline = Date.now() + STARTUP_DEADLINE_MS;
     let reachedTerminalState = false;
     while (Date.now() < startupDeadline && !appQuitting) {
@@ -641,6 +682,7 @@ function shutdown(): void {
     try {
         console.log('[main] Shutting down...');
     } catch { /* console may already be gone mid-teardown */ }
+    updateManager.shutdown();
     shutdownAudio();
     stopPython();
 }
