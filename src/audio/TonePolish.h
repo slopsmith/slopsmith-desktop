@@ -44,7 +44,7 @@ public:
     // UI / IPC thread — flips the atomic only. Audio thread reads on each
     // block. When disabled, processBlock() is a single load + early-return.
     void setEnabled(bool enabled);
-    bool isEnabled() const { return paramEnabled.load(std::memory_order_acquire); }
+    bool isEnabled() const { return paramEnabled.load(std::memory_order_seq_cst); }
 
     void processBlock(juce::AudioBuffer<float>& buffer);
 

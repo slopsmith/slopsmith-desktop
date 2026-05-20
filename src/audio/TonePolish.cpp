@@ -31,10 +31,16 @@ void TonePolish::setEnabled(bool enabled)
 {
     // When re-enabling, mark that filter state needs to be cleared before the
     // next block so stale IIR delay lines don't produce a click at the bypass
-    // boundary. Release-store pairs with the acquire-load in processBlock().
+    // boundary.
+    //
+    // Ordering: paramNeedsReset is set *before* paramEnabled using seq_cst
+    // stores, and both reads in processBlock() use seq_cst loads. This gives
+    // a total store order visible to the audio thread, preventing the race
+    // where paramEnabled is seen as true while paramNeedsReset is still false
+    // (which would skip the reset and allow a click on re-enable).
     if (enabled)
-        paramNeedsReset.store(true, std::memory_order_release);
-    paramEnabled.store(enabled, std::memory_order_release);
+        paramNeedsReset.store(true, std::memory_order_seq_cst);
+    paramEnabled.store(enabled, std::memory_order_seq_cst);
 }
 
 void TonePolish::updateCoefficients()
@@ -72,12 +78,15 @@ void TonePolish::processBlock(juce::AudioBuffer<float>& buffer)
     if (! paramPrepared.load(std::memory_order_acquire))
         return;
 
-    if (! paramEnabled.load(std::memory_order_acquire))
+    // seq_cst load pairs with the seq_cst store in setEnabled() so the
+    // paramNeedsReset flag written before paramEnabled is always visible
+    // before we observe paramEnabled == true.
+    if (! paramEnabled.load(std::memory_order_seq_cst))
         return;
 
     // Clear stale IIR delay-line state on re-enable so the first active block
     // starts clean and does not produce a click at the bypass boundary.
-    if (paramNeedsReset.exchange(false, std::memory_order_acq_rel))
+    if (paramNeedsReset.exchange(false, std::memory_order_seq_cst))
         reset();
 
     const int numChannels = buffer.getNumChannels();
