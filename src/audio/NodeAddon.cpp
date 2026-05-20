@@ -27,7 +27,20 @@ static void cancelAllPendingLoads();
 
 #include <juce_events/juce_events.h>
 
-static std::unique_ptr<AudioEngine> engine;
+// shared_ptr (parallel to vstHost) so a worker thread can take a stable
+// snapshot for the duration of its work and not race the message-thread
+// reset. Most existing call sites still touch the global directly — that's
+// a pre-existing concern across the codebase; LoadVSTWorker::Execute uses
+// the snapshotEngine helper below to make at least the new async path race-
+// free during shutdown.
+static std::shared_ptr<AudioEngine> engine;
+static std::mutex engineMutex;
+
+static std::shared_ptr<AudioEngine> snapshotEngine()
+{
+    std::lock_guard<std::mutex> lock(engineMutex);
+    return engine;
+}
 // shared_ptr (not unique_ptr) so async-load lambdas + their JUCE
 // createPluginInstanceAsync continuations can hold a reference for the
 // duration of the load. Without that, a shutdown that runs vstHost.reset()
@@ -142,7 +155,10 @@ static Napi::Value Init(const Napi::CallbackInfo& info)
 
     // Create engine on the JUCE message thread (or inline on macOS)
     dispatchOnMessageThread([]() {
-        engine = std::make_unique<AudioEngine>();
+        {
+            std::lock_guard<std::mutex> lock(engineMutex);
+            engine = std::make_shared<AudioEngine>();
+        }
         {
             std::lock_guard<std::mutex> lock(vstHostMutex);
             vstHost = std::make_shared<VSTHost>();
@@ -189,7 +205,11 @@ static void doShutdown()
     if (juceRunning.load() || engine || snapshotVstHost())
     {
         dispatchOnMessageThread([]() {
-            if (engine) { engine->stopAudio(); engine.reset(); }
+            if (engine) { engine->stopAudio(); }
+            {
+                std::lock_guard<std::mutex> lock(engineMutex);
+                engine.reset();
+            }
             {
                 std::lock_guard<std::mutex> lock(vstHostMutex);
                 vstHost.reset();
@@ -1392,22 +1412,28 @@ public:
 
     void Execute() override
     {
-        // Check the atomic shutdown flag before any global pointer reads.
-        // engine is a unique_ptr reset on the message thread; once
-        // alreadyShutDown is true that reset is on its way (or already
-        // ran), so the raw deref below would race. The atomic flag is the
-        // authoritative "should I still be touching engine?" signal.
-        // vstHost is read via the mutex-protected snapshot helper (see the
-        // vstHost decl comment).
-        if (alreadyShutDown.load(std::memory_order_acquire)
-            || !engine || !snapshotVstHost())
+        // Snapshot engine + vstHost through their mutex-protected helpers so
+        // shutdown's reset on the message thread can't race the worker's
+        // dereferences below. The shared_ptr locals keep both objects alive
+        // for the duration of this worker even if the globals get reset
+        // mid-load. The atomic alreadyShutDown gate is the early-out: once
+        // it's set, the dispatched reset is on its way and there's no point
+        // continuing.
+        if (alreadyShutDown.load(std::memory_order_acquire))
+        {
+            error_ = "engine not initialised";
+            return;
+        }
+        auto engineKeeper = snapshotEngine();
+        auto hostSnap     = snapshotVstHost();
+        if (!engineKeeper || !hostSnap)
         {
             error_ = "engine not initialised";
             return;
         }
 
-        const auto sr = engine->getCurrentSampleRate();
-        const auto bs = engine->getCurrentBlockSize();
+        const auto sr = engineKeeper->getCurrentSampleRate();
+        const auto bs = engineKeeper->getCurrentBlockSize();
         const auto path = juce::String(pluginPath_);
         VST_TRACE("LoadVSTWorker: path='%s' sr=%.0f bs=%d",
                   pluginPath_.c_str(), sr, bs);
@@ -1444,15 +1470,25 @@ public:
         // dispatched reset of engine/vstHost is on its way and any use of
         // the pointers from this worker thread is racy. The atomic check is
         // the authoritative "should I still be touching engine?" signal.
-        if (alreadyShutDown.load(std::memory_order_acquire)
-            || !engine || !snapshotVstHost())
+        if (alreadyShutDown.load(std::memory_order_acquire))
+        {
+            error_ = "engine torn down during load";
+            return;
+        }
+        // Re-snapshot the engine — the original engineKeeper might have
+        // outlived a reset on the message thread, but the AudioEngine
+        // we're about to mutate must be the still-installed one. If the
+        // global has been reset, the local keeps the old engine alive but
+        // we shouldn't be adding slots to it any more.
+        auto liveEngine = snapshotEngine();
+        if (!liveEngine || !snapshotVstHost())
         {
             error_ = "engine torn down during load";
             return;
         }
 
         auto name = processor->getName();
-        slotId_ = engine->getSignalChain().addProcessor(
+        slotId_ = liveEngine->getSignalChain().addProcessor(
             std::move(processor),
             ProcessorSlot::Type::VST,
             name,
