@@ -366,18 +366,18 @@ export function initAudioBridge(): void {
 
     // ── Signal Chain ───────────────────────────────────────────────────────
 
-    ipcMain.handle('audio:loadVST', (_event, pluginPath: string) => {
-        // Bracket the in-process load with the crash sentinel. The sentinel
-        // detects a hard process abort: loadVST is synchronous, so a fault
-        // means this call never returns and the `finally` never runs, leaving
-        // the sentinel for the next startup to find. Any normal return OR a
-        // thrown JS exception (loadVST throws on a required-sandbox spawn
-        // failure — a clean error, not a crash) means the process survived,
-        // so disarm in `finally` to avoid a false blocklist entry.
+    ipcMain.handle('audio:loadVST', async (_event, pluginPath: string) => {
+        // Bracket the in-process load with the crash sentinel. The native
+        // loadVST is now a Napi::AsyncWorker that returns a Promise<number>;
+        // a hard abort during the load means the awaiting handler never
+        // resumes and the sentinel survives for the next startup. Any
+        // normal resolve OR a thrown JS exception (the worker rejects on a
+        // required-sandbox spawn failure) means the process survived, so
+        // disarm in `finally` to avoid a false blocklist entry.
         armSentinel(pluginPath, 'load');
         let slotId = -1;
         try {
-            slotId = audio?.loadVST(pluginPath) ?? -1;
+            slotId = (await audio?.loadVST(pluginPath)) ?? -1;
         } finally {
             disarmSentinel();
         }

@@ -1126,14 +1126,24 @@ static Napi::Value SetCrashedPlugins(const Napi::CallbackInfo& info)
 
 // Load a VST3, routing it through the out-of-process sandbox when
 // shouldSandbox() says so (the filename pre-seed or the runtime crash
-// blocklist), otherwise loading it in-process on the JUCE message thread.
+// blocklist), otherwise loading it in-process. The in-process load uses
+// VSTHost::loadPluginAsync so the JUCE message thread keeps pumping during
+// the plugin's init — critical for plugins like AmpliTube that post WM_USER
+// / WM_TIMER messages to themselves while initialising. The sync
+// createPluginInstance would block the pump, those self-messages would
+// queue forever, and the plugin would end up half-wired (a pointer that
+// only gets written by a queued message stays null, and the editor crashes
+// on its first WindowProc dispatch — the AmpliTube failure signature).
+//
+// MUST be called from a libuv worker thread (NOT the JS main thread, NOT
+// the JUCE message thread). Block-waiting for the load on the message
+// thread would deadlock — the work has to happen there. Block-waiting on
+// the JS main thread would freeze Electron's UI.
 //
 // On a *required*-sandbox failure (the plugin matched shouldSandbox but the
 // sandbox couldn't spawn) this returns nullptr with `error` set and
 // `sandboxRequired` true, so the caller can choose how to surface it —
-// LoadVST throws to JS, LoadPreset just skips the slot. Used by both so a
-// crash-blocklisted plugin can never sneak back in-process via preset
-// restore.
+// LoadVSTWorker throws to JS, LoadPresetWorker just skips the slot.
 static std::unique_ptr<juce::AudioProcessor> loadVstSandboxAware(
     const juce::String& pluginPath, double sr, int bs,
     juce::String& error, bool& sandboxRequired)
@@ -1161,77 +1171,145 @@ static std::unique_ptr<juce::AudioProcessor> loadVstSandboxAware(
         return processor;
     }
 
-    // In-process JUCE load. Instantiate on the JUCE message thread for the
-    // COM-apartment reason documented in VSTHost::loadPlugin.
+    // In-process: kick off createPluginInstanceAsync on the message thread,
+    // block *this* (libuv worker) thread on a WaitableEvent until the load
+    // callback fires. The message thread keeps pumping during the wait so
+    // the plugin's self-posted init messages dispatch and its state finishes
+    // wiring up before the editor is ever opened.
     //
-    // dispatchOnMessageThread can return on its 15 s timeout while the lambda
-    // is still queued, so the lambda must not capture this (possibly unwound)
-    // stack frame by reference. Route the result through shared_ptrs that
-    // outlive both the caller and a late-running lambda.
-    auto instance = std::make_shared<std::unique_ptr<juce::AudioPluginInstance>>();
+    // All state passed across the thread hop is held by shared_ptr so it
+    // outlives the lambda even on an unexpected destructor / scope exit.
+    auto instance  = std::make_shared<std::unique_ptr<juce::AudioPluginInstance>>();
     auto loadError = std::make_shared<juce::String>();
-    dispatchOnMessageThread([pluginPath, sr, bs, instance, loadError]() {
-        if (vstHost)
-            *instance = vstHost->loadPlugin(pluginPath, sr, bs, *loadError);
-    });
+    auto done      = std::make_shared<juce::WaitableEvent>();
+
+    juce::MessageManager::callAsync(
+        [pluginPath, sr, bs, instance, loadError, done]()
+        {
+            if (! vstHost)
+            {
+                *loadError = "vstHost not initialised";
+                done->signal();
+                return;
+            }
+            vstHost->loadPluginAsync(
+                pluginPath, sr, bs,
+                [instance, loadError, done]
+                (std::unique_ptr<juce::AudioPluginInstance> inst, juce::String err)
+                {
+                    *instance  = std::move(inst);
+                    *loadError = std::move(err);
+                    done->signal();
+                });
+        });
+
+    // No timeout: createPluginInstanceAsync is genuinely async (the message
+    // thread keeps pumping), so a slow first-run plugin (e.g. one doing a
+    // license check that exceeds 15 s) is allowed to take however long it
+    // takes. The old 15-second timeout in dispatchOnMessageThread could
+    // return early while the lambda was still running, then the lambda
+    // would construct a fully-initialised plugin only for it to immediately
+    // destruct because no one held a reference — running VST teardown on
+    // the message thread while the user had already moved on. That race is
+    // gone with this design.
+    done->wait();
     error = *loadError;
     return std::move(*instance);
 }
 
-static Napi::Value LoadVST(const Napi::CallbackInfo& info)
+// AsyncWorker wrapper for LoadVST. Execute() runs on a libuv worker thread,
+// so loadVstSandboxAware can block-wait on the async load without freezing
+// the JS main thread or deadlocking the JUCE message thread.
+class LoadVSTWorker : public Napi::AsyncWorker
 {
-    auto env = info.Env();
-    if (!engine || !vstHost || info.Length() < 1)
-        return Napi::Number::New(env, -1);
+public:
+    LoadVSTWorker(Napi::Env env, Napi::Promise::Deferred deferred, std::string path)
+        : Napi::AsyncWorker(env)
+        , deferred_(deferred)
+        , pluginPath_(std::move(path)) {}
 
-    auto pluginPath = info[0].As<Napi::String>().Utf8Value();
-    int slotId = -1;
-
-    juce::String error;
-    std::unique_ptr<juce::AudioProcessor> processor;
-    auto sr = engine->getCurrentSampleRate();
-    auto bs = engine->getCurrentBlockSize();
-    VST_TRACE("LoadVST: path='%s' sr=%.0f bs=%d", pluginPath.c_str(), sr, bs);
-
-    // Load via the shared sandbox-aware path: shouldSandbox() routes denylist
-    // / crash-blocklist plugins out-of-process, everything else in-process.
-    bool sandboxRequired = false;
-    processor = loadVstSandboxAware(juce::String(pluginPath), sr, bs,
-                                    error, sandboxRequired);
-
-    // If the plugin is on the denylist, sandboxing is *required* — falling
-    // back to in-process is what crashed the addon to begin with. Surface the
-    // failure to the caller by throwing.
-    if (sandboxRequired && !processor)
+    void Execute() override
     {
-        // Mirror the in-process load's stderr format so a JS test harness or
-        // Electron renderer sees the same diagnostics regardless of path.
-        fprintf(stderr, "[LoadVST] Failed: %s\n", error.toRawUTF8());
-        // Throw a Napi::Error so the JS caller gets the actual sandbox-spawn
-        // diagnostic instead of an opaque -1. Renderers must `try/catch
-        // addon.loadVST(...)` to handle this path. Invariant: this `return`
-        // MUST happen before any engine->getSignalChain() mutation — the
-        // throw marks the napi call as having thrown, so any chain mutation
-        // between here and return would leave a dangling slot while JS sees
-        // an exception. The Napi::Number::New only satisfies the signature.
-        Napi::Error::New(env, error.toStdString())
-            .ThrowAsJavaScriptException();
-        return Napi::Number::New(env, -1);
-    }
+        if (!engine || !vstHost)
+        {
+            error_ = "engine not initialised";
+            return;
+        }
 
-    if (processor)
-    {
+        const auto sr = engine->getCurrentSampleRate();
+        const auto bs = engine->getCurrentBlockSize();
+        const auto path = juce::String(pluginPath_);
+        VST_TRACE("LoadVSTWorker: path='%s' sr=%.0f bs=%d",
+                  pluginPath_.c_str(), sr, bs);
+
+        bool sandboxRequired = false;
+        juce::String err;
+        auto processor = loadVstSandboxAware(path, sr, bs, err, sandboxRequired);
+
+        if (sandboxRequired && !processor)
+        {
+            // The plugin's on the denylist and the sandbox couldn't spawn —
+            // falling back to in-process is what crashed the addon to begin
+            // with. Surface as a JS exception (handled in OnOK).
+            fprintf(stderr, "[LoadVST] Failed: %s\n", err.toRawUTF8());
+            error_ = err;
+            sandboxFailed_ = true;
+            return;
+        }
+
+        if (!processor)
+        {
+            fprintf(stderr, "[LoadVST] Failed: %s\n", err.toRawUTF8());
+            error_ = err;
+            return;
+        }
+
         auto name = processor->getName();
-        slotId = engine->getSignalChain().addProcessor(
+        slotId_ = engine->getSignalChain().addProcessor(
             std::move(processor),
             ProcessorSlot::Type::VST,
             name,
-            juce::String(pluginPath));
+            path);
     }
-    else
-        fprintf(stderr, "[LoadVST] Failed: %s\n", error.toRawUTF8());
 
-    return Napi::Number::New(env, slotId);
+    void OnOK() override
+    {
+        if (sandboxFailed_)
+        {
+            // Match the prior LoadVST throw-on-required-sandbox-failure
+            // behaviour so renderers' try/catch keeps working.
+            deferred_.Reject(
+                Napi::Error::New(Env(), error_.toStdString()).Value());
+            return;
+        }
+        deferred_.Resolve(Napi::Number::New(Env(), slotId_));
+    }
+
+    void OnError(const Napi::Error& e) override { deferred_.Reject(e.Value()); }
+
+private:
+    Napi::Promise::Deferred deferred_;
+    std::string pluginPath_;
+    int slotId_ = -1;
+    bool sandboxFailed_ = false;
+    juce::String error_;
+};
+
+static Napi::Value LoadVST(const Napi::CallbackInfo& info)
+{
+    auto env = info.Env();
+    auto deferred = Napi::Promise::Deferred::New(env);
+
+    if (!engine || !vstHost || info.Length() < 1)
+    {
+        deferred.Resolve(Napi::Number::New(env, -1));
+        return deferred.Promise();
+    }
+
+    auto pluginPath = info[0].As<Napi::String>().Utf8Value();
+    auto* worker = new LoadVSTWorker(env, deferred, std::move(pluginPath));
+    worker->Queue();
+    return deferred.Promise();
 }
 
 class LoadNAMWorker : public Napi::AsyncWorker
