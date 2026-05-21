@@ -256,19 +256,27 @@ jobs:
           # Drop the per-user Setup.exe (default vpk output) so only the
           # per-machine MSI ships. Match permissively — the exact name
           # varies between Velopack versions (Slopsmith-win-Setup.exe vs
-          # Slopsmith-win-x64-Setup.exe etc.).
-          shopt -s nullglob
+          # Slopsmith-win-x64-Setup.exe etc.). nocaseglob so a casing
+          # change in vpk's output can't slip an installer past the glob.
+          shopt -s nullglob nocaseglob
           removed=0
-          for f in release/velopack/*Setup.exe; do
+          for f in release/velopack/*setup.exe; do
             echo "Removing per-user installer: $f"
             rm -f "$f"
             removed=$((removed+1))
           done
+          # Enforce the MSI-only policy: hard-fail if any setup installer
+          # survived cleanup (e.g. an rm failure) rather than publishing
+          # two installer types.
+          if compgen -G "release/velopack/*setup.exe" > /dev/null; then
+            echo "::error::Setup.exe artifact(s) remain after cleanup; refusing to publish dual installer types."
+            ls -1 release/velopack/*setup.exe
+            exit 1
+          fi
           if [[ "$removed" -eq 0 ]]; then
-            # Fail loudly rather than silently shipping nothing if vpk's
-            # output naming changes — the workflow assumes a Setup.exe was
-            # there to remove, and 0 matches means the assumption broke.
-            echo "::warning::Expected a *Setup.exe in release/velopack/ to remove, found none. Verify vpk output naming."
+            # MSI-only is the goal — if vpk emits no Setup.exe at all that
+            # is fine, not a failure. Note it in case the naming drifted.
+            echo "::notice::No Setup.exe output from vpk; shipping MSI-only artifacts."
           fi
           # Sanity check: the MSI must exist or the release is meaningless.
           if ! ls release/velopack/*.msi >/dev/null 2>&1; then
