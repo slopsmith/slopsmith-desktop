@@ -34,6 +34,7 @@
 
 import { spawnSync } from 'child_process';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 
 const NSIS_UNINSTALL_REG_KEY = 'HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Slopsmith';
@@ -111,32 +112,72 @@ function waitForUninstall(): boolean {
     return isUninstallKeyGone();
 }
 
-function restoreStub(): void {
+// The root Slopsmith.exe is the Velopack stub/shim — a small standalone
+// launcher that forwards to current\Slopsmith.exe. The NSIS uninstaller
+// deletes that path, so we snapshot the genuine stub BEFORE running the
+// uninstaller (backupStub) and put it back afterward (restoreStub).
+//
+// Copying current\Slopsmith.exe into the stub's place would NOT work: that
+// is the real Electron executable and needs its sibling resources\ (and the
+// other unpacked assets), which do not exist at the install root — the
+// result would be a non-launchable Slopsmith.exe.
+
+function stubPath(): string {
     // process.execPath inside the post-install hook is
     //   C:\Program Files\Slopsmith\current\Slopsmith.exe
-    // (the MSI's "main exe" — the stub at the parent dir forwarded the
-    // launch here). NSIS uninstall deletes the stub path; we put the real
-    // app exe there so the Start Menu shortcut keeps working.
+    // so the stub sits one directory up, at the install root.
+    const rootDir = path.dirname(path.dirname(process.execPath));
+    return path.join(rootDir, 'Slopsmith.exe');
+}
+
+/**
+ * Copy the Velopack stub to a temp file before the NSIS uninstaller runs.
+ * Returns the backup path, or null if there was nothing to back up.
+ */
+function backupStub(): string | null {
     try {
-        const currentDir = path.dirname(process.execPath);
-        const rootDir = path.dirname(currentDir);
-        const stubPath = path.join(rootDir, 'Slopsmith.exe');
-        const appExe = path.join(currentDir, 'Slopsmith.exe');
-        if (fs.existsSync(stubPath)) {
-            // Stub still present; NSIS didn't delete it (this can happen if
-            // the legacy install's file list never tracked root Slopsmith.exe —
-            // unlikely but harmless to skip the copy).
+        const stub = stubPath();
+        if (!fs.existsSync(stub)) return null;
+        const backupPath = path.join(os.tmpdir(), `slopsmith-velopack-stub-${process.pid}.exe`);
+        fs.copyFileSync(stub, backupPath);
+        return backupPath;
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error('[nsis-cleanup] Could not back up Velopack stub:', message);
+        return null;
+    }
+}
+
+/**
+ * Restore the genuine Velopack stub if the NSIS uninstaller deleted it, then
+ * drop the temp backup. Safe on every path — a no-op when the stub is still
+ * present.
+ */
+function restoreStub(backupPath: string | null): void {
+    try {
+        const stub = stubPath();
+        if (fs.existsSync(stub)) {
+            // NSIS didn't delete it — its file list may never have tracked the
+            // root Slopsmith.exe. Nothing to restore.
             return;
         }
-        if (!fs.existsSync(appExe)) {
-            console.error(`[nsis-cleanup] Cannot restore stub: source ${appExe} missing.`);
+        if (!backupPath || !fs.existsSync(backupPath)) {
+            console.error('[nsis-cleanup] Velopack stub was removed and no backup is available to restore it.');
             return;
         }
-        fs.copyFileSync(appExe, stubPath);
-        console.log(`[nsis-cleanup] Restored ${stubPath} from ${appExe}.`);
+        fs.copyFileSync(backupPath, stub);
+        console.log(`[nsis-cleanup] Restored Velopack stub at ${stub}.`);
     } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error('[nsis-cleanup] Stub restoration failed:', message);
+    } finally {
+        if (backupPath) {
+            try {
+                fs.rmSync(backupPath, { force: true });
+            } catch {
+                /* temp-file cleanup is best-effort */
+            }
+        }
     }
 }
 
@@ -155,39 +196,49 @@ export function maybeUninstallLegacyNsis(): void {
     }
 
     console.log(`[nsis-cleanup] Legacy NSIS install detected; running ${uninstaller.exe}`);
+    // Snapshot the Velopack stub before the uninstaller can delete the root
+    // Slopsmith.exe path it occupies.
+    const stubBackup = backupStub();
     try {
-        // NSIS's /S handler spawns a detached temp copy and the original
-        // process returns immediately, so we don't gate on spawnSync's exit
-        // status — waitForUninstall() polling the registry is the real
-        // signal. Set a small timeout so a wedged launch can't burn through
-        // the whole 30s callback budget here.
-        const result = spawnSync(uninstaller.exe, uninstaller.args, {
-            stdio: 'ignore',
-            windowsHide: true,
-            timeout: 5_000,
-        });
-        // spawnSync reports a launch failure (missing/blocked exe, or the
-        // timeout above) via result.error rather than throwing. If the
-        // uninstaller never started there is nothing to poll for — bail now
-        // instead of wasting 25s in waitForUninstall().
-        if (result.error) {
-            console.error('[nsis-cleanup] NSIS uninstaller did not launch:', result.error.message);
-            return;
+        let launched = false;
+        try {
+            // NSIS's /S handler spawns a detached temp copy and the original
+            // process returns immediately, so we don't gate on spawnSync's
+            // exit status — waitForUninstall() polling the registry is the
+            // real signal. Set a small timeout so a wedged launch can't burn
+            // through the whole 30s callback budget here.
+            const result = spawnSync(uninstaller.exe, uninstaller.args, {
+                stdio: 'ignore',
+                windowsHide: true,
+                timeout: 5_000,
+            });
+            // spawnSync reports a launch failure (missing/blocked exe, or the
+            // timeout above) via result.error rather than throwing.
+            if (result.error) {
+                console.error('[nsis-cleanup] NSIS uninstaller did not launch:', result.error.message);
+            } else {
+                launched = true;
+            }
+        } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error('[nsis-cleanup] Failed to launch NSIS uninstaller:', message);
         }
-    } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        console.error('[nsis-cleanup] Failed to launch NSIS uninstaller:', message);
-        return;
-    }
 
-    if (waitForUninstall()) {
-        console.log('[nsis-cleanup] NSIS uninstall complete.');
-    } else {
-        // Couldn't confirm completion within the budget. We still try to
-        // restore the stub — better an unnecessary copy than a missing stub
-        // if the uninstaller did partially succeed.
-        console.warn('[nsis-cleanup] NSIS uninstall did not signal completion within 25s.');
+        // Only poll when the uninstaller actually started — otherwise there
+        // is nothing to wait for.
+        if (launched) {
+            if (waitForUninstall()) {
+                console.log('[nsis-cleanup] NSIS uninstall complete.');
+            } else {
+                // Couldn't confirm completion within the budget — restoreStub()
+                // in the finally still runs, better than a missing stub if the
+                // uninstaller did partially succeed.
+                console.warn('[nsis-cleanup] NSIS uninstall did not signal completion within 25s.');
+            }
+        }
+    } finally {
+        // Put the genuine stub back if NSIS removed it, and drop the temp
+        // backup. No-op restore when the stub is still present.
+        restoreStub(stubBackup);
     }
-
-    restoreStub();
 }
