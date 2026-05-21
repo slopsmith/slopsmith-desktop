@@ -154,12 +154,143 @@ jobs:
         with:
           wait-timeout-minutes: 5
 
+      # Velopack: derive update channel from tag name. Only runs for
+      # tag pushes (refs/tags/v*) on win + mac — Linux still ships via
+      # electron-builder AppImage/deb with no auto-update.
+      #
+      # Channel mapping (plan gotcha #4 — fail on ambiguous tags rather
+      # than silently defaulting to stable, which would publish a
+      # prerelease into the stable feed):
+      #   v1.2.3                 → stable
+      #   v1.2.3-alpha.<n>       → alpha
+      #   v1.2.3-beta.<n>        → beta
+      #   v1.2.3-rc.<n>          → rc
+      #   anything else          → job fails
+      - name: Derive Velopack channel from tag
+        id: velopack_channel
+        if: startsWith(github.ref, 'refs/tags/v') && matrix.platform != 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Read the tag from the runtime env var rather than interpolating a
+          # GitHub Actions workflow expression into the script text — a tag
+          # containing shell syntax could otherwise execute (template injection).
+          tag="${GITHUB_REF_NAME}"
+          if [[ "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-alpha\.[0-9]+$ ]]; then
+            channel=alpha
+            version="${BASH_REMATCH[1]}-alpha.${tag##*-alpha.}"
+          elif [[ "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-beta\.[0-9]+$ ]]; then
+            channel=beta
+            version="${BASH_REMATCH[1]}-beta.${tag##*-beta.}"
+          elif [[ "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-rc\.[0-9]+$ ]]; then
+            channel=rc
+            version="${BASH_REMATCH[1]}-rc.${tag##*-rc.}"
+          elif [[ "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            channel=stable
+            version="${BASH_REMATCH[1]}"
+          else
+            echo "::error::Tag '$tag' does not match a known Velopack channel pattern (vX.Y.Z[-{alpha,beta,rc}.N]). Refusing to default to stable."
+            exit 1
+          fi
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Derived channel=$channel version=$version from tag $tag"
+
+      - name: Install Velopack CLI (vpk)
+        if: steps.velopack_channel.outputs.channel != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Pin vpk to the exact version of the velopack npm SDK used by the
+          # app (package.json) — Velopack ships the CLI and SDK in lockstep,
+          # and an unpinned install would pull a different latest on each run.
+          dotnet tool install -g vpk --version 0.0.1589-ga2c5a97
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+      # Windows: pack the electron-builder unpacked dir into Velopack
+      # release assets (Setup.exe, *-full.nupkg, releases.<ch>.json).
+      # Unsigned for now — see plan gotcha #3.
+      # The channel is rid-scoped (win-x64-<track>): Velopack requires a
+      # unique channel per os/rid so the win + macOS releases.<ch>.json
+      # manifests don't collide when published to one GitHub release.
+      # The client's update-manager.ts builds the same name to match.
+      - name: Velopack pack (Windows)
+        if: matrix.platform == 'win' && steps.velopack_channel.outputs.channel != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          vpk pack \
+            --packId Slopsmith \
+            --packVersion "${{ steps.velopack_channel.outputs.version }}" \
+            --channel "win-x64-${{ steps.velopack_channel.outputs.channel }}" \
+            --packDir release/win-unpacked \
+            -o release/velopack
+
+      # macOS: same, but pass Apple signing identity + notarization
+      # creds so Velopack codesigns + notarizes the bundle it generates
+      # (otherwise Gatekeeper blocks auto-applied updates — plan
+      # gotcha #2). The exact vpk flag names for notarization
+      # (--notaryProfile vs --appleId/--appleTeamId/--appleAppPassword)
+      # vary across vpk versions; the form below targets recent vpk
+      # (>= 0.0.869). If flags differ in the actually-installed vpk,
+      # adjust after the first dry-run tag.
+      # --packDir points directly at the .app bundle: Velopack uses a
+      # path ending in .app as a prebuilt bundle. A non-.app folder
+      # would instead trigger auto-bundle mode (which also needs
+      # --icon). electron-builder's "dir" target writes the bundle to
+      # release/mac-arm64/Slopsmith.app on the arm64 runner.
+      - name: Velopack pack (macOS)
+        if: matrix.platform == 'mac' && steps.velopack_channel.outputs.channel != ''
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          # The signed/notarized branch needs ALL four Apple secrets — vpk
+          # would fail outright if handed an empty --notary* value. If any
+          # is missing (forks, partial secret configs) fall back to an
+          # unsigned pack, matching the all-four check in build-macos.sh.
+          if [[ -z "${APPLE_SIGNING_IDENTITY:-}" || -z "${APPLE_ID:-}" \
+                || -z "${APPLE_APP_SPECIFIC_PASSWORD:-}" \
+                || -z "${APPLE_TEAM_ID:-}" ]]; then
+            echo "::warning::Apple signing/notarization secrets incomplete — packing macOS Velopack release UNSIGNED. Gatekeeper will block auto-updates on user machines."
+            vpk pack \
+              --packId Slopsmith \
+              --packVersion "${{ steps.velopack_channel.outputs.version }}" \
+              --channel "osx-arm64-${{ steps.velopack_channel.outputs.channel }}" \
+              --packDir release/mac-arm64/Slopsmith.app \
+              -o release/velopack
+          else
+            # vpk's macOS codesign + notarize flags. The exact flag
+            # spellings (--signAppIdentity, --notaryAppleId, ...) are
+            # what current Velopack docs show, but the CLI surface has
+            # churned across vpk versions. Verify against
+            # `vpk pack --help` on the runner during the first dry-run
+            # tag and adjust if names differ.
+            vpk pack \
+              --packId Slopsmith \
+              --packVersion "${{ steps.velopack_channel.outputs.version }}" \
+              --channel "osx-arm64-${{ steps.velopack_channel.outputs.channel }}" \
+              --packDir release/mac-arm64/Slopsmith.app \
+              -o release/velopack \
+              --signAppIdentity "$APPLE_SIGNING_IDENTITY" \
+              --notaryAppleId "$APPLE_ID" \
+              --notaryPassword "$APPLE_APP_SPECIFIC_PASSWORD" \
+              --notaryTeamId "$APPLE_TEAM_ID"
+          fi
+
       # macOS only: drop the temporary keychain so a re-run doesn't see
-      # leftover state. always() so this still runs when the build fails.
+      # leftover state. Placed AFTER the Velopack pack steps (which call
+      # codesign + notarytool and need the keychain present on tag builds).
+      # always() ensures cleanup even on Velopack pack failures.
       - name: Clean up signing keychain
         if: always() && matrix.platform == 'mac'
         run: |
           security delete-keychain build.keychain 2>/dev/null || true
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -167,9 +298,9 @@ jobs:
           path: |
             release/*.AppImage
             release/*.deb
-            release/*.dmg
-            release/*.zip
             release/*.exe
+            release/win-unpacked/**/*
+            release/velopack/**/*
           if-no-files-found: warn
 
   release:
@@ -184,13 +315,28 @@ jobs:
         with:
           path: artifacts
 
+      # prerelease: true for -alpha/-beta/-rc suffixes, false for bare
+      # vX.Y.Z stable tags. draft is intentionally NOT set — Velopack
+      # clients can't see draft releases, so the auto-update feed
+      # wouldn't pick anything up if we drafted.
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/*
-          draft: true
+          # Explicitly select only real distributables:
+          # - Linux ships electron-builder .AppImage / .deb
+          # - Windows + macOS ship via Velopack only (release/velopack/**):
+          #   Setup.exe, *-osx.zip, *.nupkg, releases.<channel>.json
+          # win-unpacked/** and a bare *.exe glob are deliberately omitted —
+          # win-unpacked/ is for CI inspection only, and *.exe would also
+          # match win-unpacked/Slopsmith.exe alongside the real Setup.exe.
+          # No electron-builder *.dmg / *.zip globs: macOS is Velopack-only,
+          # so they would match nothing or duplicate the Velopack *-osx.zip.
+          files: |
+            artifacts/**/*.AppImage
+            artifacts/**/*.deb
+            artifacts/**/release/velopack/**/*
           generate_release_notes: true
-          prerelease: true
+          prerelease: ${{ contains(github.ref_name, '-alpha.') || contains(github.ref_name, '-beta.') || contains(github.ref_name, '-rc.') }}
 
   # Mirror release version to slopsmith core
   # Requires SLOPSMITH_SYNC_TOKEN secret

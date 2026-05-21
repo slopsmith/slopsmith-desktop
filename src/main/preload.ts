@@ -4,7 +4,25 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 import type { StartupStatus } from './python';
-import { IPC_STARTUP_STATUS, IPC_STARTUP_GET_STATUS, IPC_STARTUP_REQUEST_STATUS } from './ipc-channels';
+import {
+    IPC_STARTUP_STATUS,
+    IPC_STARTUP_GET_STATUS,
+    IPC_STARTUP_REQUEST_STATUS,
+    IPC_UPDATE_GET_STATUS,
+    IPC_UPDATE_SET_CHANNEL,
+    IPC_UPDATE_CHECK_NOW,
+    IPC_UPDATE_APPLY,
+    IPC_UPDATE_EVENT_AVAILABLE,
+    IPC_UPDATE_EVENT_DOWNLOADED,
+} from './ipc-channels';
+
+// Auto-update channel + event payloads. Kept here (rather than re-exported
+// from update-manager.ts) so the preload bundle doesn't drag in the Velopack
+// SDK — preload runs in a restricted context and we don't want native
+// require()s evaluated here.
+export type UpdateChannel = 'stable' | 'rc' | 'beta' | 'alpha';
+export interface UpdateAvailablePayload { version: string; channel: UpdateChannel }
+export interface UpdateDownloadedPayload { version: string; channel: UpdateChannel }
 
 // Audio sync offset — set as a mutable property via the isolated world bridge.
 // The settings panel reads/writes localStorage and updates this at runtime.
@@ -290,6 +308,28 @@ contextBridge.exposeInMainWorld('slopsmithDesktop', {
             ipcRenderer.on(IPC_STARTUP_STATUS, listener);
             ipcRenderer.send(IPC_STARTUP_REQUEST_STATUS);
             return () => ipcRenderer.removeListener(IPC_STARTUP_STATUS, listener);
+        },
+    },
+
+    // Auto-update (Velopack). The Settings panel reads/writes
+    // localStorage['slopsmith-update-channel'] and mirrors it via setChannel.
+    // Linux short-circuits to { status: "unsupported", platform: "linux" } on
+    // every call — renderer should branch on that and surface a "download
+    // from Releases" note rather than disabling the panel entirely.
+    update: {
+        getStatus: () => ipcRenderer.invoke(IPC_UPDATE_GET_STATUS),
+        setChannel: (channel: UpdateChannel) => ipcRenderer.invoke(IPC_UPDATE_SET_CHANNEL, channel),
+        checkNow: () => ipcRenderer.invoke(IPC_UPDATE_CHECK_NOW),
+        apply: () => ipcRenderer.invoke(IPC_UPDATE_APPLY),
+        onAvailable: (callback: (payload: UpdateAvailablePayload) => void) => {
+            const listener = (_event: unknown, payload: UpdateAvailablePayload) => callback(payload);
+            ipcRenderer.on(IPC_UPDATE_EVENT_AVAILABLE, listener);
+            return () => ipcRenderer.removeListener(IPC_UPDATE_EVENT_AVAILABLE, listener);
+        },
+        onDownloaded: (callback: (payload: UpdateDownloadedPayload) => void) => {
+            const listener = (_event: unknown, payload: UpdateDownloadedPayload) => callback(payload);
+            ipcRenderer.on(IPC_UPDATE_EVENT_DOWNLOADED, listener);
+            return () => ipcRenderer.removeListener(IPC_UPDATE_EVENT_DOWNLOADED, listener);
         },
     },
 });
