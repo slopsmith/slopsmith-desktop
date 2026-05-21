@@ -162,19 +162,25 @@ function backupStub(): string | null {
  * Restore the genuine Velopack stub if the NSIS uninstaller deleted it, then
  * drop the temp backup. Safe on every path — a no-op when the stub is still
  * present.
+ *
+ * @param uninstallSettled true when the NSIS uninstall is confirmed finished
+ *   (or never ran). When false the uninstaller may still be running and could
+ *   delete the stub after we return, so the temp backup is kept for recovery.
  */
-function restoreStub(backupPath: string | null): void {
-    // Only drop the temp backup when it is genuinely no longer needed —
-    // either no restore was required, or the restore copy succeeded. If the
-    // copy throws (disk full, locked file) the backup is the only surviving
-    // copy of the stub, so we keep it for manual recovery.
-    let backupSafeToDelete = false;
+function restoreStub(backupPath: string | null, uninstallSettled: boolean): void {
+    // The temp backup may only be discarded when BOTH:
+    //   - the restore itself is settled (no restore needed, or the copy
+    //     succeeded — a failed copy means the backup is the last surviving
+    //     copy of the stub), and
+    //   - the uninstall is confirmed finished — a still-running NSIS
+    //     uninstaller could delete the stub after this function returns.
+    let restoreSettled = false;
     try {
         const stub = stubPath();
         if (fs.existsSync(stub)) {
             // NSIS didn't delete it — its file list may never have tracked the
             // root Slopsmith.exe. Nothing to restore.
-            backupSafeToDelete = true;
+            restoreSettled = true;
             return;
         }
         if (!backupPath || !fs.existsSync(backupPath)) {
@@ -183,20 +189,19 @@ function restoreStub(backupPath: string | null): void {
         }
         fs.copyFileSync(backupPath, stub);
         console.log(`[nsis-cleanup] Restored Velopack stub at ${stub}.`);
-        backupSafeToDelete = true;
+        restoreSettled = true;
     } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error('[nsis-cleanup] Stub restoration failed:', message);
-        if (backupPath) {
-            console.error(`[nsis-cleanup] Stub backup kept for manual recovery at ${backupPath}`);
-        }
     } finally {
-        if (backupPath && backupSafeToDelete) {
+        if (backupPath && restoreSettled && uninstallSettled) {
             try {
                 fs.rmSync(backupPath, { force: true });
             } catch {
                 /* temp-file cleanup is best-effort */
             }
+        } else if (backupPath) {
+            console.warn(`[nsis-cleanup] Stub backup retained for recovery at ${backupPath}`);
         }
     }
 }
@@ -219,6 +224,10 @@ export function maybeUninstallLegacyNsis(): void {
     // Snapshot the Velopack stub before the uninstaller can delete the root
     // Slopsmith.exe path it occupies.
     const stubBackup = backupStub();
+    // True only once we know nothing further will delete the stub — either
+    // the uninstaller never ran, or it confirmed completion. Drives whether
+    // restoreStub() may discard the temp backup.
+    let uninstallSettled = false;
     try {
         let launched = false;
         try {
@@ -244,21 +253,21 @@ export function maybeUninstallLegacyNsis(): void {
             console.error('[nsis-cleanup] Failed to launch NSIS uninstaller:', message);
         }
 
-        // Only poll when the uninstaller actually started — otherwise there
-        // is nothing to wait for.
-        if (launched) {
-            if (waitForUninstall()) {
-                console.log('[nsis-cleanup] NSIS uninstall complete.');
-            } else {
-                // Couldn't confirm completion within the budget — restoreStub()
-                // in the finally still runs, better than a missing stub if the
-                // uninstaller did partially succeed.
-                console.warn(`[nsis-cleanup] NSIS uninstall did not signal completion within ${POLL_TIMEOUT_MS / 1000}s.`);
-            }
+        if (!launched) {
+            // The uninstaller never ran — the stub is untouched and nothing
+            // will delete it.
+            uninstallSettled = true;
+        } else if (waitForUninstall()) {
+            console.log('[nsis-cleanup] NSIS uninstall complete.');
+            uninstallSettled = true;
+        } else {
+            // Timed out — the uninstaller may still be running and could
+            // delete the stub after we return, so the backup must be kept.
+            console.warn(`[nsis-cleanup] NSIS uninstall did not signal completion within ${POLL_TIMEOUT_MS / 1000}s.`);
         }
     } finally {
-        // Put the genuine stub back if NSIS removed it, and drop the temp
-        // backup. No-op restore when the stub is still present.
-        restoreStub(stubBackup);
+        // Put the genuine stub back if NSIS removed it. The temp backup is
+        // discarded only when the uninstall is confirmed settled.
+        restoreStub(stubBackup, uninstallSettled);
     }
 }
