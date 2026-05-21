@@ -3597,7 +3597,16 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
             restartBtn.disabled = true;
             restartBtn.textContent = 'Restarting…';
             try {
-                await updateApi.apply();
+                // apply() can resolve with { status: 'error' } instead of
+                // throwing. On success the app quits, so reaching past this
+                // with a non-error status is fine — only an error result
+                // needs the button re-enabled for a retry.
+                const result = await updateApi.apply();
+                if (result?.status === 'error') {
+                    console.warn('[updater] apply returned error:', result.message || 'unknown');
+                    restartBtn.disabled = false;
+                    restartBtn.textContent = 'Restart now';
+                }
             } catch (e) {
                 console.warn('[updater] apply failed:', e);
                 restartBtn.disabled = false;

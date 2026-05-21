@@ -26,7 +26,7 @@
 //     `AllowDowngrade`; the actual key in the typings is the longer name) +
 //     `ExplicitChannel` (matches the plan).
 
-import { BrowserWindow } from 'electron';
+import { app, BrowserWindow } from 'electron';
 import type { UpdateInfo } from 'velopack';
 
 export type UpdateChannel = 'stable' | 'rc' | 'beta' | 'alpha';
@@ -294,9 +294,13 @@ export async function checkNow(): Promise<UpdateStatus> {
 }
 
 /**
- * Apply the downloaded update and restart the app. Velopack will exit the
- * current process, swap binaries, and re-launch. Returns immediately because
- * by the time the swap is done this process is gone.
+ * Apply the downloaded update and restart the app. waitExitThenApplyUpdate()
+ * launches the Velopack updater and tells it to wait for THIS process to
+ * exit — it does NOT exit us. We must quit the app ourselves; the updater
+ * then swaps binaries and relaunches. It only waits ~60s for our exit, so we
+ * quit promptly (on the next tick, so this IPC call can return first).
+ * activeState is left at 'downloaded' so that if the quit is vetoed or
+ * delayed the restart banner stays visible for a retry.
  */
 export function applyAndRestart(): UpdateStatus {
     if (isLinux) {
@@ -321,13 +325,20 @@ export function applyAndRestart(): UpdateStatus {
             message: 'No update is ready to apply',
         };
     }
-    // silent=false (show Velopack's restart UI on Windows), restart=true.
-    // If waitExitThenApplyUpdate returns (i.e. the app does NOT immediately
-    // restart — e.g. on macOS the launcher re-opens in a new process rather
-    // than in-place), transition activeState so we don't leave the UI stuck
-    // in "downloaded" state. 'idle' is the safest no-op fallback.
-    velopackUm.waitExitThenApplyUpdate(pending, false, true);
-    activeState = 'idle';
+    try {
+        // silent=false (show Velopack's restart UI on Windows), restart=true.
+        velopackUm.waitExitThenApplyUpdate(pending, false, true);
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error('[update-manager] applyAndRestart failed:', message);
+        lastError = message;
+        activeState = 'error';
+        return getStatus();
+    }
+    // The Velopack updater is now waiting for this process to exit (~60s
+    // budget). Quit on the next tick so this IPC call returns to the renderer
+    // first; activeState stays 'downloaded' until the process actually exits.
+    setImmediate(() => app.quit());
     return getStatus();
 }
 

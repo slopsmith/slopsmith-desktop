@@ -165,7 +165,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tag="${{ github.ref_name }}"
+          # Read the tag from the runtime env var, not a ${{ }} expansion —
+          # interpolating github.ref_name into the script text would let a
+          # tag containing shell syntax execute as code (template injection).
+          tag="${GITHUB_REF_NAME}"
           if [[ "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-alpha\.[0-9]+$ ]]; then
             channel=alpha
             version="${BASH_REMATCH[1]}-alpha.${tag##*-alpha.}"
@@ -191,7 +194,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          dotnet tool install -g vpk
+          # Pin vpk to the exact version of the velopack npm SDK used by the
+          # app (package.json) — Velopack ships the CLI and SDK in lockstep,
+          # and an unpinned install would pull a different latest on each run.
+          dotnet tool install -g vpk --version 0.0.1589-ga2c5a97
           echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
 
       # Windows: pack the electron-builder unpacked dir into Velopack
