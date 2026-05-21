@@ -974,7 +974,18 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
             console.warn('[updater] setChannel(initial) threw:', e);
         }
 
-        channelSelect.addEventListener('change', () => {
+        // setupUpdateChannelControls() re-runs if screen.js is re-evaluated.
+        // Drop the change/click handlers a previous evaluation bound (a no-op
+        // if the element was replaced) so they don't stack into duplicate
+        // setChannel()/checkNow() IPC calls per user action.
+        if (hookState.updateChannelOnChange) {
+            channelSelect.removeEventListener('change', hookState.updateChannelOnChange);
+        }
+        if (hookState.updateCheckOnClick) {
+            checkBtn.removeEventListener('click', hookState.updateCheckOnClick);
+        }
+
+        const onChannelChange = () => {
             const val = channelSelect.value;
             if (!VALID_CHANNELS.includes(val)) return;
             try { localStorage.setItem('slopsmith-update-channel', val); } catch (_) {}
@@ -986,9 +997,11 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                 console.warn('[updater] setChannel threw:', e);
             }
             renderStatus(`Channel set to ${val}.`);
-        });
+        };
+        channelSelect.addEventListener('change', onChannelChange);
+        hookState.updateChannelOnChange = onChannelChange;
 
-        checkBtn.addEventListener('click', async () => {
+        const onCheckClick = async () => {
             checkBtn.disabled = true;
             statusEl.textContent = 'Checking for updates…';
             // Track whether we should re-enable the button in finally. On
@@ -1028,7 +1041,9 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
             } finally {
                 if (reEnableBtn) checkBtn.disabled = false;
             }
-        });
+        };
+        checkBtn.addEventListener('click', onCheckClick);
+        hookState.updateCheckOnClick = onCheckClick;
 
         renderStatus();
     }
@@ -3549,6 +3564,16 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
 
     const BANNER_ID = 'slopsmith-update-banner';
 
+    // This IIFE re-runs if screen.js is re-evaluated. onDownloaded() returns an
+    // unsubscribe fn — drop the listener a previous evaluation registered so
+    // they don't pile up (renderUpdateBanner() de-dupes the DOM node, but the
+    // listeners themselves would still leak).
+    const hookState = window.__slopsmithDesktopAudioHooks;
+    if (typeof hookState.updateBannerUnsub === 'function') {
+        try { hookState.updateBannerUnsub(); } catch (_) { /* defensive */ }
+        hookState.updateBannerUnsub = null;
+    }
+
     function renderUpdateBanner(payload) {
         // Avoid stacking duplicate banners if onDownloaded fires more than once.
         if (document.getElementById(BANNER_ID)) return;
@@ -3643,13 +3668,14 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
     }
 
     try {
-        updateApi.onDownloaded((payload) => {
+        const unsub = updateApi.onDownloaded((payload) => {
             try {
                 renderUpdateBanner(payload);
             } catch (e) {
                 console.warn('[updater] renderUpdateBanner failed:', e);
             }
         });
+        if (typeof unsub === 'function') hookState.updateBannerUnsub = unsub;
     } catch (e) {
         console.warn('[updater] onDownloaded subscribe failed:', e);
     }

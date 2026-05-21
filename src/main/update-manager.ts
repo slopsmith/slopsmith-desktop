@@ -183,6 +183,10 @@ export function setChannel(channel: UpdateChannel): void {
     currentChannel = channel;
     pendingVersion = null;
     pendingDownloaded = null;
+    // Reset lastChecked too: until the immediate checkNow() below completes,
+    // getStatus() should not report a stale "last checked" time that belongs
+    // to the previous channel's feed.
+    lastChecked = null;
     lastError = null;
     activeState = 'idle';
     // Bump the generation counter so any still-running check from the old
@@ -192,6 +196,14 @@ export function setChannel(channel: UpdateChannel): void {
     // the old (stale) promise.
     checkGeneration++;
     inFlightCheck = null;
+    // The immediate checkNow() below supersedes init()'s pending boot check.
+    // The renderer calls setChannel() on boot to sync the persisted channel,
+    // so without this a non-stable channel would fire a second redundant
+    // network check ~30s later when initialCheckTimer elapses.
+    if (initialCheckTimer) {
+        clearTimeout(initialCheckTimer);
+        initialCheckTimer = null;
+    }
     try {
         createManager(channel);
     } catch (err) {
