@@ -103,12 +103,14 @@ function veloChannel(track: UpdateChannel): string {
 }
 
 function createManager(channel: UpdateChannel): void {
-    // Note: main.ts already requires('velopack') unconditionally at the top
-    // for the VelopackApp startup hook; if that require fails the app exits
-    // before reaching here. The lazy require here is specifically to protect
-    // against a constructor-level failure (e.g. bad options, corrupted state
-    // dir) being thrown inside init()/setChannel() — callers catch that throw
-    // and transition to the 'error' state rather than crashing the whole process.
+    // main.ts runs the Velopack startup hook (require('velopack') +
+    // VelopackApp.build().run()) on win/mac before anything else. This lazy
+    // require is a second layer of safety: a constructor-level failure here
+    // (bad options, corrupted state dir) — or a velopack load failure that
+    // main.ts caught and logged rather than crashed on — is surfaced as the
+    // 'error' state by init()/setChannel() instead of crashing the process.
+    // createManager() is only ever reached on win/mac (init()/setChannel()
+    // short-circuit on Linux), so the require is safe to run here.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { UpdateManager } = require('velopack') as typeof import('velopack');
     velopackUm = new UpdateManager(FEED_URL, {
@@ -236,9 +238,24 @@ export async function checkNow(): Promise<UpdateStatus> {
         lastChecked = Date.now();
         lastError = null;
         if (!info) {
-            activeState = 'idle';
-            pendingVersion = null;
-            pendingDownloaded = null;
+            // No release newer than what's installed. But an update may
+            // already be downloaded and staged — by a prior session
+            // (hydrated in init()) or an earlier check this session.
+            // getUpdatePendingRestart() is the source of truth: a null
+            // checkForUpdatesAsync() result does NOT mean "nothing pending"
+            // (Velopack won't re-report an update already on disk), so
+            // clearing pending state here would wrongly drop the restart
+            // banner. Preserve it whenever a staged update still exists.
+            const stillPending = um.getUpdatePendingRestart();
+            if (stillPending) {
+                pendingVersion = stillPending.Version;
+                pendingDownloaded = { version: stillPending.Version };
+                activeState = 'downloaded';
+            } else {
+                activeState = 'idle';
+                pendingVersion = null;
+                pendingDownloaded = null;
+            }
             return getStatus();
         }
         const targetVersion = info.TargetFullRelease.Version;

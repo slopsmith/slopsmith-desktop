@@ -8,10 +8,20 @@
 // it relaunches our exe with those flags; `VelopackApp.build().run()` is what
 // detects them, runs the appropriate hook, and exits. If the hook doesn't
 // run first the bootstrapper silently breaks install/upgrade flows.
-// On macOS + Linux this is effectively a no-op (the hook just returns).
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const { VelopackApp } = require('velopack') as typeof import('velopack');
-VelopackApp.build().run();
+// On macOS the hook just returns (no-op).
+// Linux has no Velopack pipeline (electron-builder AppImage/deb only), so the
+// native module is never needed there — skip the require entirely so loading
+// it on an unsupported platform can never crash startup. On win/mac a load
+// failure is also caught: a broken updater is recoverable, a dead app is not.
+if (process.platform !== 'linux') {
+    try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { VelopackApp } = require('velopack') as typeof import('velopack');
+        VelopackApp.build().run();
+    } catch (err) {
+        console.error('[main] Velopack startup hook failed:', err);
+    }
+}
 // ──────────────────────────────────────────────────────────────────────────
 
 import { app, BrowserWindow, ipcMain, dialog, shell, session, crashReporter } from 'electron';
