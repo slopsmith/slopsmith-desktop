@@ -174,10 +174,15 @@ $ErrorActionPreference = 'Continue'
 # delete the locked Slopsmith.exe.
 Start-Sleep -Seconds 3
 ${uninstallBlock}
-# Install the new MSI. /qb shows a basic progress UI (better than /quiet
-# which gives zero feedback during what can be a 30-60s install).
+# Run the MSI with full UI (no /q flag). vpk 0.0.1589-ga2c5a97 has a
+# silent-install bug where /qb (and /quiet) honor a build-time-baked
+# default install dir — on a Windows CI runner that's typically D:\<PackId>,
+# stranding files on a non-system drive. Full UI mode runs the wizard's
+# UI sequence which correctly defaults to %ProgramFiles%\Slopsmith. The
+# extra "click Next, click Install" friction is acceptable for a one-time
+# migration. Track upstream issue at github.com/velopack/velopack/issues/872.
 Start-Process -FilePath 'msiexec.exe' \`
-    -ArgumentList '/i',('"' + '${esc(msiPath)}' + '"'),'/qb','/norestart' \`
+    -ArgumentList '/i',('"' + '${esc(msiPath)}' + '"'),'/norestart' \`
     -Wait
 `;
 }
