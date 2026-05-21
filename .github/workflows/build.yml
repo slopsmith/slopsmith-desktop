@@ -298,11 +298,16 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: slopsmith-${{ matrix.platform }}-${{ matrix.arch }}
+          # release/win-unpacked/ is intentionally NOT uploaded: it is the
+          # uncompressed intermediate build tree (~1 GB on Windows) that
+          # Velopack packs into release/velopack/. Uploading it duplicated
+          # the whole app in the artifact and ballooned the Windows artifact
+          # ~6x (0.27 -> 1.58 GiB). The packed velopack/ output is all that
+          # downstream needs. See issue #185.
           path: |
             release/*.AppImage
             release/*.deb
             release/*.exe
-            release/win-unpacked/**/*
             release/velopack/**/*
           if-no-files-found: warn
 
