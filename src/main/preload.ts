@@ -12,6 +12,8 @@ import {
     IPC_UPDATE_SET_CHANNEL,
     IPC_UPDATE_CHECK_NOW,
     IPC_UPDATE_APPLY,
+    IPC_UPDATE_EVENT_AVAILABLE,
+    IPC_UPDATE_EVENT_DOWNLOADED,
 } from './ipc-channels';
 
 // Auto-update channel + event payloads. Kept here (rather than re-exported
@@ -321,13 +323,13 @@ contextBridge.exposeInMainWorld('slopsmithDesktop', {
         apply: () => ipcRenderer.invoke(IPC_UPDATE_APPLY),
         onAvailable: (callback: (payload: UpdateAvailablePayload) => void) => {
             const listener = (_event: unknown, payload: UpdateAvailablePayload) => callback(payload);
-            ipcRenderer.on('update:available', listener);
-            return () => ipcRenderer.removeListener('update:available', listener);
+            ipcRenderer.on(IPC_UPDATE_EVENT_AVAILABLE, listener);
+            return () => ipcRenderer.removeListener(IPC_UPDATE_EVENT_AVAILABLE, listener);
         },
         onDownloaded: (callback: (payload: UpdateDownloadedPayload) => void) => {
             const listener = (_event: unknown, payload: UpdateDownloadedPayload) => callback(payload);
-            ipcRenderer.on('update:downloaded', listener);
-            return () => ipcRenderer.removeListener('update:downloaded', listener);
+            ipcRenderer.on(IPC_UPDATE_EVENT_DOWNLOADED, listener);
+            return () => ipcRenderer.removeListener(IPC_UPDATE_EVENT_DOWNLOADED, listener);
         },
     },
 });

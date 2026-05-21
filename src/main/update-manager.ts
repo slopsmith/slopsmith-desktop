@@ -28,6 +28,7 @@
 
 import { app, BrowserWindow } from 'electron';
 import type { UpdateInfo } from 'velopack';
+import { IPC_UPDATE_EVENT_AVAILABLE, IPC_UPDATE_EVENT_DOWNLOADED } from './ipc-channels';
 
 export type UpdateChannel = 'stable' | 'rc' | 'beta' | 'alpha';
 
@@ -98,8 +99,12 @@ function currentVersion(): string | null {
 // is fixed per platform. `vpk pack` in CI publishes manifests under these
 // exact names (win-x64-<track> / osx-arm64-<track>).
 function veloChannel(track: UpdateChannel): string {
-    const rid = process.platform === 'win32' ? 'win-x64' : 'osx-arm64';
-    return `${rid}-${track}`;
+    // The rid is derived from BOTH platform and arch: an x64 (Intel) vs
+    // arm64 macOS build must query its own channel manifest. Hardcoding
+    // osx-arm64 would point an Intel build at the wrong (incompatible) feed.
+    const os = process.platform === 'win32' ? 'win' : 'osx';
+    const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
+    return `${os}-${arch}-${track}`;
 }
 
 function createManager(channel: UpdateChannel): void {
@@ -154,7 +159,7 @@ export function init(channel: UpdateChannel = 'stable'): void {
         pendingDownloaded = { version: v };
         activeState = 'downloaded';
         // Broadcast so any already-open windows show the banner immediately.
-        broadcast('update:downloaded', { version: v, channel: currentChannel });
+        broadcast(IPC_UPDATE_EVENT_DOWNLOADED, { version: v, channel: currentChannel });
     }
     // Kick the first check shortly after launch so we don't compete with the
     // splash/audio-engine bring-up for CPU + network. Store the handle so
@@ -265,7 +270,7 @@ export async function checkNow(): Promise<UpdateStatus> {
         // while the download is in progress.
         pendingVersion = targetVersion;
         activeState = 'downloading';
-        broadcast('update:available', { version: targetVersion, channel: currentChannel });
+        broadcast(IPC_UPDATE_EVENT_AVAILABLE, { version: targetVersion, channel: currentChannel });
         await um.downloadUpdateAsync(info);
         // Re-check generation after the (potentially long) download.
         if (checkGeneration !== myGeneration) {
@@ -273,7 +278,7 @@ export async function checkNow(): Promise<UpdateStatus> {
         }
         pendingDownloaded = { version: targetVersion };
         activeState = 'downloaded';
-        broadcast('update:downloaded', { version: targetVersion, channel: currentChannel });
+        broadcast(IPC_UPDATE_EVENT_DOWNLOADED, { version: targetVersion, channel: currentChannel });
     } catch (err) {
         if (checkGeneration !== myGeneration) {
             return getStatus();
