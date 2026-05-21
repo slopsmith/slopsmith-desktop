@@ -152,7 +152,12 @@ bundle_python_impl() {
 
 # Platform-specific: Return expected artifact patterns
 get_expected_artifacts() {
-    printf "%s\n" "$PROJECT_DIR/release/*.dmg" "$PROJECT_DIR/release/*.zip"
+    # mac.target is "dir": electron-builder writes the unpacked
+    # Slopsmith.app to release/mac-arm64/ (no .dmg/.zip). Velopack's
+    # pack step turns that .app into the actual release assets. Glob
+    # mac*/ so the check also passes for an x64 (mac/) or universal
+    # (mac-universal/) local build — verify_artifacts expands this.
+    printf "%s\n" "$PROJECT_DIR/release/mac*/Slopsmith.app"
 }
 
 # Platform-specific: Bundle system binaries
@@ -261,9 +266,9 @@ bundle_binaries_impl() {
     # vgmstream (download release)
     echo -e "${BLUE}=== Downloading vgmstream-cli ===${NC}"
     curl -sL --fail --retry 5 --retry-delay 5 --retry-all-errors \
-        "https://github.com/vgmstream/vgmstream/releases/latest/download/vgmstream-mac-cli.zip" \
+        "https://github.com/vgmstream/vgmstream/releases/latest/download/vgmstream-mac.zip" \
         -o /tmp/vgmstream.zip
-    echo "Downloaded vgmstream-mac-cli.zip"
+    echo "Downloaded vgmstream-mac.zip"
     unzip -q /tmp/vgmstream.zip -d /tmp/vgmstream
     echo "Extracted to /tmp/vgmstream"
     echo "Contents of /tmp/vgmstream:"

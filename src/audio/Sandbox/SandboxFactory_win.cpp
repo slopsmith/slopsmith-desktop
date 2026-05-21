@@ -9,6 +9,7 @@
 #include <juce_core/juce_core.h>
 #include <cmath>      // std::isfinite, std::lround
 #include <limits>     // std::numeric_limits
+#include <mutex>      // guards the runtime crash blocklist
 #include <vector>     // dynamic buffer for SLOPSMITH_DEV_SANDBOX_PATH
 #include <windows.h> // GetModuleHandleExW / GetModuleFileNameW
 
@@ -33,7 +34,21 @@ namespace {
 //   "FM8", "Absynth", "Maschine", "Monark".
 const juce::StringArray kDefaultNeedsSandboxFilenames = {
     "Guitar Rig",
+    // PolyChrome DSP Graphene — its editor faults (access violation) when
+    // created in-process; the sandbox owns the editor window out-of-process.
+    // This is also the pre-seed for the runtime crash blocklist below: known
+    // offenders never crash anyone, while unknown ones are caught after one
+    // crash by the renderer's VST crash guard and registered via
+    // setCrashedPlugins().
+    "Graphene",
 };
+
+// Runtime crash blocklist: full plugin paths that crashed the app on a
+// previous run, supplied by the renderer's VST crash guard via
+// setCrashedPlugins(). Guarded by a mutex — set once at startup on the addon
+// thread, read by shouldSandbox() on the JUCE message thread.
+std::mutex g_crashedPluginsMutex;
+juce::StringArray g_crashedPlugins;
 
 } // anonymous
 
@@ -126,6 +141,23 @@ bool shouldSandbox(const juce::PluginDescription& desc)
     const auto path = juce::File(desc.fileOrIdentifier);
     if (!path.getFileName().endsWithIgnoreCase(".vst3"))
         return false;
+
+    // Runtime crash blocklist: a plugin that took the app down in-process on
+    // a previous run is routed through the sandbox even if it doesn't match
+    // the filename heuristic below. Compared in canonical full-path form so a
+    // slash-direction or relative/absolute difference between the persisted
+    // path and the one handed to LoadVST can't cause a silent miss.
+    {
+        const std::lock_guard<std::mutex> lock(g_crashedPluginsMutex);
+        const auto canonical = path.getFullPathName();
+        if (g_crashedPlugins.contains(canonical, /*ignoreCase*/ true))
+        {
+            VST_TRACE("shouldSandbox: %s — on the runtime crash blocklist",
+                      desc.fileOrIdentifier.toRawUTF8());
+            return true;
+        }
+    }
+
     const auto basename = path.getFileNameWithoutExtension();
     for (auto& needle : kDefaultNeedsSandboxFilenames)
     {
@@ -179,6 +211,19 @@ std::unique_ptr<juce::AudioProcessor> tryLoadSandboxed(
     cfg.audio.maxBlocks = kAudioMaxBlocks;
 
     return SandboxedProcessor::spawn(cfg, errorOut);
+}
+
+void setCrashedPlugins(const juce::StringArray& pluginPaths)
+{
+    const std::lock_guard<std::mutex> lock(g_crashedPluginsMutex);
+    // Store in canonical full-path form so the shouldSandbox() lookup matches
+    // regardless of slash direction or relative/absolute differences between
+    // the persisted path and the one LoadVST is given.
+    g_crashedPlugins.clearQuick();
+    for (const auto& p : pluginPaths)
+        g_crashedPlugins.add(p.isNotEmpty() ? juce::File(p).getFullPathName() : p);
+    VST_TRACE("setCrashedPlugins: %d plugin(s) on the runtime crash blocklist",
+              g_crashedPlugins.size());
 }
 
 } // namespace slopsmith::sandbox

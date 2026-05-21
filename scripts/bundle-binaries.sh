@@ -126,7 +126,7 @@ else
     done
 
     echo "Downloading vgmstream-cli from GitHub releases..."
-    VGM_ASSET="vgmstream-linux-cli.zip"
+    VGM_ASSET="vgmstream-linux.zip"
     if ! curl -sL --fail --retry 5 --retry-delay 5 --retry-all-errors \
             "https://github.com/vgmstream/vgmstream/releases/latest/download/${VGM_ASSET}" \
             -o /tmp/vgmstream.zip; then

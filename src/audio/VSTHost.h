@@ -48,6 +48,22 @@ public:
         double sampleRate, int blockSize,
         juce::String& errorMessage);
 
+    // Async variant: uses JUCE's createPluginInstanceAsync so the message
+    // thread is free to pump during plugin initialisation. Required for
+    // plugins that post WM_USER / WM_TIMER messages to themselves during
+    // init (AmpliTube, and a class of other DAW-targeted VST3s) — the sync
+    // createPluginInstance would block the pump and the plugin's init never
+    // finishes wiring up internal state, producing a half-wired editor that
+    // crashes on its first WindowProc dispatch.
+    //
+    // Must be called from the JUCE message thread; the callback fires there
+    // too. Callers waiting on the result must do so from a *different*
+    // thread (e.g. a libuv worker) so the message thread can keep pumping.
+    void loadPluginAsync(
+        const juce::String& fileOrIdentifier,
+        double sampleRate, int blockSize,
+        std::function<void(std::unique_ptr<juce::AudioPluginInstance>, juce::String)> callback);
+
     // Persistence
     void savePluginList(const juce::File& xmlFile);
     void loadPluginList(const juce::File& xmlFile);

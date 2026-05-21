@@ -96,8 +96,18 @@ juce::StringArray VSTHost::getDefaultScanDirectories()
     // LV2
     dirs.add(juce::File::getSpecialLocation(juce::File::userHomeDirectory)
              .getChildFile(".lv2").getFullPathName());
-    dirs.add("/usr/lib/lv2");
-    dirs.add("/usr/local/lib/lv2");
+   #if JUCE_64BIT
+    if (juce::File ("/usr/lib64/lv2").exists())
+    {
+        dirs.add("/usr/local/lib64/lv2");
+        dirs.add("/usr/lib64/lv2");
+    }
+    else
+   #endif
+    {
+        dirs.add("/usr/lib/lv2");
+        dirs.add("/usr/local/lib/lv2");
+    }
 #elif JUCE_MAC
     dirs.add(juce::File::getSpecialLocation(juce::File::userHomeDirectory)
              .getChildFile("Library/Audio/Plug-Ins/VST3").getFullPathName());
@@ -349,6 +359,78 @@ std::unique_ptr<juce::AudioPluginInstance> VSTHost::loadPlugin(
     }
 
     return instance;
+}
+
+void VSTHost::loadPluginAsync(
+    const juce::String& fileOrIdentifier,
+    double sampleRate, int blockSize,
+    std::function<void(std::unique_ptr<juce::AudioPluginInstance>, juce::String)> callback)
+{
+    // Same matchedDesc lookup as the sync loadPlugin above. Kept inline
+    // rather than factored out so the two paths can be read independently.
+    juce::PluginDescription matchedDesc;
+    bool found = false;
+    {
+        const juce::ScopedLock sl(listLock);
+        for (auto& desc : knownPlugins.getTypes())
+        {
+            if (desc.fileOrIdentifier == fileOrIdentifier
+                || desc.createIdentifierString() == fileOrIdentifier)
+            {
+                matchedDesc = desc;
+                found = true;
+                break;
+            }
+        }
+    }
+
+    if (!found)
+    {
+        juce::OwnedArray<juce::PluginDescription> descs;
+        for (auto* format : formatManager.getFormats())
+        {
+            const juce::ScopedLock sl(listLock);
+            knownPlugins.scanAndAddFile(fileOrIdentifier, true, descs, *format);
+        }
+        if (descs.isEmpty())
+        {
+            callback(nullptr, "Plugin not found: " + fileOrIdentifier);
+            return;
+        }
+        matchedDesc = *descs[0];
+    }
+
+    VST_TRACE("VSTHost.loadPluginAsync: createPluginInstanceAsync BEGIN  "
+              "name='%s' format='%s' file='%s' sr=%.0f bs=%d",
+              matchedDesc.name.toRawUTF8(),
+              matchedDesc.pluginFormatName.toRawUTF8(),
+              matchedDesc.fileOrIdentifier.toRawUTF8(),
+              sampleRate, blockSize);
+
+    // createPluginInstanceAsync pumps the message thread while the plugin
+    // initialises. The callback fires on the message thread when the load
+    // completes (or fails). Move the user's callback in so a single shared
+    // copy threads through both lambda hops.
+    formatManager.createPluginInstanceAsync(
+        matchedDesc, sampleRate, blockSize,
+        [cb = std::move(callback), name = matchedDesc.name]
+        (std::unique_ptr<juce::AudioPluginInstance> instance, const juce::String& error)
+        {
+            VST_TRACE("VSTHost.loadPluginAsync: createPluginInstanceAsync END    "
+                      "name='%s' instance=%s error='%s'",
+                      name.toRawUTF8(),
+                      instance ? "OK" : "null",
+                      error.toRawUTF8());
+
+            if (!instance)
+            {
+                cb(nullptr,
+                   error.isNotEmpty() ? error
+                                      : juce::String("Failed to create plugin instance"));
+                return;
+            }
+            cb(std::move(instance), {});
+        });
 }
 
 // ── Persistence ───────────────────────────────────────────────────────────────

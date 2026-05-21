@@ -4,7 +4,25 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 import type { StartupStatus } from './python';
-import { IPC_STARTUP_STATUS, IPC_STARTUP_GET_STATUS, IPC_STARTUP_REQUEST_STATUS } from './ipc-channels';
+import {
+    IPC_STARTUP_STATUS,
+    IPC_STARTUP_GET_STATUS,
+    IPC_STARTUP_REQUEST_STATUS,
+    IPC_UPDATE_GET_STATUS,
+    IPC_UPDATE_SET_CHANNEL,
+    IPC_UPDATE_CHECK_NOW,
+    IPC_UPDATE_APPLY,
+    IPC_UPDATE_EVENT_AVAILABLE,
+    IPC_UPDATE_EVENT_DOWNLOADED,
+} from './ipc-channels';
+
+// Auto-update channel + event payloads. Kept here (rather than re-exported
+// from update-manager.ts) so the preload bundle doesn't drag in the Velopack
+// SDK — preload runs in a restricted context and we don't want native
+// require()s evaluated here.
+export type UpdateChannel = 'stable' | 'rc' | 'beta' | 'alpha';
+export interface UpdateAvailablePayload { version: string; channel: UpdateChannel }
+export interface UpdateDownloadedPayload { version: string; channel: UpdateChannel }
 
 // Audio sync offset — set as a mutable property via the isolated world bridge.
 // The settings panel reads/writes localStorage and updates this at runtime.
@@ -58,6 +76,51 @@ export interface ChordScoreResult {
     results: ChordScoreNoteResult[];
 }
 
+// One note in a chart pushed to the engine for continuous verification.
+export interface ChartNote {
+    id: string;        // stable note key (matches the plugin's noteKey)
+    t: number;         // chart time of the onset, seconds
+    s: number;         // string index
+    f: number;         // fret
+    sus: number;       // sustain length, seconds
+    ho?: boolean;      // hammer-on
+    po?: boolean;      // pull-off
+    b?: boolean;       // bend
+    sl?: boolean;      // slide
+    hm?: boolean;      // harmonic
+}
+// The full song chart + scoring context, pushed once per arrangement load.
+export interface ChartUpdate {
+    arrangement?: 'guitar' | 'bass';
+    stringCount?: number;
+    tuningOffsets: number[];
+    capo?: number;
+    pitchCheckCents?: number;
+    harmonicSnr?: number;
+    timingTolerance?: number;  // seconds — half-width of the scoring window
+    notes: ChartNote[];
+}
+// A finalized per-note verdict drained from the engine's NoteVerifier.
+export interface NoteVerdict {
+    id: string;
+    detected: boolean;
+    detectedSongTime: number;
+    centsError: number;
+    snr: number;
+}
+
+// Raw polyphonic transcription from the ML note detector (Basic Pitch).
+export interface DetectedNote {
+    midi: number;       // MIDI pitch, 21..108
+    confidence: number; // note posteriorgram, 0..1
+    onsetMs: number;    // ms since this pitch's onset (large = sustained tail)
+    onsetSeq: number;   // per-pitch onset counter; a change == a new note struck
+}
+export interface NoteDetection {
+    notes: DetectedNote[];
+    sampleRate: number;
+}
+
 contextBridge.exposeInMainWorld('slopsmithDesktop', {
     // Platform detection
     isDesktop: true,
@@ -89,6 +152,8 @@ contextBridge.exposeInMainWorld('slopsmithDesktop', {
         setGain: (which: string, value: number) => ipcRenderer.invoke('audio:setGain', which, value),
         setInputChannel: (channel: number) => ipcRenderer.invoke('audio:setInputChannel', channel),
         setMonitorMute: (mute: boolean) => ipcRenderer.invoke('audio:setMonitorMute', mute),
+        setMonitorMuteSuppressed: (suppressed: boolean) =>
+            ipcRenderer.invoke('audio:setMonitorMuteSuppressed', suppressed),
         isMonitorMuted: () => ipcRenderer.invoke('audio:isMonitorMuted'),
         setNoiseGate: (payload: {
             enabled: boolean;
@@ -96,13 +161,21 @@ contextBridge.exposeInMainWorld('slopsmithDesktop', {
             releaseMs: number;
             depthDb: number;
         }) => ipcRenderer.invoke('audio:setNoiseGate', payload),
+        setTonePolish: (payload: { enabled: boolean }) =>
+            ipcRenderer.invoke('audio:setTonePolish', payload),
 
         // Metering (polled at 60fps from renderer)
         getLevels: () => ipcRenderer.invoke('audio:getLevels'),
         resetPeaks: () => ipcRenderer.invoke('audio:resetPeaks'),
 
-        // Pitch detection (polled)
+        // Pitch detection (polled). Backed by the polyphonic ML detector
+        // (Basic Pitch) when a model is loaded, else the YIN detector —
+        // same result shape either way.
         getPitchDetection: () => ipcRenderer.invoke('audio:getPitchDetection'),
+
+        // Whether the ML note detector (Basic Pitch) is active vs. the YIN
+        // fallback. Resolves false on a downlevel addon.
+        isMlNoteDetection: (): Promise<boolean> => ipcRenderer.invoke('audio:isMlNoteDetection'),
 
         // Current engine sample rate — needed by notedetect's chord
         // scorer to map FFT bins to Hz on the bridge path (no
@@ -119,6 +192,32 @@ contextBridge.exposeInMainWorld('slopsmithDesktop', {
         // can fall back gracefully.
         scoreChord: (ctx: ChordScoreRequest): Promise<ChordScoreResult | null> =>
             ipcRenderer.invoke('audio:scoreChord', ctx),
+
+        // Push the song's note chart into the engine for continuous,
+        // background verification. The notedetect plugin calls this once per
+        // arrangement load; the engine's NoteVerifier thread scores each note
+        // against the live playhead, replacing the renderer's per-tick
+        // scoreChord loop. Resolves null on a downlevel addon (pre-NoteVerifier)
+        // so the caller feature-detects and keeps the old matchNotes path.
+        setChart: (chart: ChartUpdate): Promise<boolean | null> =>
+            ipcRenderer.invoke('audio:setChart', chart),
+
+        // Drain the verdicts the engine's NoteVerifier has finalized since the
+        // last call. Resolves null on a downlevel addon so the caller
+        // feature-detects. The optional (songTime, playing) args push the
+        // renderer's unified, already-corrected playhead — the verifier scores
+        // against this rather than the JUCE backing transport (frozen for
+        // HTML5-routed sloppak songs). Pass them every detect tick.
+        getNoteVerdicts: (songTime?: number, playing?: boolean): Promise<NoteVerdict[] | null> =>
+            ipcRenderer.invoke('audio:getNoteVerdicts', songTime, playing),
+
+        // Raw polyphonic transcription — the ML note detector's full
+        // active-pitch set. Resolves null when the ML detector isn't active
+        // (downlevel addon, ONNX support absent, or no model loaded) so the
+        // caller feature-detects and falls back to getPitchDetection /
+        // scoreChord.
+        detectNotes: (): Promise<NoteDetection | null> =>
+            ipcRenderer.invoke('audio:detectNotes'),
 
         // VST plugins
         scanPlugins: (dirs?: string[]) => ipcRenderer.invoke('audio:scanPlugins', dirs),
@@ -144,6 +243,8 @@ contextBridge.exposeInMainWorld('slopsmithDesktop', {
         getParameters: (slotId: number) => ipcRenderer.invoke('audio:getParameters', slotId),
         setParameter: (slotId: number, paramIndex: number, value: number) =>
             ipcRenderer.invoke('audio:setParameter', slotId, paramIndex, value),
+        setSlotState: (slotId: number, base64State: string): Promise<boolean> =>
+            ipcRenderer.invoke('audio:setSlotState', slotId, base64State),
 
         // MIDI
         sendMidiToSlot: (slotId: number, msgType: number, channel: number, param1: number, param2?: number) =>
@@ -209,6 +310,28 @@ contextBridge.exposeInMainWorld('slopsmithDesktop', {
             ipcRenderer.on(IPC_STARTUP_STATUS, listener);
             ipcRenderer.send(IPC_STARTUP_REQUEST_STATUS);
             return () => ipcRenderer.removeListener(IPC_STARTUP_STATUS, listener);
+        },
+    },
+
+    // Auto-update (Velopack). The Settings panel reads/writes
+    // localStorage['slopsmith-update-channel'] and mirrors it via setChannel.
+    // Linux short-circuits to { status: "unsupported", platform: "linux" } on
+    // every call — renderer should branch on that and surface a "download
+    // from Releases" note rather than disabling the panel entirely.
+    update: {
+        getStatus: () => ipcRenderer.invoke(IPC_UPDATE_GET_STATUS),
+        setChannel: (channel: UpdateChannel) => ipcRenderer.invoke(IPC_UPDATE_SET_CHANNEL, channel),
+        checkNow: () => ipcRenderer.invoke(IPC_UPDATE_CHECK_NOW),
+        apply: () => ipcRenderer.invoke(IPC_UPDATE_APPLY),
+        onAvailable: (callback: (payload: UpdateAvailablePayload) => void) => {
+            const listener = (_event: unknown, payload: UpdateAvailablePayload) => callback(payload);
+            ipcRenderer.on(IPC_UPDATE_EVENT_AVAILABLE, listener);
+            return () => ipcRenderer.removeListener(IPC_UPDATE_EVENT_AVAILABLE, listener);
+        },
+        onDownloaded: (callback: (payload: UpdateDownloadedPayload) => void) => {
+            const listener = (_event: unknown, payload: UpdateDownloadedPayload) => callback(payload);
+            ipcRenderer.on(IPC_UPDATE_EVENT_DOWNLOADED, listener);
+            return () => ipcRenderer.removeListener(IPC_UPDATE_EVENT_DOWNLOADED, listener);
         },
     },
 });

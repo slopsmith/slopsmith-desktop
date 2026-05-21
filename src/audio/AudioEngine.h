@@ -1,8 +1,11 @@
 #pragma once
 #include "NoiseGate.h"
+#include "TonePolish.h"
 #include "SignalChain.h"
 #include "PitchDetector.h"
 #include "ChordScorer.h"
+#include "MlNoteDetector.h"
+#include "NoteVerifier.h"
 #include <juce_audio_devices/juce_audio_devices.h>
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <array>
@@ -19,6 +22,18 @@ public:
     juce::AudioDeviceManager& getDeviceManager() { return deviceManager; }
     SignalChain& getSignalChain() { return signalChain; }
     PitchDetector& getPitchDetector() { return pitchDetector; }
+    MlNoteDetector& getMlNoteDetector() { return mlNoteDetector; }
+
+    // Load the Basic Pitch ONNX model for the polyphonic ML detector. When a
+    // model is loaded, getActiveDetection() / scoreChord() route through it;
+    // otherwise they fall back to the YIN PitchDetector / ChordScorer.
+    bool loadNoteModel(const juce::File& modelFile) { return mlNoteDetector.loadModel(modelFile); }
+    bool hasMlNoteDetector() const { return mlNoteDetector.isAvailable(); }
+
+    // Best current single-note detection: the ML detector's dominant pitch
+    // when a model is loaded, else the YIN detector's latest result. Shape is
+    // identical either way so the getPitchDetection bridge is detector-agnostic.
+    PitchDetector::Detection getActiveDetection() const;
 
     // Device enumeration
     struct DeviceTypeInfo
@@ -82,8 +97,22 @@ public:
     void setMonitorMute(bool mute) { monitorMuted.store(mute); }
     bool isMonitorMuted() const { return monitorMuted.load(); }
 
+    // Monitor-mute suppression — when true, the monitor mute is temporarily
+    // overridden so the dry guitar stays audible even with an empty chain.
+    // The renderer sets this around a song-load chain rebuild (clear + reload),
+    // so the brief empty-chain window doesn't silence the player's guitar.
+    void setMonitorMuteSuppressed(bool suppressed) { monitorMuteSuppressed.store(suppressed); }
+    bool isMonitorMuteSuppressed() const { return monitorMuteSuppressed.load(); }
+
     // Noise gate (post-input-gain, pre FX chain; pitch detector sees ungated signal)
     void setNoiseGate(bool enabled, float thresholdDb, float releaseMs, float depthDb);
+
+    // Tone Polish — fixed 3-band mastering EQ (HPF 80 Hz, low shelf -3 dB
+    // @ 180 Hz, peak -0.5 dB @ 200 Hz Q=1). Applied on the guitar bus only,
+    // between chainOutputGain and the backing-track mix, so the backing
+    // track and master output gain stay bit-untouched. Defaults on;
+    // renderer exposes a per-preset toggle.
+    void setTonePolishEnabled(bool enabled);
 
     // Backing track
     void setBackingVolume(float vol) { backingVolume.store(vol); }
@@ -124,12 +153,39 @@ public:
     // request fewer; anything larger than the ring capacity gets clamped.
     std::vector<float> getInputFrame(int numSamples = 4096) const;
 
+    // Gapless input-ring consumption for the onset detector. Copies every
+    // sample written since monotonic index `fromIndex` into `out`, and
+    // returns the current write index. The samples in `out` span monotonic
+    // indices [returnedWriteIndex - out.size(), returnedWriteIndex); when no
+    // samples were lost that lower bound equals `fromIndex`. If the gap
+    // exceeds the ring capacity the oldest samples are gone and `out` starts
+    // later than `fromIndex` (out.size() < writeIndex - fromIndex) — the
+    // caller detects the loss by that shortfall. Unlike getInputFrame (which
+    // returns overlapping most-recent-N snapshots), consecutive calls here
+    // consume each sample exactly once.
+    uint64_t getInputSince(uint64_t fromIndex, std::vector<float>& out) const;
+
     // Score a chord against the latest input-ring samples. The chord
     // context (notes, arrangement, thresholds) comes from the renderer
     // over IPC; audio data stays inside the engine so no buffers cross
     // the N-API boundary. Returns the same `{score, hitStrings,
     // totalStrings, isHit, results[]}` shape as the JS implementation.
     ChordScorer::Result scoreChord(const ChordScorer::Request& req);
+
+    // Continuous engine-side chart verification (notedetect). The renderer
+    // pushes the song's note chart once via setChart(); a background
+    // NoteVerifier thread scores each note's timing window against the live
+    // playhead and input ring, and the renderer drains finalized verdicts
+    // via getNoteVerdicts(). This replaces the renderer's per-tick
+    // scoreChord IPC loop, which starved during dense passages.
+    void setChart(const NoteVerifier::ChartUpdate& chart) { noteVerifier.setChart(chart); }
+    void clearChart() { noteVerifier.clearChart(); }
+    std::vector<NoteVerifier::Verdict> getNoteVerdicts() { return noteVerifier.drainVerdicts(); }
+
+    // Renderer's unified, already-corrected playhead — the verifier scores
+    // against this rather than getBackingPosition(), which is frozen for
+    // HTML5-routed (sloppak) songs. Pushed each detect tick via getNoteVerdicts.
+    void setPlayhead(double songTime, bool playing) { noteVerifier.setPlayhead(songTime, playing); }
 
 private:
     void audioDeviceIOCallbackWithContext(const float* const* inputData,
@@ -142,11 +198,22 @@ private:
     void audioDeviceStopped() override;
     void stopBackingNoLock(); // stop transport without acquiring backingLock (caller holds it)
 
+    // ML-backed chord scoring against the MlNoteDetector's active-pitch set.
+    // Used by scoreChord() when a Basic Pitch model is loaded.
+    ChordScorer::Result scoreChordWithMl(const ChordScorer::Request& req) const;
+
     juce::AudioDeviceManager deviceManager;
     SignalChain signalChain;
     PitchDetector pitchDetector;
+    MlNoteDetector mlNoteDetector;
     NoiseGate noiseGate;
+    TonePolish tonePolish;
     ChordScorer chordScorer;
+    // Background chart-verification thread. Constructed with `*this` so it can
+    // read the engine's input ring (getInputFrame) and playhead
+    // (getBackingPosition); valid because the reference is bound during
+    // AudioEngine construction and the thread is only started in prepare().
+    NoteVerifier noteVerifier{ *this };
     juce::AudioFormatManager formatManager;
 
     std::atomic<float> inputGain{1.0f};
@@ -159,6 +226,7 @@ private:
     std::atomic<float> outputPeak{0.0f};
     std::atomic<int> selectedInputChannel{-1}; // -1 = mono mix
     std::atomic<bool> monitorMuted{true}; // mute pass-through by default
+    std::atomic<bool> monitorMuteSuppressed{false}; // overrides monitorMuted during chain rebuilds
 
     // Backing track
     std::unique_ptr<juce::AudioFormatReaderSource> backingSource;

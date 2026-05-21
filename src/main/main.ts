@@ -1,6 +1,44 @@
 // Slopsmith Desktop — Electron Main Process
 // Manages: window lifecycle, Python subprocess, audio engine bridge, plugin management
 
+// ── Velopack startup hook ─────────────────────────────────────────────────
+// MUST run before ANY other side-effecting code (crashReporter, app event
+// listeners, the rest of the imports below). When Windows invokes
+// `Update.exe` with `--veloapp-install`/`--veloapp-updated`/`--veloapp-firstrun`
+// it relaunches our exe with those flags; `VelopackApp.build().run()` is what
+// detects them, runs the appropriate hook, and exits. If the hook doesn't
+// run first the bootstrapper silently breaks install/upgrade flows.
+// On macOS the hook just returns (no-op).
+// Linux has no Velopack pipeline (electron-builder AppImage/deb only), so the
+// native module is never needed there — skip the require entirely so loading
+// it on an unsupported platform can never crash startup. On win/mac a load
+// failure is also caught: a broken updater is recoverable, a dead app is not.
+if (process.platform !== 'linux') {
+    try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { VelopackApp } = require('velopack') as typeof import('velopack');
+        VelopackApp.build().run();
+    } catch (err) {
+        // Never crash over this — a launchable app beats a dead one. But in a
+        // packaged build a hook failure means install/update lifecycle flags
+        // won't be handled, so surface it with a dialog instead of a console
+        // line nobody reads. In dev/unpackaged builds the hook is a harmless
+        // no-op, so a logged warning is enough there.
+        console.error('[main] Velopack startup hook failed:', err);
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { app, dialog } = require('electron');
+        if (app.isPackaged) {
+            dialog.showErrorBox(
+                'Slopsmith update system error',
+                'The Velopack updater failed to initialize. Slopsmith will still '
+                + 'run, but automatic updates may not work until it is reinstalled.'
+                + `\n\n${String(err)}`,
+            );
+        }
+    }
+}
+// ──────────────────────────────────────────────────────────────────────────
+
 import { app, BrowserWindow, ipcMain, dialog, shell, session, crashReporter } from 'electron';
 import * as path from 'path';
 
@@ -16,11 +54,21 @@ crashReporter.start({
     compress: false,
 });
 import { startPython, stopPython, waitForPython, getPythonPort, getStartupStatus, StartupStatus } from './python';
-import { IPC_STARTUP_STATUS, IPC_STARTUP_GET_STATUS, IPC_STARTUP_REQUEST_STATUS } from './ipc-channels';
+import {
+    IPC_STARTUP_STATUS,
+    IPC_STARTUP_GET_STATUS,
+    IPC_STARTUP_REQUEST_STATUS,
+    IPC_UPDATE_GET_STATUS,
+    IPC_UPDATE_SET_CHANNEL,
+    IPC_UPDATE_CHECK_NOW,
+    IPC_UPDATE_APPLY,
+} from './ipc-channels';
 import { initAudioBridge, shutdownAudio } from './audio-bridge';
 import { initDebugLogging, isDebugEnabled } from './debug-log';
 import { initPluginManager } from './plugin-manager';
 import { initSoundfontManager } from './soundfont-manager';
+import * as updateManager from './update-manager';
+import type { UpdateChannel } from './update-manager';
 
 // Linux: enable Chromium's PipeWire capturer feature so getUserMedia can see
 // audio devices on PipeWire-only distros (Fedora 36+, recent Ubuntu, Arch).
@@ -142,6 +190,22 @@ function createSplashWindow(): void {
     });
 }
 
+// Shared by the main BrowserWindow and any same-origin popup spawned via
+// window.open (see setWindowOpenHandler / popupOverrideOptions below).
+// Single source of truth so a future security-sensitive change (preload
+// path, sandbox, webSecurity, isolation) can't update one path and leave
+// the other diverged.
+//   - sandbox: false is required for the preload to use require('electron').
+//   - webSecurity: false lets the renderer load mixed-origin assets from
+//     the localhost Python server.
+const rendererWebPreferences: Electron.WebPreferences = {
+    preload: path.join(__dirname, 'preload.js'),
+    contextIsolation: true,
+    nodeIntegration: false,
+    sandbox: false,
+    webSecurity: false,
+};
+
 function createWindow(port: number): void {
     mainWindow = new BrowserWindow({
         width: 1400,
@@ -150,13 +214,7 @@ function createWindow(port: number): void {
         minHeight: 600,
         title: 'Slopsmith',
         backgroundColor: '#0f172a', // slate-900 to match Slopsmith UI
-        webPreferences: {
-            preload: path.join(__dirname, 'preload.js'),
-            contextIsolation: true,
-            nodeIntegration: false,
-            sandbox: false, // required for preload to use require('electron')
-            webSecurity: false, // allow loading from localhost
-        },
+        webPreferences: rendererWebPreferences,
     });
 
     // Forward renderer console to main process stdout
@@ -278,13 +336,62 @@ function createWindow(port: number): void {
         console.warn(`[main] Blocked subframe navigation to non-renderer origin: ${navUrl}`);
     });
 
-    // Open external links in system browser. Same scheme gate as
-    // will-navigate above — a `target=_blank` or `window.open` from the
-    // renderer page can supply any string, so don't pass it to
-    // shell.openExternal blindly.
-    mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    // window.open() routing:
+    //
+    // - Same renderer-origin URLs → allow as an Electron BrowserWindow
+    //   that mirrors the main window's webPreferences (same preload,
+    //   same isolation, same webSecurity: false). Plugin pop-outs like
+    //   splitscreen rely on this so the popup shares the renderer's
+    //   BroadcastChannel scope and preload-exposed IPC. Without it,
+    //   `action: 'deny'` returns null to window.open() (which the
+    //   plugin reads as "popup blocked") AND the URL leaks to the
+    //   system browser via openWebUrlExternally, where BroadcastChannel
+    //   can't reach across Chromium instances.
+    //
+    // - Off-origin URLs → route to the system browser. Same scheme
+    //   gate as will-navigate above (openWebUrlExternally restricts to
+    //   http/https) since a target=_blank or stray window.open from a
+    //   plugin can supply any string.
+    const popupOverrideOptions: Electron.BrowserWindowConstructorOptions = {
+        backgroundColor: '#0f172a',
+        webPreferences: rendererWebPreferences,
+    };
+    const rendererWindowOpenHandler = ({ url }: { url: string }) => {
+        if (isRendererOrigin(url)) {
+            return { action: 'allow' as const, overrideBrowserWindowOptions: popupOverrideOptions };
+        }
         openWebUrlExternally(url);
-        return { action: 'deny' };
+        return { action: 'deny' as const };
+    };
+    mainWindow.webContents.setWindowOpenHandler(rendererWindowOpenHandler);
+
+    // Apply the same off-origin navigation guards + window-open policy
+    // to any popup the renderer opens. Otherwise a popup could be told
+    // to navigate off-origin (or spawn another window.open), and the
+    // preload-IPC surface installed via popupOverrideOptions would
+    // follow along to the new page.
+    //
+    // Wired recursively: the last line re-registers `did-create-window`
+    // on each popup's own webContents so nested popups (popup A →
+    // popup B) inherit the same guards. Without that, only popups
+    // spawned directly from the main window would be protected, and
+    // any popup that spawned another would leave its child guard-less
+    // while still carrying the preload-IPC surface.
+    function wirePopupGuards(wc: Electron.WebContents): void {
+        wc.on('will-navigate', blockOffOriginTopLevel('popup in-window navigation'));
+        wc.on('will-redirect', blockOffOriginTopLevel('popup cross-origin redirect'));
+        wc.on('will-frame-navigate', (details) => {
+            if (details.isMainFrame) return;
+            const navUrl = details.url;
+            if (isRendererOrigin(navUrl)) return;
+            details.preventDefault();
+            console.warn(`[main] Blocked popup subframe navigation to non-renderer origin: ${navUrl}`);
+        });
+        wc.setWindowOpenHandler(rendererWindowOpenHandler);
+        wc.on('did-create-window', (nestedWin) => wirePopupGuards(nestedWin.webContents));
+    }
+    mainWindow.webContents.on('did-create-window', (popupWin) => {
+        wirePopupGuards(popupWin.webContents);
     });
 
     mainWindow.on('closed', () => {
@@ -543,6 +650,31 @@ async function startup(): Promise<void> {
         return app.getPath('userData');
     });
 
+    // Auto-update (Velopack). The renderer Settings panel reads the persisted
+    // channel from localStorage and calls setChannel() on boot — we default
+    // to 'stable' here so the first check runs against the safest feed even
+    // if the renderer hasn't paged in yet. On Linux every call short-circuits
+    // to { status: "unsupported", platform: "linux" } inside update-manager.
+    ipcMain.handle(IPC_UPDATE_GET_STATUS, () => updateManager.getStatus());
+    ipcMain.handle(IPC_UPDATE_SET_CHANNEL, (_event, channel: unknown) => {
+        // IPC is untyped at runtime — validate the channel string before forwarding
+        // so a renderer bug or compromised page can't pass arbitrary values into
+        // the Velopack SDK.
+        const VALID_CHANNELS: readonly string[] = ['stable', 'rc', 'beta', 'alpha'];
+        if (typeof channel !== 'string' || !VALID_CHANNELS.includes(channel)) {
+            return updateManager.getStatus();
+        }
+        updateManager.setChannel(channel as UpdateChannel);
+        return updateManager.getStatus();
+    });
+    ipcMain.handle(IPC_UPDATE_CHECK_NOW, () => updateManager.checkNow());
+    ipcMain.handle(IPC_UPDATE_APPLY, () => updateManager.applyAndRestart());
+
+    // Boot the updater after the main window exists so the first
+    // update:available / update:downloaded broadcast has a renderer to land
+    // in. Renderer will call setChannel() once it reads localStorage.
+    updateManager.init('stable');
+
     const startupDeadline = Date.now() + STARTUP_DEADLINE_MS;
     let reachedTerminalState = false;
     while (Date.now() < startupDeadline && !appQuitting) {
@@ -582,6 +714,7 @@ function shutdown(): void {
     try {
         console.log('[main] Shutting down...');
     } catch { /* console may already be gone mid-teardown */ }
+    updateManager.shutdown();
     shutdownAudio();
     stopPython();
 }

@@ -74,6 +74,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
     const noiseGateReleaseLabel = $('ae-noise-gate-release-label');
     const noiseGateDepthSlider = $('ae-noise-gate-depth');
     const noiseGateDepthLabel = $('ae-noise-gate-depth-label');
+    const tonePolishEnable = $('ae-tone-polish-enable');
 
     /** Sliders show dB; `api.setGain` and saved presets use linear amplitude gain (legacy presets unchanged). */
     const GAIN_SLIDER_DB_MIN = -60;
@@ -533,6 +534,45 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
         });
     }
 
+    // ── Tone Polish (fixed 3-band mastering EQ on the guitar bus) ──
+    // Single on/off toggle; defaults on. Saved per chain preset so older presets
+    // without `tonePolish` fall back to the default-on behaviour.
+    const AE_TONE_POLISH_DEFAULT_ENABLED = true;
+
+    function captureCurrentTonePolishState() {
+        // Fall back to the design default when the element is missing (DOM
+        // mismatch / server render) so a preset save never persists
+        // { enabled: false } due to a null checkbox rather than user intent.
+        return { enabled: tonePolishEnable ? !!tonePolishEnable.checked : AE_TONE_POLISH_DEFAULT_ENABLED };
+    }
+
+    function applyPresetTonePolish(preset) {
+        const tp = preset && typeof preset.tonePolish === 'object' && preset.tonePolish !== null
+            ? preset.tonePolish
+            : null;
+        const enabled = tp && typeof tp.enabled === 'boolean'
+            ? tp.enabled
+            : AE_TONE_POLISH_DEFAULT_ENABLED;
+        if (tonePolishEnable) tonePolishEnable.checked = enabled;
+        aeApplyTonePolishToEngine();
+    }
+
+    function aeInitTonePolishUi() {
+        if (tonePolishEnable) tonePolishEnable.checked = AE_TONE_POLISH_DEFAULT_ENABLED;
+    }
+
+    function aeApplyTonePolishToEngine() {
+        const bridge = window.slopsmithDesktop?.audio;
+        if (!bridge || typeof bridge.setTonePolish !== 'function') {
+            if (bridge && !window._aeTonePolishBridgeWarned) {
+                window._aeTonePolishBridgeWarned = true;
+                console.warn('[audio-engine] audio.setTonePolish is not available — rebuild the native engine.');
+            }
+            return;
+        }
+        bridge.setTonePolish({ enabled: tonePolishEnable ? !!tonePolishEnable.checked : AE_TONE_POLISH_DEFAULT_ENABLED });
+    }
+
     // ── Init ──────────────────────────────────────────────────────────────────
     async function init() {
         const available = await api.isAvailable();
@@ -549,6 +589,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
         await refreshChain();
         api.loadPluginList();
         aeInitNoiseGateUi();
+        aeInitTonePolishUi();
         setupEvents();
         startMetering();
 
@@ -590,6 +631,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                 statusText.textContent = 'Audio running';
                 aeApplyNoiseGateToEngine();
                 rememberAppliedDeviceSettings();
+                aeApplyTonePolishToEngine();
             }
         }
 
@@ -629,6 +671,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
         }
 
         aeApplyNoiseGateToEngine();
+        aeApplyTonePolishToEngine();
     }
 
     function saveChainStateFromChain(chain) {
@@ -885,6 +928,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                 statusDot.className = 'w-3 h-3 rounded-full bg-emerald-500';
                 statusText.textContent = 'Audio running';
                 aeApplyNoiseGateToEngine();
+                aeApplyTonePolishToEngine();
             }
         });
 
@@ -939,6 +983,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                 statusDot.className = 'w-3 h-3 rounded-full bg-emerald-500';
                 statusText.textContent = 'Audio running';
                 aeApplyNoiseGateToEngine();
+                aeApplyTonePolishToEngine();
                 const applied = rememberAppliedDeviceSettings();
                 await saveDeviceSettings(applied);
             } else {
@@ -1002,6 +1047,11 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
             noiseGateDepthSlider.addEventListener('input', () => {
                 aeSyncNoiseGateDepthLabel();
                 aeApplyNoiseGateToEngine();
+            });
+        }
+        if (tonePolishEnable) {
+            tonePolishEnable.addEventListener('change', () => {
+                aeApplyTonePolishToEngine();
             });
         }
 
@@ -1097,8 +1147,9 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                 }));
                 const gains = captureCurrentGainLevels();
                 const noiseGate = captureCurrentNoiseGateState();
+                const tonePolish = captureCurrentTonePolishState();
                 const presets = getPresets();
-                presets[name] = { nativePreset, items, ...gains, noiseGate, created: Date.now() };
+                presets[name] = { nativePreset, items, ...gains, noiseGate, tonePolish, created: Date.now() };
                 localStorage.setItem('slopsmith-chain-presets', JSON.stringify(presets));
                 wrapper.remove();
                 renderPresetList();
@@ -1135,6 +1186,176 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
 
         setupAudioQualityControls();
         setupToneAutomationSettingsEvents();
+        setupUpdateChannelControls();
+    }
+
+    // ── Updater (Velopack) settings UI ────────────────────────────────────────
+    // Reads/writes the persisted channel in localStorage and talks to the main
+    // process via window.slopsmithDesktop.update (added by the main-process slice).
+    // Designed to degrade gracefully when the updater IPC namespace is missing
+    // (dev builds before the main slice lands) or when running on Linux.
+    function setupUpdateChannelControls() {
+        const channelSelect = document.getElementById('update-channel');
+        const checkBtn = document.getElementById('update-check-now');
+        const statusEl = document.getElementById('update-status');
+        const linuxNote = document.getElementById('update-linux-note');
+        if (!channelSelect || !checkBtn || !statusEl) return;
+
+        const VALID_CHANNELS = ['stable', 'rc', 'beta', 'alpha'];
+        const storedChannelRaw = localStorage.getItem('slopsmith-update-channel');
+        const storedChannel = VALID_CHANNELS.includes(storedChannelRaw) ? storedChannelRaw : 'stable';
+        channelSelect.value = storedChannel;
+
+        const updateApi = window.slopsmithDesktop?.update;
+        const isLinux = window.slopsmithDesktop?.platform === 'linux';
+
+        function showLinuxFallback(message) {
+            if (linuxNote) linuxNote.classList.remove('hidden');
+            channelSelect.disabled = true;
+            checkBtn.disabled = true;
+            statusEl.textContent = message || 'Auto-update is not available on this platform.';
+        }
+
+        if (!updateApi) {
+            statusEl.textContent = 'Updater not initialized (running in dev or unsupported build).';
+            channelSelect.disabled = true;
+            checkBtn.disabled = true;
+            return;
+        }
+
+        if (isLinux) {
+            showLinuxFallback('Auto-update is not available on Linux.');
+            // Still inform main of the persisted channel so cross-platform logic stays consistent.
+            try { void updateApi.setChannel(storedChannel); } catch (_) { /* defensive */ }
+            return;
+        }
+
+        function fmtTimestamp(ts) {
+            if (!ts) return 'never';
+            try {
+                const d = new Date(ts);
+                if (Number.isNaN(d.getTime())) return 'never';
+                return d.toLocaleString();
+            } catch (_) {
+                return 'never';
+            }
+        }
+
+        function renderStatus(extra) {
+            try {
+                void updateApi.getStatus().then((s) => {
+                    if (!s) {
+                        statusEl.textContent = extra || 'Updater status unavailable.';
+                        return;
+                    }
+                    if (s.status === 'unsupported' || s.platform === 'linux') {
+                        showLinuxFallback('Auto-update is not available on Linux.');
+                        return;
+                    }
+                    if (s.status === 'error') {
+                        // Surface the error message so users can tell why update
+                        // checks are failing rather than seeing a healthy status.
+                        const errMsg = s.message ? `Update error: ${s.message}` : 'Update check failed.';
+                        statusEl.textContent = extra ? `${extra} · ${errMsg}` : errMsg;
+                        return;
+                    }
+                    const parts = [
+                        `Version ${s.currentVersion || '?'}`,
+                        `channel ${s.channel || channelSelect.value}`,
+                        `last checked ${fmtTimestamp(s.lastChecked)}`,
+                    ];
+                    statusEl.textContent = extra ? `${extra} · ${parts.join(' · ')}` : parts.join(' · ');
+                }).catch((e) => {
+                    console.warn('[updater] getStatus failed:', e);
+                    statusEl.textContent = extra || 'Failed to read updater status.';
+                });
+            } catch (e) {
+                console.warn('[updater] getStatus threw:', e);
+                statusEl.textContent = extra || 'Failed to read updater status.';
+            }
+        }
+
+        // Inform main of the persisted channel on panel load.
+        try {
+            void Promise.resolve(updateApi.setChannel(storedChannel)).catch((e) => {
+                console.warn('[updater] setChannel(initial) failed:', e);
+            });
+        } catch (e) {
+            console.warn('[updater] setChannel(initial) threw:', e);
+        }
+
+        // setupUpdateChannelControls() re-runs if screen.js is re-evaluated.
+        // Drop the change/click handlers a previous evaluation bound (a no-op
+        // if the element was replaced) so they don't stack into duplicate
+        // setChannel()/checkNow() IPC calls per user action.
+        if (hookState.updateChannelOnChange) {
+            channelSelect.removeEventListener('change', hookState.updateChannelOnChange);
+        }
+        if (hookState.updateCheckOnClick) {
+            checkBtn.removeEventListener('click', hookState.updateCheckOnClick);
+        }
+
+        const onChannelChange = () => {
+            const val = channelSelect.value;
+            if (!VALID_CHANNELS.includes(val)) return;
+            try { localStorage.setItem('slopsmith-update-channel', val); } catch (_) {}
+            try {
+                void Promise.resolve(updateApi.setChannel(val)).catch((e) => {
+                    console.warn('[updater] setChannel failed:', e);
+                });
+            } catch (e) {
+                console.warn('[updater] setChannel threw:', e);
+            }
+            renderStatus(`Channel set to ${val}.`);
+        };
+        channelSelect.addEventListener('change', onChannelChange);
+        hookState.updateChannelOnChange = onChannelChange;
+
+        const onCheckClick = async () => {
+            checkBtn.disabled = true;
+            statusEl.textContent = 'Checking for updates…';
+            // Track whether we should re-enable the button in finally. On
+            // unsupported platforms showLinuxFallback() permanently disables
+            // the button; the finally block must not undo that.
+            let reEnableBtn = true;
+            try {
+                const result = await updateApi.checkNow();
+                const status = result?.status || 'unknown';
+                let msg;
+                switch (status) {
+                    case 'idle':
+                        // checkNow() returned null info — no update available in this channel.
+                        msg = "You're on the newest version in this channel.";
+                        break;
+                    case 'downloading':
+                        // Update found; download kicked off automatically by checkNow().
+                        msg = `Update available — downloading…`;
+                        break;
+                    case 'downloaded':
+                        msg = 'Update downloaded — restart to apply.';
+                        break;
+                    case 'unsupported':
+                        reEnableBtn = false;
+                        showLinuxFallback('Auto-update is not available on Linux.');
+                        return;
+                    case 'error':
+                        msg = `Update check failed${result?.message ? `: ${result.message}` : '.'}`;
+                        break;
+                    default:
+                        msg = `Update check returned: ${status}`;
+                }
+                renderStatus(msg);
+            } catch (e) {
+                console.warn('[updater] checkNow failed:', e);
+                statusEl.textContent = `Update check failed: ${e?.message || e}`;
+            } finally {
+                if (reEnableBtn) checkBtn.disabled = false;
+            }
+        };
+        checkBtn.addEventListener('click', onCheckClick);
+        hookState.updateCheckOnClick = onCheckClick;
+
+        renderStatus();
     }
 
     // ── Audio Quality (soundfont) ─────────────────────────────────────────────
@@ -1339,6 +1560,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
             }
             applyPresetGainLevels(preset);
             applyPresetNoiseGate(preset);
+            applyPresetTonePolish(preset);
             // Share the single getChainState() result between refreshChain and saveChainState
             // to avoid two back-to-back native bridge round-trips.
             const chain = await refreshChain();
@@ -1403,18 +1625,119 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
     window._aeGetPresets = getPresets;
     window._aeApplyPresetGainLevels = applyPresetGainLevels;
     window._aeApplyPresetNoiseGate = applyPresetNoiseGate;
+    window._aeApplyPresetTonePolish = applyPresetTonePolish;
     window._aeLoadDefaultPreset = loadDefaultPreset;
     window._aeReplaceChainWithPresetBlob = replaceChainWithPresetBlob;
 
+    /** True when the song has tone-switching configured — a resolvable
+     *  global / per-song bypass mapping, or Tone Automation with a resolvable
+     *  `idle` target — that will actually rebuild the FX chain by loading
+     *  processors. MIDI-PC mappings are deliberately NOT a rebuild trigger:
+     *  they only send program changes to an existing VST slot and load no
+     *  processors. When this returns false, song start must NOT clear the FX
+     *  chain — there is nothing to rebuild in its place, and a hand-built
+     *  chain (e.g. a VST loaded in the Audio Engine panel) would be
+     *  destroyed, leaving the guitar silent. */
+    function songShouldRebuildChain() {
+        try {
+            // A mapping/target only counts when it points at a preset that
+            // still exists: the preset-delete flow scrubs Tone Automation
+            // targets but NOT slopsmith-tone-mappings, so a stale mapping
+            // (e.g. {"solo":"DeletedPreset"}) would otherwise force a clear
+            // that the preload then can't rebuild — back to a silent chain.
+            const presets = getPresets();
+            // A preset counts as resolvable only when it carries a
+            // `nativePreset` blob. That blob is what the no-timeline preload,
+            // manual load, TA's loadPresetByName, and the bypass path's VST
+            // state-restore all consume, and the normal "Save preset" flow
+            // always writes it. A mapping naming a preset with no blob would
+            // pass a bare existence check yet rebuild to nothing, stranding
+            // the chain. `items` is intentionally NOT also required: an
+            // empty-chain preset (blob, items:[]) and a legacy blob-only
+            // preset are both still loadable, and the save flow never
+            // produces an items-only preset.
+            const isLoadablePreset = (p) => !!p && !!p.nativePreset;
+            const hasResolvablePreset = (mappingSet) =>
+                !!mappingSet
+                && typeof mappingSet === 'object'
+                && Object.values(mappingSet).some((name) => {
+                    const presetName = String(name || '').trim();
+                    return !!presetName && isLoadablePreset(presets[presetName]);
+                });
+
+            // Tone Automation, when enabled, takes precedence over manual
+            // tone mappings at playback time (installSwitcherForSong returns
+            // before the manual ToneSwitcher is built). So if TA is enabled
+            // the decision MUST be based on TA targets alone — falling
+            // through to the manual-mapping checks below would clear the
+            // chain on stale global/per-song mappings that TA precedence
+            // then never rebuilds, leaving an empty chain.
+            if (window._aeToneAutomation && window._aeToneAutomation.isEnabled
+                && window._aeToneAutomation.isEnabled()) {
+                const taCfg = (window._aeToneAutomation.getConfig
+                    && window._aeToneAutomation.getConfig()) || {};
+                const taTargets = taCfg.targets || {};
+                // Rebuild only when the `idle` fallback target resolves to an
+                // existing preset. `idle` is what resolveTaPreset() returns
+                // whenever the classifier does not match the current song —
+                // so an `idle` target guarantees TA loads *something* after a
+                // clear. With only unrelated-category targets and no `idle`,
+                // a clear could strand the chain empty, so keep it instead
+                // (a category target still rebuilds on its tone change, just
+                // without the destructive pre-clear).
+                const idleName = String(taTargets.idle || '').trim();
+                return !!idleName && isLoadablePreset(presets[idleName]);
+            }
+            const raw = JSON.parse(localStorage.getItem('slopsmith-tone-mappings') || '{}') || {};
+            const key = window._aeGetCurrentSongKey ? window._aeGetCurrentSongKey() : '';
+            // Global / per-song bypass mappings: rebuild only when the
+            // mapping resolves to a loadable preset. Evaluate the MERGED
+            // mapping that playback actually consumes — getToneMappings()
+            // returns {...global, ...songs[key]}, per-song entries overriding
+            // globals — not global and per-song independently. Checking them
+            // separately would pass a resolvable global that is shadowed by a
+            // stale per-song entry for the same key, letting the clear run
+            // while the preload then resolves to the stale preset.
+            const mergedMappings = Object.assign(
+                {}, raw.global || {}, (raw.songs && raw.songs[key]) || {});
+            if (hasResolvablePreset(mergedMappings)) return true;
+            // Note: a slopsmith-tone-mappings midiPC entry is intentionally
+            // NOT a rebuild trigger. A valid MIDI-PC config (mode 'midi' +
+            // vstSlotId >= 0) only sends program changes to an existing VST
+            // slot — no processors are loaded, so a clear would just delete
+            // that slot. An invalid/legacy midiPC entry provides no rebuild
+            // path either: the playback path falls through to bypass
+            // mappings, already covered by the global/per-song checks above.
+        } catch (_) { /* ignore — fall through to false */ }
+        return false;
+    }
+    window._aeSongShouldRebuildChain = songShouldRebuildChain;
+
     /** Clears the native FX chain when a new song starts. Avoid calling getChainState right after
-     *  clearChain — some JUCE bridges crash on that sequence; persist empty chain locally instead. */
+     *  clearChain — some JUCE bridges crash on that sequence; persist empty chain locally instead.
+     *  @returns {Promise<boolean>} true only when the native chain was actually
+     *  cleared. The caller uses this to set window._aeDidClearChainForNewSong —
+     *  which must never be set on a path that preserved the chain, or a later
+     *  preload would treat the preserved chain as already cleared. */
     async function clearChainForNewSong() {
-        if (!api?.clearChain) return;
+        if (!api?.clearChain) return false;
+        // Don't wipe a hand-built chain when the song has no tone-switching to
+        // replace it with — that would silence the guitar (empty chain + monitor mute).
+        if (!songShouldRebuildChain()) {
+            console.log('[audio-engine] Song has no rebuildable tone-switching — keeping current chain');
+            return false;
+        }
+        // A rebuild is happening: keep the dry guitar audible through the
+        // empty-chain window the preload's rebuild opens. resolveChainRebuildGuard()
+        // lifts this once the chain settles (or leaves it on if the rebuild
+        // produced nothing). Only after the songShouldRebuildChain() gate — the
+        // preserve-chain path above neither clears nor opens a rebuild window.
+        if (window._aeBeginChainRebuildGuard) window._aeBeginChainRebuildGuard();
         try {
             await api.clearChain();
         } catch (e) {
             console.warn('[audio-engine] clearChain (native):', e);
-            return;
+            return false;
         }
         try {
             localStorage.setItem('slopsmith-signal-chain', '[]');
@@ -1427,6 +1750,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
         if (container) {
             container.innerHTML = '<div class="text-sm text-slate-500 italic">No processors loaded — add a VST, NAM model, or cabinet IR</div>';
         }
+        return true;
     }
     window._aeClearChainForNewSong = clearChainForNewSong;
 
@@ -1579,6 +1903,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
             if (initialPreset) {
                 applyPresetGainLevels(initialPreset);
                 applyPresetNoiseGate(initialPreset);
+                applyPresetTonePolish(initialPreset);
             }
             await refreshChain();
             console.log('[tone-switcher] Preloaded tones:', Object.keys(this.toneSlotMap));
@@ -1604,6 +1929,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
             if (newPreset) {
                 applyPresetGainLevels(newPreset);
                 applyPresetNoiseGate(newPreset);
+                applyPresetTonePolish(newPreset);
             }
             console.log('[tone-switcher] Switched to:', toneName);
         }
@@ -2912,6 +3238,58 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
         toast._timer = setTimeout(() => { toast.style.opacity = '0'; }, 2000);
     }
 
+    // ── Monitor-mute suppression around song-load chain rebuilds ────────────
+    // On song load the chain is emptied (clearChainForNewSong) then rebuilt by
+    // the preload below. While the chain is empty the native engine's monitor
+    // mute would silence the dry guitar. Suppress the mute for the rebuild
+    // window so the guitar keeps sounding; resolve it once the chain settles.
+    function aeSetMonitorMuteSuppressed(suppressed) {
+        const api = window.slopsmithDesktop?.audio;
+        // Optional-chained: a downlevel native addon simply ignores this.
+        // setMonitorMuteSuppressed is async (ipcRenderer.invoke) — the sync
+        // try/catch only covers a missing method, so also swallow the
+        // returned promise's rejection to avoid an unhandled rejection.
+        try {
+            const r = api?.setMonitorMuteSuppressed?.(suppressed);
+            if (r && typeof r.catch === 'function') r.catch(() => {});
+        } catch (_) { /* downlevel */ }
+    }
+    // Called by clearChainForNewSong (IIFE 1) and the preload below.
+    window._aeBeginChainRebuildGuard = function () { aeSetMonitorMuteSuppressed(true); };
+
+    function showMonitorMuteHint() {
+        let toast = document.getElementById('monitor-mute-hint');
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'monitor-mute-hint';
+            toast.style.cssText = 'position:fixed;top:60px;right:20px;z-index:9999;max-width:320px;padding:10px 16px;border-radius:8px;background:rgba(180,83,9,0.95);color:white;font-size:12px;font-weight:600;cursor:pointer;transition:opacity 0.5s;';
+            toast.title = 'Click to dismiss';
+            toast.addEventListener('click', () => toast.remove());
+            document.body.appendChild(toast);
+        }
+        toast.textContent = 'Monitor mute is on and no tone is loaded — add an amp/VST or load a preset to hear a processed tone.';
+        toast.style.opacity = '1';
+        clearTimeout(toast._timer);
+        toast._timer = setTimeout(() => { toast.style.opacity = '0'; }, 6000);
+    }
+
+    // Run once the rebuild has settled: if a real chain exists, restore normal
+    // monitor-mute behaviour; if not, keep the dry guitar audible (leave the
+    // suppression on) rather than silencing it, and tell the user why.
+    async function resolveChainRebuildGuard() {
+        const api = window.slopsmithDesktop?.audio;
+        if (!api) return;
+        let slots = [];
+        try { slots = await api.getChainState(); } catch (_) { slots = []; }
+        if (Array.isArray(slots) && slots.length > 0) {
+            aeSetMonitorMuteSuppressed(false);
+        } else {
+            let muted = true;
+            try { muted = await api.isMonitorMuted(); } catch (_) { /* assume muted */ }
+            if (muted) showMonitorMuteHint();
+        }
+    }
+
     // Delegate to the audio-API IIFE's implementation — avoids duplicate gain/UI logic drifting.
     // The _api parameter is accepted for call-site compatibility but ignored when delegating;
     // the first IIFE's version uses its own closure-scoped api (same underlying native object).
@@ -2928,6 +3306,15 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
     function applyPresetNoiseGate(_api, preset) {
         if (window._aeApplyPresetNoiseGate) {
             window._aeApplyPresetNoiseGate(preset);
+            return;
+        }
+        void _api;
+        void preset;
+    }
+
+    function applyPresetTonePolish(_api, preset) {
+        if (window._aeApplyPresetTonePolish) {
+            window._aeApplyPresetTonePolish(preset);
             return;
         }
         void _api;
@@ -3024,8 +3411,12 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
         setTimeout(() => {
             if (window._aeClearChainForNewSong) {
                 window._aeClearingChainForNewSong = true;
-                void window._aeClearChainForNewSong().then(() => {
-                    window._aeDidClearChainForNewSong = true;
+                void window._aeClearChainForNewSong().then((cleared) => {
+                    // Only true when the chain was genuinely cleared — the
+                    // skip path (chain preserved) must not set this flag, or
+                    // a later preload would treat the preserved chain as
+                    // already cleared and overlay processors onto it.
+                    window._aeDidClearChainForNewSong = cleared === true;
                 }).catch((e) => {
                     console.warn('[audio-engine] clearChainForNewSong failed:', e);
                 }).finally(() => {
@@ -3057,6 +3448,9 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
 
         // Start tone monitoring and preload presets after WebSocket delivers tone data
         setTimeout(async () => {
+            // Re-assert monitor-mute suppression: this preload re-clears the
+            // chain, and clearChainForNewSong may have been skipped.
+            if (window._aeBeginChainRebuildGuard) window._aeBeginChainRebuildGuard();
             try {
             // Only start the 50ms polling interval when at least one switching mode is on;
             // starting it unconditionally wastes cycles on localStorage + highway reads every
@@ -3087,12 +3481,54 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
             // _aeClearingChainForNewSong is set the moment the async clear begins; _aeDidClearChainForNewSong
             // is set on resolution. Checking both prevents a second clearChain racing with a slow first one,
             // which could crash some JUCE bridges. preloadForSong calls clearChain itself anyway.
+            // Also skip when the song has no tone-switching configured —
+            // clearing here would destroy a hand-built chain (e.g. a VST set
+            // up in the Audio Engine panel) with nothing to replace it.
+            const songNeedsRebuild = !window._aeSongShouldRebuildChain
+                || window._aeSongShouldRebuildChain();
             const skipPreflightClear = (midiPreflight?.mode === 'midi' && Number(midiPreflight.vstSlotId) >= 0)
                 || !!window._aeDidClearChainForNewSong
-                || !!window._aeClearingChainForNewSong;
-            // Track whether the chain has been cleared by any path so the bypass preload
-            // below can skip its own clearChain and avoid a redundant second IPC call.
-            let chainClearedForLoad = skipPreflightClear;
+                || !!window._aeClearingChainForNewSong
+                || !songNeedsRebuild;
+            // When the song has no rebuildable tone-switching, skip the
+            // bypass/no-timeline preload — not just the preflight clear.
+            // That path can otherwise fall back to _aeLoadDefaultPreset(
+            // 'tone-none'), which replaces the preserved hand-built chain.
+            // Exemptions — must still run their own install path:
+            //  - MIDI PC mode: talks to an existing VST slot, preload only
+            //    sends program changes (no chain replacement).
+            //  - Tone Automation enabled: installSwitcherForSong must run so
+            //    category-based switching works even when
+            //    songShouldRebuildChain() returned false (e.g. no `idle`
+            //    target). The TA switcher loads presets itself; it does not
+            //    hit the tone-none default-preset fallback below.
+            const isMidiPcPreflight = midiPreflight?.mode === 'midi'
+                && Number(midiPreflight.vstSlotId) >= 0;
+            const taEnabled = window._aeToneAutomation?.isEnabled?.() === true;
+            if (!songNeedsRebuild && !isMidiPcPreflight && !taEnabled) {
+                // Tear down any switcher/monitor left over from a previous
+                // song — mirrors the empty-mapping path in
+                // _applyToneMappingsImpl. Nulling _toneSwitcher alone is not
+                // enough: the tone monitor's 50ms interval would keep calling
+                // the stale switcher against the new song's tone changes.
+                window._toneSwitcher = null;
+                if (window._aeStopToneMonitor) window._aeStopToneMonitor();
+                _preloadedToneCacheKey = null;
+                console.log('[tone-switcher] Song has no rebuildable tone-switching — keeping current chain, skipping preload');
+                return;
+            }
+            // Track whether the chain has actually been cleared, so the bypass
+            // preload below can skip a redundant clearChain. This must mean
+            // "chain is in a cleared state", NOT merely "preflight was
+            // skipped": when skipPreflightClear is true only because the song
+            // has no rebuildable tone-switching (!songNeedsRebuild), nothing
+            // cleared the chain — so a path that still reaches the bypass
+            // preload (e.g. Tone Automation enabled but installSwitcherForSong
+            // fails to install) must do its own clearChain rather than overlay
+            // processors onto the preserved hand-built chain. The genuine
+            // skip reasons (already-cleared / clearing-in-flight) only occur
+            // with songNeedsRebuild true.
+            let chainClearedForLoad = skipPreflightClear && songNeedsRebuild;
             if (!skipPreflightClear) {
                 try {
                     await api.clearChain();
@@ -3148,6 +3584,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                     if (p) {
                         applyPresetGainLevels(api, p);
                         applyPresetNoiseGate(api, p);
+                        applyPresetTonePolish(api, p);
                     }
                     return;
                 }
@@ -3277,13 +3714,48 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                     if (!presetName || !presets[presetName]) continue;
                     const preset = presets[presetName];
                     const slotIds = [];
-                    const chainItems = Array.isArray(preset?.items) ? preset.items : [];
-                    for (const item of chainItems) {
+                    const chainItems = getPresetItems(preset);
+                    // Per-slot processor state lives only in the native preset
+                    // blob (savePreset's chain[].state), parallel to `items`.
+                    // NAM/IR are fully defined by their path; a VST also needs
+                    // its getStateInformation() blob (params + loaded model)
+                    // re-applied — loadVST() alone brings it up blank.
+                    let nativeChain = [];
+                    try {
+                        const parsed = JSON.parse(preset.nativePreset || '{}').chain;
+                        if (Array.isArray(parsed)) nativeChain = parsed;
+                    } catch (_) { nativeChain = []; }
+                    for (let ci = 0; ci < chainItems.length; ci++) {
+                        const item = chainItems[ci];
                         let slotId = -1;
                         if (item.type === 'NAM' && item.path) slotId = await api.loadNAMModel(item.path);
                         else if (item.type === 'IR' && item.path) slotId = await api.loadIR(item.path);
                         else if (item.type === 'VST' && item.path) slotId = await api.loadVST(item.path);
-                        if (slotId >= 0) slotIds.push(slotId);
+                        if (slotId >= 0) {
+                            slotIds.push(slotId);
+                            // Only apply the parallel native-chain entry when it
+                            // exists, is a VST, and refers to the same plugin
+                            // (path match) — guards against items/nativePreset
+                            // blob drift applying a wrong state blob to a
+                            // mismatched slot even when both positions are VSTs.
+                            const nativeEntry = nativeChain[ci];
+                            const entryAligned = nativeEntry
+                                && Number(nativeEntry.type) === 0 // 0 = VST
+                                && (!nativeEntry.path || !item.path
+                                    || nativeEntry.path === item.path);
+                            const st = entryAligned && nativeEntry.state;
+                            if (item.type === 'VST' && st) {
+                                try {
+                                    // Return value is a feature-detect signal
+                                    // (addon supports the call), not proof the
+                                    // blob decoded/applied cleanly.
+                                    const supported = await api.setSlotState(slotId, st);
+                                    if (supported === false) {
+                                        console.warn('[tone-switcher] setSlotState unsupported by native addon');
+                                    }
+                                } catch (e) { console.warn('[tone-switcher] setSlotState failed:', e); }
+                            }
+                        }
                     }
                     toneSlotMap[toneName] = slotIds;
                     tonePresetMap[toneName] = preset;
@@ -3296,6 +3768,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                 if (initialPreset) {
                     applyPresetGainLevels(api, initialPreset);
                     applyPresetNoiseGate(api, initialPreset);
+                    applyPresetTonePolish(api, initialPreset);
                 }
 
                 window._toneSwitcher = {
@@ -3316,6 +3789,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                         if (newPreset) {
                             applyPresetGainLevels(api, newPreset);
                             applyPresetNoiseGate(api, newPreset);
+                            applyPresetTonePolish(api, newPreset);
                         }
                         console.log('[tone-switcher] Switched to:', name);
                     }
@@ -3326,6 +3800,11 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
             }
             } catch (err) {
                 console.error('[tone-switcher] Preload failed:', err);
+            } finally {
+                // Resolve the rebuild guard on every exit path (early returns,
+                // success, or a thrown rebuild) so the monitor-mute state
+                // always matches the chain that actually ended up loaded.
+                await resolveChainRebuildGuard();
             }
         }, 800);
     };
@@ -3381,4 +3860,150 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
     }
     // Allow app.js to finish initialising before querying the DOM.
     setTimeout(tryInjectChainButton, 0);
+})();
+
+// ── Update-downloaded restart banner (top-level, runs even without audio API) ──
+// Subscribes to window.slopsmithDesktop.update.onDownloaded and renders a
+// persistent banner with a "Restart now" button. Degrades silently when the
+// updater IPC namespace is unavailable (e.g. dev builds before the main slice
+// lands, or unsupported platforms).
+(function() {
+    'use strict';
+    const updateApi = window.slopsmithDesktop?.update;
+    if (!updateApi || typeof updateApi.onDownloaded !== 'function') return;
+
+    const BANNER_ID = 'slopsmith-update-banner';
+
+    // This IIFE re-runs if screen.js is re-evaluated. onDownloaded() returns an
+    // unsubscribe fn — drop the listener a previous evaluation registered so
+    // they don't pile up (renderUpdateBanner() de-dupes the DOM node, but the
+    // listeners themselves would still leak).
+    const hookState = window.__slopsmithDesktopAudioHooks;
+    if (typeof hookState.updateBannerUnsub === 'function') {
+        try { hookState.updateBannerUnsub(); } catch (_) { /* defensive */ }
+        hookState.updateBannerUnsub = null;
+    }
+
+    function renderUpdateBanner(payload) {
+        // Avoid stacking duplicate banners if onDownloaded fires more than once.
+        if (document.getElementById(BANNER_ID)) return;
+
+        const banner = document.createElement('div');
+        banner.id = BANNER_ID;
+        banner.setAttribute('role', 'status');
+        banner.style.cssText = [
+            'position:fixed',
+            'top:0',
+            'left:0',
+            'right:0',
+            'z-index:99999',
+            'padding:10px 16px',
+            'background:linear-gradient(90deg,#1e3a8a,#4338ca)',
+            'color:#fff',
+            'font-size:13px',
+            'font-family:system-ui,sans-serif',
+            'display:flex',
+            'align-items:center',
+            'justify-content:space-between',
+            'gap:12px',
+            'box-shadow:0 2px 8px rgba(0,0,0,0.4)',
+        ].join(';');
+
+        const text = document.createElement('span');
+        const version = payload && payload.version ? ` (${payload.version})` : '';
+        text.textContent = `Update downloaded${version} — restart to apply.`;
+
+        const actions = document.createElement('span');
+        actions.style.cssText = 'display:flex;gap:8px;align-items:center';
+
+        const restartBtn = document.createElement('button');
+        restartBtn.textContent = 'Restart now';
+        restartBtn.style.cssText = [
+            'padding:4px 12px',
+            'border-radius:4px',
+            'background:#fff',
+            'color:#1e3a8a',
+            'border:none',
+            'font-weight:600',
+            'cursor:pointer',
+            'font-size:13px',
+        ].join(';');
+        restartBtn.addEventListener('click', async () => {
+            restartBtn.disabled = true;
+            restartBtn.textContent = 'Restarting…';
+            try {
+                // apply() can resolve with { status: 'error' } instead of
+                // throwing. On success the app quits, so reaching past this
+                // with a non-error status is fine — only an error result
+                // needs the button re-enabled for a retry.
+                const result = await updateApi.apply();
+                if (result?.status === 'error') {
+                    console.warn('[updater] apply returned error:', result.message || 'unknown');
+                    restartBtn.disabled = false;
+                    restartBtn.textContent = 'Restart now';
+                }
+            } catch (e) {
+                console.warn('[updater] apply failed:', e);
+                restartBtn.disabled = false;
+                restartBtn.textContent = 'Restart now';
+            }
+        });
+
+        const dismissBtn = document.createElement('button');
+        dismissBtn.textContent = 'Later';
+        dismissBtn.setAttribute('aria-label', 'Dismiss update banner');
+        dismissBtn.style.cssText = [
+            'padding:4px 10px',
+            'border-radius:4px',
+            'background:transparent',
+            'color:#fff',
+            'border:1px solid rgba(255,255,255,0.4)',
+            'cursor:pointer',
+            'font-size:13px',
+        ].join(';');
+        dismissBtn.addEventListener('click', () => {
+            banner.remove();
+        });
+
+        actions.appendChild(restartBtn);
+        actions.appendChild(dismissBtn);
+        banner.appendChild(text);
+        banner.appendChild(actions);
+
+        const insert = () => {
+            if (document.body) document.body.appendChild(banner);
+            else document.addEventListener('DOMContentLoaded', () => document.body.appendChild(banner), { once: true });
+        };
+        insert();
+    }
+
+    try {
+        const unsub = updateApi.onDownloaded((payload) => {
+            try {
+                renderUpdateBanner(payload);
+            } catch (e) {
+                console.warn('[updater] renderUpdateBanner failed:', e);
+            }
+        });
+        if (typeof unsub === 'function') hookState.updateBannerUnsub = unsub;
+    } catch (e) {
+        console.warn('[updater] onDownloaded subscribe failed:', e);
+    }
+
+    // Check on init for an already-downloaded update (e.g. the user restarted
+    // the app without applying a pending update, or the update was downloaded
+    // in a previous session). The onDownloaded event only fires when a download
+    // completes in the *current* session, so we need an explicit status check
+    // to catch pre-existing pending updates.
+    try {
+        void Promise.resolve(updateApi.getStatus()).then((status) => {
+            if (status && status.status === 'downloaded' && status.pending && status.pending.version) {
+                renderUpdateBanner({ version: status.pending.version, channel: status.channel });
+            }
+        }).catch((e) => {
+            console.warn('[updater] getStatus on init failed:', e);
+        });
+    } catch (e) {
+        console.warn('[updater] getStatus on init threw:', e);
+    }
 })();

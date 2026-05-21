@@ -42,6 +42,11 @@ else()
     message(STATUS "RTNeural not found")
 endif()
 
+# ONNX Runtime — for the Basic Pitch ML note detector (MlNoteDetector).
+# Sets ONNXRUNTIME_AVAILABLE; build still succeeds (YIN fallback) if it can't
+# be obtained. See cmake/onnxruntime.cmake.
+include("${CMAKE_SOURCE_DIR}/cmake/onnxruntime.cmake")
+
 add_subdirectory(src/audio)
 
 # Sandbox subprocess (Windows only for now).

@@ -7,6 +7,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { app } from 'electron';
 import { isDebugEnabled, getDebugLogPath } from './debug-log';
+import { initVstCrashGuard, armSentinel, disarmSentinel, armEditorSentinel } from './vst-crash-guard';
 
 type AudioModule = Record<string, (...args: any[]) => any>;
 
@@ -121,6 +122,12 @@ function writeAudioSettings(settings: unknown): boolean {
     }
 }
 
+// slotId → VST3 path, populated by audio:loadVST. Lets audio:openPluginEditor
+// resolve a slot's plugin path for the crash sentinel without a native
+// getChainState call. Kept in sync on remove/clear; slot ids are stable
+// across moves so a reorder needs no upkeep.
+const vstSlotPaths = new Map<number, string>();
+
 function loadNativeAddon(): AudioModule | null {
     const addonPaths = [
         // Development build
@@ -171,6 +178,38 @@ export function initAudioBridge(): void {
         } catch (e: any) {
             console.error(`[audio] Init failed: ${e.message}`);
             audio = null;
+        }
+    }
+
+    // VST crash guard: promote any leftover crash sentinel into the blocklist,
+    // then hand the blocklist to the addon so it sandboxes those plugins.
+    if (audio) {
+        try {
+            const blocked = initVstCrashGuard();
+            if (typeof audio.setCrashedPlugins === 'function')
+                audio.setCrashedPlugins(blocked);
+            if (blocked.length)
+                console.log(`[audio] ${blocked.length} VST(s) on the crash blocklist — will load sandboxed`);
+        } catch (e: any) {
+            console.warn(`[audio] VST crash guard init failed: ${e.message}`);
+        }
+    }
+
+    // Load the Basic Pitch ONNX model for the polyphonic ML note detector.
+    // Bundled offline (Constitution IV) under resources/models/. Fail-soft:
+    // a missing model / disabled ONNX support just leaves the engine on the
+    // YIN PitchDetector / ChordScorer fallback (Constitution VII).
+    if (audio && typeof audio.loadNoteModel === 'function') {
+        const modelPath = app.isPackaged
+            ? path.join(process.resourcesPath, 'models', 'basic_pitch.onnx')
+            : path.join(__dirname, '..', '..', 'resources', 'models', 'basic_pitch.onnx');
+        try {
+            const ok = audio.loadNoteModel(modelPath);
+            console.log(ok
+                ? `[audio] ML note detection model loaded from ${modelPath}`
+                : `[audio] ML note model unavailable (${modelPath}) — using YIN fallback`);
+        } catch (e: any) {
+            console.warn(`[audio] loadNoteModel failed: ${e.message} — using YIN fallback`);
         }
     }
 
@@ -256,6 +295,16 @@ export function initAudioBridge(): void {
         audio?.setMonitorMute(mute);
     });
 
+    ipcMain.handle('audio:setMonitorMuteSuppressed', (_event, suppressed: boolean) => {
+        // typeof-guarded: a downlevel addon without this method is a no-op
+        // rather than a thrown IPC error (Constitution VII fail-soft).
+        // Coerce to a real boolean so an unexpected non-boolean caller can't
+        // make the N-API binding throw on As<Napi::Boolean>().
+        if (audio && typeof audio.setMonitorMuteSuppressed === 'function') {
+            audio.setMonitorMuteSuppressed(Boolean(suppressed));
+        }
+    });
+
     ipcMain.handle('audio:isMonitorMuted', () => {
         return audio?.isMonitorMuted() ?? true;
     });
@@ -275,6 +324,15 @@ export function initAudioBridge(): void {
         },
     );
 
+    ipcMain.handle(
+        'audio:setTonePolish',
+        (_event, payload: { enabled: boolean }) => {
+            if (audio && typeof audio.setTonePolish === 'function') {
+                audio.setTonePolish(payload);
+            }
+        },
+    );
+
     // ── Metering ───────────────────────────────────────────────────────────
 
     ipcMain.handle('audio:getLevels', () => {
@@ -289,6 +347,18 @@ export function initAudioBridge(): void {
 
     ipcMain.handle('audio:getPitchDetection', () => {
         return audio?.getPitchDetection() ?? { frequency: -1, confidence: 0, midiNote: -1, cents: 0, noteName: '' };
+    });
+
+    // Whether the polyphonic ML note detector (Basic Pitch) is active. When
+    // false the engine is on the YIN PitchDetector / ChordScorer fallback.
+    // typeof-guarded so a downlevel addon simply reports false.
+    ipcMain.handle('audio:isMlNoteDetection', () => {
+        if (!audio || typeof audio.isMlNoteDetection !== 'function') return false;
+        try {
+            return audio.isMlNoteDetection() === true;
+        } catch {
+            return false;
+        }
     });
 
     // ── Chord Scoring (polyphonic) ─────────────────────────────────────────
@@ -341,6 +411,55 @@ export function initAudioBridge(): void {
         }
     });
 
+    // Push the song's note chart into the engine for continuous, background
+    // verification. The notedetect plugin calls this once per arrangement
+    // load; the engine's NoteVerifier thread then scores each note against
+    // the live playhead, replacing the renderer's per-tick scoreChord loop.
+    // Returns null on a downlevel addon (pre-NoteVerifier) so the renderer
+    // feature-detects and keeps the old matchNotes path.
+    ipcMain.handle('audio:setChart', (_event, chart: unknown) => {
+        if (!audio || typeof audio.setChart !== 'function') return null;
+        try {
+            return audio.setChart(chart);
+        } catch (e: unknown) {
+            console.warn(`[audio] setChart failed: ${e instanceof Error ? e.message : String(e)}`);
+            return null;
+        }
+    });
+
+    // Drain the verdicts the NoteVerifier thread has finalized since the last
+    // call. Returns null on a downlevel addon so the renderer feature-detects.
+    // The optional (songTime, playing) args push the renderer's unified
+    // playhead — the plugin calls this once per detect tick, so the push rides
+    // the same IPC as the drain.
+    ipcMain.handle('audio:getNoteVerdicts', (_event, songTime: unknown, playing: unknown) => {
+        if (!audio || typeof audio.getNoteVerdicts !== 'function') return null;
+        try {
+            if (typeof songTime === 'number' && Number.isFinite(songTime)
+                && typeof playing === 'boolean') {
+                return audio.getNoteVerdicts(songTime, playing);
+            }
+            return audio.getNoteVerdicts();
+        } catch (e: unknown) {
+            console.warn(`[audio] getNoteVerdicts failed: ${e instanceof Error ? e.message : String(e)}`);
+            return null;
+        }
+    });
+
+    // Raw polyphonic transcription — the ML detector's full active-pitch set.
+    // Returns null when the ML detector isn't active (downlevel addon, no ONNX
+    // support, or no model loaded) so the renderer feature-detects and falls
+    // back to the getPitchDetection / scoreChord path.
+    ipcMain.handle('audio:detectNotes', () => {
+        if (!audio || typeof audio.detectNotes !== 'function') return null;
+        try {
+            return audio.detectNotes();
+        } catch (e: unknown) {
+            console.warn(`[audio] detectNotes failed: ${e instanceof Error ? e.message : String(e)}`);
+            return null;
+        }
+    });
+
     // ── VST Scanning ───────────────────────────────────────────────────────
 
     ipcMain.handle('audio:scanPlugins', async (_event, dirs?: string[]) => {
@@ -362,8 +481,23 @@ export function initAudioBridge(): void {
 
     // ── Signal Chain ───────────────────────────────────────────────────────
 
-    ipcMain.handle('audio:loadVST', (_event, pluginPath: string) => {
-        return audio?.loadVST(pluginPath) ?? -1;
+    ipcMain.handle('audio:loadVST', async (_event, pluginPath: string) => {
+        // Bracket the in-process load with the crash sentinel. The native
+        // loadVST is now a Napi::AsyncWorker that returns a Promise<number>;
+        // a hard abort during the load means the awaiting handler never
+        // resumes and the sentinel survives for the next startup. Any
+        // normal resolve OR a thrown JS exception (the worker rejects on a
+        // required-sandbox spawn failure) means the process survived, so
+        // disarm in `finally` to avoid a false blocklist entry.
+        armSentinel(pluginPath, 'load');
+        let slotId = -1;
+        try {
+            slotId = (await audio?.loadVST(pluginPath)) ?? -1;
+        } finally {
+            disarmSentinel();
+        }
+        if (slotId >= 0) vstSlotPaths.set(slotId, pluginPath);
+        return slotId;
     });
 
     ipcMain.handle('audio:loadNAMModel', async (_event, modelPath: string) => {
@@ -376,6 +510,7 @@ export function initAudioBridge(): void {
 
     ipcMain.handle('audio:removeProcessor', (_event, slotId: number) => {
         audio?.removeProcessor(slotId);
+        vstSlotPaths.delete(slotId);
     });
 
     ipcMain.handle('audio:moveProcessor', (_event, from: number, to: number) => {
@@ -388,6 +523,7 @@ export function initAudioBridge(): void {
 
     ipcMain.handle('audio:clearChain', () => {
         audio?.clearChain();
+        vstSlotPaths.clear();
     });
 
     ipcMain.handle('audio:getChainState', () => {
@@ -397,7 +533,35 @@ export function initAudioBridge(): void {
     // ── Plugin Editor ──────────────────────────────────────────────────────
 
     ipcMain.handle('audio:openPluginEditor', (_event, slotId: number) => {
-        return audio?.openPluginEditor(slotId) ?? false;
+        // Editor creation is the common in-process fault point (an editor
+        // that must run on the OS main thread). Arm the sentinel with the
+        // slot's plugin path before opening; armEditorSentinel self-clears
+        // after a grace window since editor creation is asynchronous and has
+        // no synchronous success signal. The path comes from the loadVST map
+        // first; getChainState is only a fallback for slots created another
+        // way (e.g. preset restore).
+        let pluginPath = vstSlotPaths.get(slotId);
+        if (!pluginPath) {
+            const slot = (audio?.getChainState() ?? []).find((s: any) => s?.id === slotId);
+            if (slot && typeof slot.path === 'string') pluginPath = slot.path;
+        }
+        if (pluginPath) armEditorSentinel(pluginPath);
+        let opened = false;
+        try {
+            opened = audio?.openPluginEditor(slotId) ?? false;
+        } catch (e) {
+            // A thrown call is a clean failure, not a hard crash — disarm so
+            // the plugin isn't falsely blocklisted on next startup.
+            disarmSentinel();
+            throw e;
+        }
+        // A synchronous false means no editor window was created (the plugin
+        // has none, or the open failed cleanly) — nothing can fault, so clear
+        // the sentinel now instead of waiting out the grace window. On a
+        // true return the sentinel stays armed: the editor is created
+        // asynchronously and could still fault within the grace window.
+        if (!opened) disarmSentinel();
+        return opened;
     });
 
     ipcMain.handle('audio:closePluginEditor', (_event, slotId: number) => {
@@ -412,6 +576,25 @@ export function initAudioBridge(): void {
 
     ipcMain.handle('audio:setParameter', (_event, slotId: number, paramIndex: number, value: number) => {
         audio?.setParameter(slotId, paramIndex, value);
+    });
+
+    ipcMain.handle('audio:setSlotState', (_event, slotId: number, base64State: string): boolean => {
+        // typeof-guarded so a downlevel addon is a no-op rather than a thrown
+        // IPC error (Constitution VII fail-soft). Returns true when the native
+        // addon supports the call (feature-detect signal — the preload always
+        // exposes the method, so a renderer-side typeof check cannot tell a
+        // downlevel addon apart). try/catch so an addon-side throw resolves
+        // to false rather than rejecting the renderer's ipcRenderer.invoke.
+        if (audio && typeof audio.setSlotState === 'function') {
+            try {
+                audio.setSlotState(slotId, base64State);
+                return true;
+            } catch (err) {
+                console.warn('[audio-bridge] setSlotState threw:', err);
+                return false;
+            }
+        }
+        return false;
     });
 
     // ── MIDI ───────────────────────────────────────────────────────────────
@@ -440,7 +623,13 @@ export function initAudioBridge(): void {
     });
 
     ipcMain.handle('audio:loadPreset', async (_event, presetJson: string) => {
-        return await audio?.loadPreset(presetJson) ?? { success: false, error: 'No audio' };
+        const result = await audio?.loadPreset(presetJson) ?? { success: false, error: 'No audio' };
+        // loadPreset rebuilds the native chain from scratch, so the cached
+        // slotId→path map no longer reflects it. Clear it — openPluginEditor
+        // then falls back to the live getChainState lookup for these slots
+        // rather than trusting a stale (possibly id-reused) entry.
+        vstSlotPaths.clear();
+        return result;
     });
 
     ipcMain.handle('audio:setMultiBypass', (_event, changes: Array<{slotId: number, bypassed: boolean}>) => {

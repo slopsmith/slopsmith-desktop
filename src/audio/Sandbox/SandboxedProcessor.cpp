@@ -46,36 +46,99 @@ namespace {
         void parentHierarchyChanged() override
         {
            #if JUCE_WINDOWS
-            if (!nativeHwnd) return;
+            tryEmbedNativeHwnd();
+           #endif
+        }
+
+       #if JUCE_WINDOWS
+        // Reparent the sandbox plugin's HWND under this editor's top-level
+        // OS window so it appears inside the editor frame.
+        //
+        // parentHierarchyChanged() fires while the host DocumentWindow is
+        // still being constructed (during setContentOwned), before the window
+        // has been added to the desktop — so getPeer() is null on that first
+        // call. Rather than give up, re-post the attempt: by the next message
+        // loop cycle the window's setVisible(true) has run and the OS peer
+        // exists. Bounded so a genuinely peerless host can't spin forever.
+        void tryEmbedNativeHwnd()
+        {
+            if (!nativeHwnd || embedded)
+                return;
+
             auto* peer = getPeer();
             HWND parent = peer ? (HWND)peer->getNativeHandle() : nullptr;
             if (!parent)
             {
-                // No top-level JUCE peer — the common case inside the
-                // Electron addon today (Electron-side HWND reparenting is
-                // the deferred follow-up). Trace once per editor so
-                // "plugin loaded but editor never appears" is at least
-                // diagnosable from logs rather than completely silent.
-                if (! peerlessLogged)
+                if (++peerRetries <= kMaxPeerRetries)
                 {
-                    VST_TRACE("[sandbox] SandboxedEditor: no JUCE peer for "
-                              "parent reparent (editor stays at -32000,-32000 "
-                              "until Electron-side HWND embedding lands)");
+                    juce::Component::SafePointer<SandboxedEditor> self(this);
+                    juce::MessageManager::callAsync([self]()
+                    {
+                        if (self != nullptr)
+                            self->tryEmbedNativeHwnd();
+                    });
+                }
+                else if (! peerlessLogged)
+                {
+                    VST_TRACE("[sandbox] SandboxedEditor: host window never "
+                              "got an OS peer after %d retries — editor HWND "
+                              "left unparented", kMaxPeerRetries);
                     peerlessLogged = true;
                 }
                 return;
             }
+
+            wchar_t winsta[128] = L"?";
+            DWORD winstaLen = 0;
+            GetUserObjectInformationW(GetProcessWindowStation(), UOI_NAME,
+                                      winsta, sizeof(winsta), &winstaLen);
+            VST_TRACE("[sandbox] SandboxedEditor: embed attempt — "
+                      "nativeHwnd=%p IsWindow=%d, parentHwnd=%p IsWindow=%d, "
+                      "winsta=%ls",
+                      nativeHwnd, IsWindow((HWND)nativeHwnd) ? 1 : 0,
+                      (void*)parent, IsWindow(parent) ? 1 : 0, winsta);
+
+            auto style = GetWindowLongPtrW((HWND)nativeHwnd, GWL_STYLE);
+            style = (style | WS_CHILD) & ~WS_POPUP;
+            SetWindowLongPtrW((HWND)nativeHwnd, GWL_STYLE, style);
+
+            // SetParent returns the *previous* parent, which is NULL both on
+            // failure and when the old parent was the desktop — ambiguous.
+            // Verify the reparent took by reading the parent back. Don't set
+            // `embedded` on failure: that flag gates the retry guard, so a
+            // false success would strand the editor offscreen forever.
+            SetLastError(0);
+            SetParent((HWND)nativeHwnd, parent);
+            if (GetParent((HWND)nativeHwnd) != parent)
             {
-                auto style = GetWindowLongPtrW((HWND)nativeHwnd, GWL_STYLE);
-                style = (style | WS_CHILD) & ~WS_POPUP;
-                SetWindowLongPtrW((HWND)nativeHwnd, GWL_STYLE, style);
-                SetParent((HWND)nativeHwnd, parent);
-                SetWindowPos((HWND)nativeHwnd, nullptr, 0, 0,
-                             getWidth(), getHeight(),
-                             SWP_NOZORDER | SWP_FRAMECHANGED);
+                VST_TRACE("[sandbox] SandboxedEditor: SetParent failed "
+                          "(GetLastError=%lu) — HWND not embedded",
+                          (unsigned long)GetLastError());
+                return;
             }
-           #endif
+            if (! SetWindowPos((HWND)nativeHwnd, nullptr, 0, 0,
+                               getWidth(), getHeight(),
+                               SWP_NOZORDER | SWP_FRAMECHANGED))
+            {
+                VST_TRACE("[sandbox] SandboxedEditor: SetWindowPos failed "
+                          "after reparent");
+                return;
+            }
+            // The sandbox parks the editor window offscreen until it has a
+            // parent; make it visible now that it's embedded.
+            ShowWindow((HWND)nativeHwnd, SW_SHOW);
+            embedded = true;
+            VST_TRACE("[sandbox] SandboxedEditor: embedded plugin HWND under "
+                      "host window (%dx%d)", getWidth(), getHeight());
+
+            // The host window was shown and brought to front while it was
+            // being constructed — before this async embed completed — so it
+            // can end up behind the main app window. Raise it now that the
+            // plugin HWND is actually in place.
+            if (auto* top = getTopLevelComponent())
+                top->toFront(true);
         }
+       #endif
 
         void resized() override
         {
@@ -99,9 +162,13 @@ namespace {
         }
 
     private:
+        static constexpr int kMaxPeerRetries = 50;
+
         SandboxedProcessor& proc;
         void* nativeHwnd = nullptr;
+        bool embedded = false;
         bool peerlessLogged = false;
+        int peerRetries = 0;
     };
 } // anonymous
 

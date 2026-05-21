@@ -237,4 +237,19 @@ in the title bar or in *About*), and steps to reproduce.
 
 ## License
 
-MIT
+Slopsmith Desktop is licensed under the GNU Affero General Public
+License v3.0 — see [`LICENSE`](LICENSE) for the full text.
+
+The audio engine statically links [JUCE 8](https://juce.com/), which is
+[AGPL-3.0 when not used under JUCE's commercial licence](https://github.com/juce-framework/JUCE/blob/master/LICENSE.md);
+the combined desktop binary inherits AGPL-3.0 via that linkage.
+
+Bundled and build-time third-party components — JUCE, NAM, RTNeural,
+Rocksmith2014.NET / `rscli`, FluidSynth (Windows), the GeneralUser GS
+SoundFont, the embedded CPython runtime, Electron, and runtime npm
+dependencies — and their respective licences are listed in
+[`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md).
+
+The Slopsmith server bundled inside this app
+([byrongamatos/slopsmith](https://github.com/byrongamatos/slopsmith))
+is also distributed under AGPL-3.0-only.

@@ -180,6 +180,14 @@ std::unique_ptr<juce::AudioProcessor> tryLoadSandboxed(
 // status.
 bool shouldSandbox(const juce::PluginDescription& desc);
 
+// Register the set of plugin paths known to have crashed the app on a
+// previous run (persisted by the renderer's VST crash guard). A registered
+// plugin is routed through the sandbox by shouldSandbox() even if it doesn't
+// match the built-in filename heuristic — that's how a never-before-seen
+// offender is made safe after a single crash. Paths are matched
+// case-insensitively. Each call replaces the previous set.
+void setCrashedPlugins(const juce::StringArray& pluginPaths);
+
 // Resolve the path to slopsmith-vst-host.exe (sits next to the audio addon
 // .node). Returns a non-existent File if it can't be located. Exposed so the
 // out-of-process VST scan path can spawn the same host binary as the sandbox.

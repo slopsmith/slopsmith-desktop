@@ -39,8 +39,11 @@ export NC='\033[0m'
 source "$SCRIPT_DIR/build-common.sh"
 
 # Platform-specific: Return expected artifact patterns
+# Windows target is now "dir" (electron-builder unpacked only) because Velopack
+# generates the installer via `vpk pack` on tagged CI runs. For non-tag builds
+# (PR validation, main-branch pushes) only the unpacked dir is produced.
 get_expected_artifacts() {
-    printf "%s\n" "$PROJECT_DIR/release/*.exe" "$PROJECT_DIR/release/*.zip"
+    printf "%s\n" "$PROJECT_DIR/release/win-unpacked/*.exe"
 }
 
 # Platform-specific: Install system dependencies

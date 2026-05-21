@@ -116,6 +116,7 @@ void ChordScorer::ensureFft(int fftSize)
     currentFftSize = fftSize;
     currentFftOrder = order;
     fftScratch.assign((size_t) fftSize, juce::dsp::Complex<float>{0.0f, 0.0f});
+    fftOutScratch.assign((size_t) fftSize, juce::dsp::Complex<float>{0.0f, 0.0f});
     magnitudes.assign((size_t) ((fftSize >> 1) + 1), 0.0f);
 }
 
@@ -138,15 +139,24 @@ void ChordScorer::computeMagnitudes(const float* buffer, int numSamples)
         fftScratch[(size_t) i] = juce::dsp::Complex<float>{ buffer[i] * w, 0.0f };
     }
 
-    // Forward FFT in-place — same Complex<float>* pointer as input and
-    // output, matching the JS `_ndFftInPlace` shape. No reinterpret_cast
-    // needed now that the scratch is already typed as complex bins.
-    fft->perform(fftScratch.data(), fftScratch.data(), false);
+    // Forward FFT — out-of-place. JUCE's FFT::perform contract is that
+    // input and output must be distinct buffers ("Performs an out-of-place
+    // FFT" — juce_FFT.h). The Ooura fallback engine that Linux + Windows
+    // desktop builds default to recurses into a radix decomposition that
+    // reads input positions and writes output positions in overlapping
+    // iteration patterns; aliasing the two buffers produces cascading
+    // numerical corruption (observed: ~1e27-magnitude bins from sub-1.0
+    // input samples). The corrupted magnitudes propagate into the per-
+    // string band energy as Inf/NaN downstream, and every chord scores
+    // as all-miss. macOS desktop builds use vDSP (Apple Accelerate),
+    // which tolerates input==output aliasing in practice — which is
+    // why this bug only surfaces on the Linux/Windows desktop bridge.
+    fft->perform(fftScratch.data(), fftOutScratch.data(), false);
 
     const int halfBins = (currentFftSize >> 1) + 1;
     for (int k = 0; k < halfBins; ++k)
     {
-        const auto& c = fftScratch[(size_t) k];
+        const auto& c = fftOutScratch[(size_t) k];
         magnitudes[(size_t) k] = std::sqrt(c.real() * c.real() + c.imag() * c.imag());
     }
 }
@@ -236,6 +246,7 @@ ChordScorer::Result ChordScorer::scoreChord(const float* buffer, int numSamples,
         totalEnergy += (double) m * m;
 
     out.results.reserve(req.notes.size());
+    const int nBins = (int) magnitudes.size();
     int hits = 0;
     for (const auto& note : req.notes)
     {
@@ -249,72 +260,169 @@ ChordScorer::Result ChordScorer::scoreChord(const float* buffer, int numSamples,
         if (note.harmonic)
             cents = 0.0f; // energy-only
 
-        const auto [loHz, hiHz] = stringBandHz(note.string, base, req.tuningOffsets, req.capo);
-
-        // Band energy fraction. Identical bin-clamp + summation as JS
-        // `_ndBandEnergy`. hiBin < loBin only happens for a fully-out-of-range
-        // band (e.g. clamped below zero), so we shortcut to 0.
-        const int nBins = (int) magnitudes.size();
-        const int loBin = std::max(0, (int) std::floor(loHz / binHz));
-        const int hiBin = std::min(nBins - 1, (int) std::ceil(hiHz / binHz));
-        double bandEnergy = 0.0;
-        if (hiBin >= loBin)
-        {
-            for (int k = loBin; k <= hiBin; ++k)
-                bandEnergy += (double) magnitudes[(size_t) k] * magnitudes[(size_t) k];
-        }
-        const float bandEnergyFraction = (totalEnergy < 1e-12)
-            ? 0.0f
-            : (float) (bandEnergy / totalEnergy);
-
         NoteResult nr{};
         nr.string = note.string;
         nr.fret = note.fret;
-        nr.bandEnergy = bandEnergyFraction;
 
-        if (bandEnergyFraction < energyThreshold)
+        if (req.harmonicVerify)
         {
-            nr.hit = false;
-            nr.hasCents = false;
-        }
-        else if (cents <= 0.0f)
-        {
-            // Energy-only path (harmonic flag, or caller asked for it).
-            nr.hit = true;
-            nr.hasCents = false;
+            // ── Harmonic-comb verification ──────────────────────────────
+            // Score the note by the energy at its expected harmonics
+            // (f, 2f .. 5f) relative to the off-harmonic spectral floor
+            // sampled between them. No whole-spectrum division, so a bright
+            // or broadband signal does not dilute the measurement.
+            const int expectedMidi =
+                midiFromStringFret(note.string, note.fret, base, req.tuningOffsets, req.capo);
+            const double f0 = 440.0 * std::pow(2.0, (expectedMidi - 69) / 12.0);
+
+            // Refined peak frequency + magnitude in a ±~half-semitone window
+            // around `targetHz`. The window doubles as the pitch tolerance:
+            // a note a semitone off (~6 %) falls outside it, so a
+            // neighbouring fret's comb will not score against this note.
+            auto peakNear = [&](double targetHz, float& outMag) -> double
+            {
+                const int lo = std::max(0, (int) std::floor(targetHz * 0.971 / binHz));
+                const int hi = std::min(nBins - 1, (int) std::ceil(targetHz * 1.030 / binHz));
+                int pkBin = lo;
+                float pk = 0.0f;
+                for (int k = lo; k <= hi; ++k)
+                {
+                    if (magnitudes[(size_t) k] > pk)
+                    {
+                        pk = magnitudes[(size_t) k];
+                        pkBin = k;
+                    }
+                }
+                outMag = pk;
+                const float d = (pkBin > 0 && pkBin < nBins - 1)
+                    ? parabolicOffset(magnitudes[(size_t) (pkBin - 1)],
+                                      magnitudes[(size_t) pkBin],
+                                      magnitudes[(size_t) (pkBin + 1)])
+                    : 0.0f;
+                return (pkBin + d) * binHz;
+            };
+
+            constexpr int kHarmonics = 5;
+            double harmEnergy = 0.0;
+            // Pitch is read from the h=1 fundamental only. Taking the strongest
+            // partial ÷ its number (the previous approach) reads systematically
+            // sharp: real strings are inharmonic, so the 2nd/3rd partials sit
+            // sharp of 2f0/3f0 — and on a DI tone those upper partials are
+            // often the strongest. The fundamental carries no inharmonicity.
+            double fundamentalFreq = f0;
+            float  fundMag = 0.0f;     // h=1 peak magnitude
+            float  maxHarmMag = 0.0f;  // strongest partial's magnitude
+            for (int h = 1; h <= kHarmonics; ++h)
+            {
+                float mag = 0.0f;
+                const double freq = peakNear(f0 * h, mag);
+                harmEnergy += (double) mag * mag;
+                if (h == 1) { fundamentalFreq = freq; fundMag = mag; }
+                if (mag > maxHarmMag) maxHarmMag = mag;
+            }
+            // Off-harmonic floor: the midpoints 1.5f, 2.5f .. carry only
+            // local noise/decay, never this note's own partials.
+            double floorEnergy = 0.0;
+            for (int h = 1; h < kHarmonics; ++h)
+            {
+                float mag = 0.0f;
+                peakNear(f0 * (h + 0.5), mag);
+                floorEnergy += (double) mag * mag;
+            }
+            const double harmAvg  = harmEnergy / kHarmonics;
+            const double floorAvg = floorEnergy / (kHarmonics - 1);
+            // Average per-bin energy is a scale-correct silence floor — in
+            // silence harmAvg, floorAvg and avgBin all collapse together so
+            // the ratio sits near 1 and nothing scores.
+            const double avgBin = totalEnergy / std::max(nBins, 1);
+            const double denom  = std::max(std::max(floorAvg, avgBin), 1e-20);
+            const float  snr    = (float) (harmAvg / denom);
+
+            const float centsError =
+                foldOctaveCents((float) (1200.0 * std::log2(fundamentalFreq / f0)));
+
+            // Fundamental-presence gate — specificity against octave / related
+            // wrong notes. A genuine note has real energy at f0. An octave-up
+            // impostor (or playing a power chord's root only, leaving the
+            // fifth's comb to feed on the root's 3rd partial) has its energy at
+            // f0's MULTIPLES, with f0 itself near the noise floor — so when the
+            // fundamental peak is tiny next to the strongest partial, reject.
+            // Skipped for harmonic-flagged notes, whose fundamental is meant to
+            // be weak.
+            constexpr float kFundamentalRatio = 0.20f;
+            const bool fundamentalPresent =
+                note.harmonic
+             || maxHarmMag <= 0.0f
+             || fundMag >= kFundamentalRatio * maxHarmMag;
+
+            // The `bandEnergy` field carries the SNR here so the renderer's
+            // diagnostics still have a number to surface.
+            nr.bandEnergy = snr;
+            nr.hasCents = true;
+            nr.centsDiff = std::abs(centsError);
+            nr.centsError = centsError;
+            nr.hit = (snr >= req.harmonicSnr)
+                  && fundamentalPresent
+                  && (cents <= 0.0f || std::abs(centsError) <= cents);
         }
         else
         {
-            // Peak-pick within the band, parabolic refine, fold to nearest
-            // octave for the cents comparison. Same shape as JS
-            // `_ndConstraintCheckString`'s pitch branch.
-            int peakBin = loBin;
-            float peakVal = -std::numeric_limits<float>::infinity();
-            for (int k = loBin; k <= hiBin; ++k)
+            // ── Band-energy check (original path; chords still use it) ──
+            const auto [loHz, hiHz] = stringBandHz(note.string, base, req.tuningOffsets, req.capo);
+            const int loBin = std::max(0, (int) std::floor(loHz / binHz));
+            const int hiBin = std::min(nBins - 1, (int) std::ceil(hiHz / binHz));
+            double bandEnergy = 0.0;
+            if (hiBin >= loBin)
             {
-                if (magnitudes[(size_t) k] > peakVal)
-                {
-                    peakVal = magnitudes[(size_t) k];
-                    peakBin = k;
-                }
+                for (int k = loBin; k <= hiBin; ++k)
+                    bandEnergy += (double) magnitudes[(size_t) k] * magnitudes[(size_t) k];
             }
-            const float delta = (peakBin > loBin && peakBin < hiBin)
-                ? parabolicOffset(magnitudes[(size_t) (peakBin - 1)],
-                                  magnitudes[(size_t) peakBin],
-                                  magnitudes[(size_t) (peakBin + 1)])
-                : 0.0f;
-            const double detectedHz = (peakBin + delta) * binHz;
+            const float bandEnergyFraction = (totalEnergy < 1e-12)
+                ? 0.0f
+                : (float) (bandEnergy / totalEnergy);
+            nr.bandEnergy = bandEnergyFraction;
 
-            const int expectedMidi = midiFromStringFret(note.string, note.fret, base, req.tuningOffsets, req.capo);
-            const double expectedHz = 440.0 * std::pow(2.0, (expectedMidi - 69) / 12.0);
-            const float rawCentsError = (float) (1200.0 * std::log2(detectedHz / expectedHz));
-            const float centsError = foldOctaveCents(rawCentsError);
-            const float centsDiff = std::abs(centsError);
+            if (bandEnergyFraction < energyThreshold)
+            {
+                nr.hit = false;
+                nr.hasCents = false;
+            }
+            else if (cents <= 0.0f)
+            {
+                // Energy-only path (harmonic flag, or caller asked for it).
+                nr.hit = true;
+                nr.hasCents = false;
+            }
+            else
+            {
+                int peakBin = loBin;
+                float peakVal = -std::numeric_limits<float>::infinity();
+                for (int k = loBin; k <= hiBin; ++k)
+                {
+                    if (magnitudes[(size_t) k] > peakVal)
+                    {
+                        peakVal = magnitudes[(size_t) k];
+                        peakBin = k;
+                    }
+                }
+                const float delta = (peakBin > loBin && peakBin < hiBin)
+                    ? parabolicOffset(magnitudes[(size_t) (peakBin - 1)],
+                                      magnitudes[(size_t) peakBin],
+                                      magnitudes[(size_t) (peakBin + 1)])
+                    : 0.0f;
+                const double detectedHz = (peakBin + delta) * binHz;
 
-            nr.hit = centsDiff <= cents;
-            nr.hasCents = true;
-            nr.centsDiff = centsDiff;
-            nr.centsError = centsError;
+                const int expectedMidi = midiFromStringFret(note.string, note.fret, base, req.tuningOffsets, req.capo);
+                const double expectedHz = 440.0 * std::pow(2.0, (expectedMidi - 69) / 12.0);
+                const float rawCentsError = (float) (1200.0 * std::log2(detectedHz / expectedHz));
+                const float centsError = foldOctaveCents(rawCentsError);
+                const float centsDiff = std::abs(centsError);
+
+                nr.hit = centsDiff <= cents;
+                nr.hasCents = true;
+                nr.centsDiff = centsDiff;
+                nr.centsError = centsError;
+            }
         }
 
         if (nr.hit) ++hits;
