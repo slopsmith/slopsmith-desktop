@@ -332,8 +332,25 @@ export function applyAndRestart(): UpdateStatus {
         const message = err instanceof Error ? err.message : String(err);
         console.error('[update-manager] applyAndRestart failed:', message);
         lastError = message;
-        activeState = 'error';
-        return getStatus();
+        // A failed launch of the updater does not undo the download — the
+        // staged package is still on disk. Keep activeState 'downloaded' so
+        // the restart banner stays and the user can retry; only fall to
+        // 'error' if the package somehow vanished.
+        const stillPending = velopackUm.getUpdatePendingRestart();
+        if (stillPending) {
+            pendingVersion = stillPending.Version;
+            pendingDownloaded = { version: stillPending.Version };
+            activeState = 'downloaded';
+        } else {
+            activeState = 'error';
+        }
+        return {
+            status: 'error',
+            channel: currentChannel,
+            currentVersion: currentVersion(),
+            lastChecked,
+            message,
+        };
     }
     // The Velopack updater is now waiting for this process to exit (~60s
     // budget). Quit on the next tick so this IPC call returns to the renderer
