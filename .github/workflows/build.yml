@@ -267,14 +267,18 @@ jobs:
             # vpk notarizes through a notarytool *credential profile*, not
             # raw Apple-ID flags (it shells out to `xcrun notarytool`, which
             # takes --keychain-profile). Create the profile first, then hand
-            # vpk --notaryProfile. Store it in build.keychain — the default
-            # keychain set up by the cert-import step — so vpk's notarytool
-            # call discovers it.
+            # vpk --notaryProfile. Do NOT pass --keychain: notarytool's
+            # --keychain wants a file *path* (not a name like
+            # "build.keychain"), and notarytool stores/reads credential
+            # profiles in the login keychain by default. vpk's own internal
+            # notarytool call also defaults to the login keychain, so
+            # leaving --keychain off keeps both sides pointing at the same
+            # store. (build.keychain only holds the signing cert, which
+            # codesign finds via the keychain search list.)
             xcrun notarytool store-credentials "velopack-notary" \
               --apple-id "$APPLE_ID" \
               --password "$APPLE_APP_SPECIFIC_PASSWORD" \
-              --team-id "$APPLE_TEAM_ID" \
-              --keychain build.keychain
+              --team-id "$APPLE_TEAM_ID"
             vpk pack \
               --packId Slopsmith \
               --packVersion "${{ steps.velopack_channel.outputs.version }}" \
