@@ -36,15 +36,15 @@ static void cancelAllPendingLoads();
 // under it mid-load.
 //
 // snapshotEngine() / snapshotVstHost() take the global under the matching
-// mutex and return a private copy. EVERY cross-thread access *should* go
+// mutex and return a private copy. EVERY cross-thread access MUST go
 // through these — the message thread mutates the globals (Init, doShutdown)
-// while worker threads read them. As of this PR all the worker / async-load
-// paths (LoadVSTWorker, LoadNAMWorker, LoadIRWorker, LoadPresetWorker,
-// ScanPluginsWorker, doShutdown) are converted. The remaining ~100 direct
-// reads in the synchronous napi handlers (SetGain, GetLevels, …) still
-// carry the *pre-existing* raw-read-vs-reset race they had when these were
-// unique_ptrs; migrating them is tracked as a dedicated follow-up rather
-// than expanding this PR.
+// while worker threads and the synchronous napi handlers read them. The
+// only code permitted to touch the bare `engine` / `vstHost` globals is
+// the snapshot helpers below and the mutex-guarded writes in Init /
+// doShutdown. Every napi handler takes a local snapshot at the top, null-
+// checks it, and dereferences only that local for the rest of its body, so
+// a concurrent doShutdown reset can never pull the object out from under an
+// in-flight call.
 static std::shared_ptr<AudioEngine> engine;
 static std::mutex engineMutex;
 
@@ -156,16 +156,18 @@ static Napi::Value Init(const Napi::CallbackInfo& info)
 
     // Create engine on the JUCE message thread (or inline on macOS)
     dispatchOnMessageThread([]() {
+        std::shared_ptr<AudioEngine> liveEngine;
         {
             std::lock_guard<std::mutex> lock(engineMutex);
             engine = std::make_shared<AudioEngine>();
+            liveEngine = engine;
         }
         {
             std::lock_guard<std::mutex> lock(vstHostMutex);
             vstHost = std::make_shared<VSTHost>();
         }
 
-        auto types = engine->getDeviceTypes();
+        auto types = liveEngine->getDeviceTypes();
         fprintf(stderr, "[audio-native] Init complete. Device types: %d\n", types.size());
         for (int i = 0; i < types.size(); ++i)
             fprintf(stderr, "[audio-native]   %s: %d inputs, %d outputs\n",
@@ -233,10 +235,11 @@ static Napi::Value Shutdown(const Napi::CallbackInfo& info)
 static Napi::Value GetDeviceTypes(const Napi::CallbackInfo& info)
 {
     auto env = info.Env();
-    if (!engine) return env.Null();
+    auto liveEngine = snapshotEngine();
+    if (!liveEngine) return env.Null();
 
     // Device types are already scanned during init — safe to read from any thread
-    auto types = engine->getDeviceTypes();
+    auto types = liveEngine->getDeviceTypes();
 
     auto result = Napi::Array::New(env, types.size());
 
@@ -264,9 +267,10 @@ static Napi::Value GetDeviceTypes(const Napi::CallbackInfo& info)
 static Napi::Value GetSampleRates(const Napi::CallbackInfo& info)
 {
     auto env = info.Env();
-    if (!engine) return Napi::Array::New(env);
+    auto liveEngine = snapshotEngine();
+    if (!liveEngine) return Napi::Array::New(env);
 
-    auto rates = engine->getSampleRates();
+    auto rates = liveEngine->getSampleRates();
     auto result = Napi::Array::New(env, rates.size());
     for (int i = 0; i < rates.size(); ++i)
         result.Set((uint32_t)i, rates[i]);
@@ -276,9 +280,10 @@ static Napi::Value GetSampleRates(const Napi::CallbackInfo& info)
 static Napi::Value GetBufferSizes(const Napi::CallbackInfo& info)
 {
     auto env = info.Env();
-    if (!engine) return Napi::Array::New(env);
+    auto liveEngine = snapshotEngine();
+    if (!liveEngine) return Napi::Array::New(env);
 
-    auto sizes = engine->getBufferSizes();
+    auto sizes = liveEngine->getBufferSizes();
     auto result = Napi::Array::New(env, sizes.size());
     for (int i = 0; i < sizes.size(); ++i)
         result.Set((uint32_t)i, sizes[i]);
@@ -288,6 +293,7 @@ static Napi::Value GetBufferSizes(const Napi::CallbackInfo& info)
 static Napi::Value ProbeDeviceOptions(const Napi::CallbackInfo& info)
 {
     auto env = info.Env();
+    auto liveEngine = snapshotEngine();
     auto obj = Napi::Object::New(env);
     auto type = info.Length() > 0 && info[0].IsString() ? info[0].As<Napi::String>().Utf8Value() : "";
     auto input = info.Length() > 1 && info[1].IsString() ? info[1].As<Napi::String>().Utf8Value() : "";
@@ -300,13 +306,13 @@ static Napi::Value ProbeDeviceOptions(const Napi::CallbackInfo& info)
     obj.Set("output", output);
     obj.Set("sampleRates", ratesArray);
     obj.Set("bufferSizes", buffersArray);
-    if (!engine)
+    if (!liveEngine)
     {
         obj.Set("error", "Audio engine not initialized");
         return obj;
     }
 
-    auto options = engine->probeDeviceOptions(juce::String(type), juce::String(input), juce::String(output));
+    auto options = liveEngine->probeDeviceOptions(juce::String(type), juce::String(input), juce::String(output));
     obj.Set("type", options.type.toStdString());
     obj.Set("input", options.input.toStdString());
     obj.Set("output", options.output.toStdString());
@@ -328,15 +334,16 @@ static Napi::Value ProbeDeviceOptions(const Napi::CallbackInfo& info)
 static Napi::Value GetCurrentDevice(const Napi::CallbackInfo& info)
 {
     auto env = info.Env();
-    if (!engine) return env.Null();
+    auto liveEngine = snapshotEngine();
+    if (!liveEngine) return env.Null();
 
     auto obj = Napi::Object::New(env);
-    obj.Set("type", engine->getCurrentDeviceType().toStdString());
-    obj.Set("input", engine->getCurrentInputDevice().toStdString());
-    obj.Set("output", engine->getCurrentOutputDevice().toStdString());
-    obj.Set("sampleRate", engine->getCurrentSampleRate());
-    obj.Set("blockSize", engine->getCurrentBlockSize());
-    obj.Set("latencyMs", engine->getLatencyMs());
+    obj.Set("type", liveEngine->getCurrentDeviceType().toStdString());
+    obj.Set("input", liveEngine->getCurrentInputDevice().toStdString());
+    obj.Set("output", liveEngine->getCurrentOutputDevice().toStdString());
+    obj.Set("sampleRate", liveEngine->getCurrentSampleRate());
+    obj.Set("blockSize", liveEngine->getCurrentBlockSize());
+    obj.Set("latencyMs", liveEngine->getLatencyMs());
     return obj;
 }
 
@@ -345,17 +352,19 @@ static Napi::Value GetCurrentDevice(const Napi::CallbackInfo& info)
 static Napi::Value SetDeviceType(const Napi::CallbackInfo& info)
 {
     auto env = info.Env();
-    if (!engine || info.Length() < 1) return Napi::Boolean::New(env, false);
+    auto liveEngine = snapshotEngine();
+    if (!liveEngine || info.Length() < 1) return Napi::Boolean::New(env, false);
 
     auto typeName = info[0].As<Napi::String>().Utf8Value();
-    bool result = engine->setDeviceType(juce::String(typeName));
+    bool result = liveEngine->setDeviceType(juce::String(typeName));
     return Napi::Boolean::New(env, result);
 }
 
 static Napi::Value SetDevice(const Napi::CallbackInfo& info)
 {
     auto env = info.Env();
-    if (!engine) return Napi::Boolean::New(env, false);
+    auto liveEngine = snapshotEngine();
+    if (!liveEngine) return Napi::Boolean::New(env, false);
 
     auto input = info.Length() > 0 && !info[0].IsNull() ? info[0].As<Napi::String>().Utf8Value() : "";
     auto output = info.Length() > 1 && !info[1].IsNull() ? info[1].As<Napi::String>().Utf8Value() : "";
@@ -363,7 +372,7 @@ static Napi::Value SetDevice(const Napi::CallbackInfo& info)
     int bs = info.Length() > 3 && !info[3].IsUndefined() ? info[3].As<Napi::Number>().Int32Value() : 256;
 
     // Must run on the main thread — JUCE's ALSA backend deadlocks if called from a worker
-    bool result = engine->setAudioDevice(juce::String(input), juce::String(output), sr, bs);
+    bool result = liveEngine->setAudioDevice(juce::String(input), juce::String(output), sr, bs);
     return Napi::Boolean::New(env, result);
 }
 
@@ -371,19 +380,20 @@ static Napi::Value SetDevice(const Napi::CallbackInfo& info)
 
 static Napi::Value StartAudio(const Napi::CallbackInfo& info)
 {
-    if (engine) engine->startAudio();
+    if (auto liveEngine = snapshotEngine()) liveEngine->startAudio();
     return info.Env().Undefined();
 }
 
 static Napi::Value StopAudio(const Napi::CallbackInfo& info)
 {
-    if (engine) engine->stopAudio();
+    if (auto liveEngine = snapshotEngine()) liveEngine->stopAudio();
     return info.Env().Undefined();
 }
 
 static Napi::Value IsAudioRunning(const Napi::CallbackInfo& info)
 {
-    return Napi::Boolean::New(info.Env(), engine ? engine->isAudioRunning() : false);
+    auto liveEngine = snapshotEngine();
+    return Napi::Boolean::New(info.Env(), liveEngine ? liveEngine->isAudioRunning() : false);
 }
 
 // ── Gain ──────────────────────────────────────────────────────────────────────
@@ -391,30 +401,33 @@ static Napi::Value IsAudioRunning(const Napi::CallbackInfo& info)
 static Napi::Value SetGain(const Napi::CallbackInfo& info)
 {
     auto env = info.Env();
-    if (!engine || info.Length() < 2) return env.Undefined();
+    auto liveEngine = snapshotEngine();
+    if (!liveEngine || info.Length() < 2) return env.Undefined();
 
     auto which = info[0].As<Napi::String>().Utf8Value();
     float value = info[1].As<Napi::Number>().FloatValue();
 
-    if (which == "input") engine->setInputGain(value);
-    else if (which == "output") engine->setOutputGain(value);
-    else if (which == "chain") engine->setChainOutputGain(value);
-    else if (which == "backing") engine->setBackingVolume(value);
+    if (which == "input") liveEngine->setInputGain(value);
+    else if (which == "output") liveEngine->setOutputGain(value);
+    else if (which == "chain") liveEngine->setChainOutputGain(value);
+    else if (which == "backing") liveEngine->setBackingVolume(value);
 
     return env.Undefined();
 }
 
 static Napi::Value SetInputChannel(const Napi::CallbackInfo& info)
 {
-    if (engine && info.Length() > 0)
-        engine->setInputChannel(info[0].As<Napi::Number>().Int32Value());
+    auto liveEngine = snapshotEngine();
+    if (liveEngine && info.Length() > 0)
+        liveEngine->setInputChannel(info[0].As<Napi::Number>().Int32Value());
     return info.Env().Undefined();
 }
 
 static Napi::Value SetMonitorMute(const Napi::CallbackInfo& info)
 {
-    if (engine && info.Length() > 0)
-        engine->setMonitorMute(info[0].As<Napi::Boolean>().Value());
+    auto liveEngine = snapshotEngine();
+    if (liveEngine && info.Length() > 0)
+        liveEngine->setMonitorMute(info[0].As<Napi::Boolean>().Value());
     return info.Env().Undefined();
 }
 
@@ -423,15 +436,17 @@ static Napi::Value SetMonitorMuteSuppressed(const Napi::CallbackInfo& info)
     // IsBoolean()-guarded so a mismatched renderer build / manual caller
     // passing a non-boolean is a clean no-op rather than a hard N-API failure
     // (NAPI_DISABLE_CPP_EXCEPTIONS is enabled). Mirrors SetNoiseGate's style.
-    if (engine && info.Length() > 0 && info[0].IsBoolean())
-        engine->setMonitorMuteSuppressed(info[0].As<Napi::Boolean>().Value());
+    auto liveEngine = snapshotEngine();
+    if (liveEngine && info.Length() > 0 && info[0].IsBoolean())
+        liveEngine->setMonitorMuteSuppressed(info[0].As<Napi::Boolean>().Value());
     return info.Env().Undefined();
 }
 
 static Napi::Value SetNoiseGate(const Napi::CallbackInfo& info)
 {
     auto env = info.Env();
-    if (!engine || info.Length() < 1 || !info[0].IsObject())
+    auto liveEngine = snapshotEngine();
+    if (!liveEngine || info.Length() < 1 || !info[0].IsObject())
         return env.Undefined();
 
     auto o = info[0].As<Napi::Object>();
@@ -458,7 +473,7 @@ static Napi::Value SetNoiseGate(const Napi::CallbackInfo& info)
     if (o.Has("depthDb") && o.Get("depthDb").IsNumber())
         depthDb = (float)o.Get("depthDb").As<Napi::Number>().DoubleValue();
 
-    engine->setNoiseGate(enabled, thresholdDb, releaseMs, depthDb);
+    liveEngine->setNoiseGate(enabled, thresholdDb, releaseMs, depthDb);
     return env.Undefined();
 }
 
@@ -469,7 +484,8 @@ static Napi::Value SetTonePolish(const Napi::CallbackInfo& info)
     // non-object is a clean no-op rather than a hard N-API failure
     // (NAPI_DISABLE_CPP_EXCEPTIONS).
     auto env = info.Env();
-    if (!engine || info.Length() < 1 || !info[0].IsObject())
+    auto liveEngine = snapshotEngine();
+    if (!liveEngine || info.Length() < 1 || !info[0].IsObject())
         return env.Undefined();
 
     auto o = info[0].As<Napi::Object>();
@@ -484,13 +500,14 @@ static Napi::Value SetTonePolish(const Napi::CallbackInfo& info)
             enabled = v.As<Napi::Number>().DoubleValue() != 0.0;
     }
 
-    engine->setTonePolishEnabled(enabled);
+    liveEngine->setTonePolishEnabled(enabled);
     return env.Undefined();
 }
 
 static Napi::Value IsMonitorMuted(const Napi::CallbackInfo& info)
 {
-    return Napi::Boolean::New(info.Env(), engine ? engine->isMonitorMuted() : true);
+    auto liveEngine = snapshotEngine();
+    return Napi::Boolean::New(info.Env(), liveEngine ? liveEngine->isMonitorMuted() : true);
 }
 
 // ── Metering (polled — read atomics) ──────────────────────────────────────────
@@ -499,13 +516,14 @@ static Napi::Value GetLevels(const Napi::CallbackInfo& info)
 {
     auto env = info.Env();
     auto obj = Napi::Object::New(env);
+    auto liveEngine = snapshotEngine();
 
-    if (engine)
+    if (liveEngine)
     {
-        obj.Set("inputLevel", engine->getInputLevel());
-        obj.Set("outputLevel", engine->getOutputLevel());
-        obj.Set("inputPeak", engine->getInputPeak());
-        obj.Set("outputPeak", engine->getOutputPeak());
+        obj.Set("inputLevel", liveEngine->getInputLevel());
+        obj.Set("outputLevel", liveEngine->getOutputLevel());
+        obj.Set("inputPeak", liveEngine->getInputPeak());
+        obj.Set("outputPeak", liveEngine->getOutputPeak());
     }
     else
     {
@@ -520,7 +538,7 @@ static Napi::Value GetLevels(const Napi::CallbackInfo& info)
 
 static Napi::Value ResetPeaks(const Napi::CallbackInfo& info)
 {
-    if (engine) engine->resetPeaks();
+    if (auto liveEngine = snapshotEngine()) liveEngine->resetPeaks();
     return info.Env().Undefined();
 }
 
@@ -537,11 +555,12 @@ static Napi::Value ResetPeaks(const Napi::CallbackInfo& info)
 static Napi::Value LoadNoteModel(const Napi::CallbackInfo& info)
 {
     auto env = info.Env();
-    if (!engine || info.Length() < 1 || !info[0].IsString())
+    auto liveEngine = snapshotEngine();
+    if (!liveEngine || info.Length() < 1 || !info[0].IsString())
         return Napi::Boolean::New(env, false);
 
     const auto path = info[0].As<Napi::String>().Utf8Value();
-    const bool ok = engine->loadNoteModel(juce::File(juce::String(path)));
+    const bool ok = liveEngine->loadNoteModel(juce::File(juce::String(path)));
     return Napi::Boolean::New(env, ok);
 }
 
@@ -556,9 +575,10 @@ static Napi::Value IsMlNoteDetection(const Napi::CallbackInfo& info)
     // its first snapshot (isReady()). Reporting true during the cold-start
     // window would tell the renderer "ML active" while it's still getting the
     // YIN fallback.
+    auto liveEngine = snapshotEngine();
     return Napi::Boolean::New(env,
-        engine && engine->hasMlNoteDetector()
-              && engine->getMlNoteDetector().isReady());
+        liveEngine && liveEngine->hasMlNoteDetector()
+              && liveEngine->getMlNoteDetector().isReady());
 }
 
 // Raw polyphonic transcription from the ML note detector — the full set of
@@ -574,10 +594,11 @@ static Napi::Value DetectNotes(const Napi::CallbackInfo& info)
     // model, after a device stop, and during the cold-start window before the
     // first inference publishes — so the renderer feature-detects correctly
     // and falls back instead of consuming an empty ML stream.
-    if (!engine || !engine->getMlNoteDetector().isReady())
+    auto liveEngine = snapshotEngine();
+    if (!liveEngine || !liveEngine->getMlNoteDetector().isReady())
         return env.Null();
 
-    const auto active = engine->getMlNoteDetector().getActiveNotes();
+    const auto active = liveEngine->getMlNoteDetector().getActiveNotes();
     auto notesArr = Napi::Array::New(env, active.size());
     for (size_t i = 0; i < active.size(); ++i)
     {
@@ -598,7 +619,7 @@ static Napi::Value DetectNotes(const Napi::CallbackInfo& info)
     // Normalise the sample rate: getCurrentSampleRate() is 0 when no audio
     // device is active — hand the renderer a sane positive value so its
     // Hz/time math can't divide by zero.
-    const double sr = engine->getCurrentSampleRate();
+    const double sr = liveEngine->getCurrentSampleRate();
     obj.Set("sampleRate", sr > 0.0 ? sr : 48000.0);
     return obj;
 }
@@ -607,13 +628,14 @@ static Napi::Value GetPitchDetection(const Napi::CallbackInfo& info)
 {
     auto env = info.Env();
     auto obj = Napi::Object::New(env);
+    auto liveEngine = snapshotEngine();
 
-    if (engine)
+    if (liveEngine)
     {
         // getActiveDetection() returns the polyphonic ML detector's dominant
         // pitch when a Basic Pitch model is loaded, else the YIN detector's
         // latest result — same shape either way, so the plugin is unchanged.
-        auto det = engine->getActiveDetection();
+        auto det = liveEngine->getActiveDetection();
         obj.Set("frequency", det.frequency);
         obj.Set("confidence", det.confidence);
         obj.Set("midiNote", det.midiNote);
@@ -671,6 +693,7 @@ static Napi::Value GetPitchDetection(const Napi::CallbackInfo& info)
 static Napi::Value ScoreChord(const Napi::CallbackInfo& info)
 {
     auto env = info.Env();
+    auto liveEngine = snapshotEngine();
 
     // Hard caps on caller-controlled array lengths. The scorer's
     // (arrangement, stringCount) validation only accepts up to 8
@@ -697,7 +720,7 @@ static Napi::Value ScoreChord(const Napi::CallbackInfo& info)
         return failure;
     };
 
-    if (!engine || info.Length() < 1 || !info[0].IsObject())
+    if (!liveEngine || info.Length() < 1 || !info[0].IsObject())
         return noRequestFailure();
 
     auto reqObj = info[0].As<Napi::Object>();
@@ -834,7 +857,7 @@ static Napi::Value ScoreChord(const Napi::CallbackInfo& info)
         req.notes.push_back(n);
     }
 
-    auto result = engine->scoreChord(req);
+    auto result = liveEngine->scoreChord(req);
 
     auto out = Napi::Object::New(env);
     out.Set("score", result.score);
@@ -893,6 +916,7 @@ static Napi::Value ScoreChord(const Napi::CallbackInfo& info)
 static Napi::Value SetChart(const Napi::CallbackInfo& info)
 {
     auto env = info.Env();
+    auto liveEngine = snapshotEngine();
 
     // Generous cap on the chart length — a full song's note list is well
     // under this, but it bounds the worst-case allocation a malformed payload
@@ -903,11 +927,11 @@ static Napi::Value SetChart(const Napi::CallbackInfo& info)
     // currently holds — otherwise a failed (re)load leaves the previous
     // song's chart active and getNoteVerdicts() keeps emitting stale verdicts.
     auto reject = [&]() -> Napi::Value {
-        if (engine) engine->clearChart();
+        if (liveEngine) liveEngine->clearChart();
         return Napi::Boolean::New(info.Env(), false);
     };
 
-    if (!engine || info.Length() < 1 || !info[0].IsObject())
+    if (!liveEngine || info.Length() < 1 || !info[0].IsObject())
         return reject();
 
     auto reqObj = info[0].As<Napi::Object>();
@@ -988,7 +1012,7 @@ static Napi::Value SetChart(const Napi::CallbackInfo& info)
         chart.notes.push_back(std::move(n));
     }
 
-    engine->setChart(chart);
+    liveEngine->setChart(chart);
     return Napi::Boolean::New(env, true);
 }
 
@@ -1005,7 +1029,8 @@ static Napi::Value GetNoteVerdicts(const Napi::CallbackInfo& info)
     // Null (not an empty array) on a missing engine — the bridge/preload
     // contract treats null as "unsupported/unavailable" so the renderer
     // feature-detects, matching detectNotes' no-engine path.
-    if (!engine) return env.Null();
+    auto liveEngine = snapshotEngine();
+    if (!liveEngine) return env.Null();
 
     // Push the playhead before draining so this tick's verdicts reflect it.
     // A JS NaN/Infinity passes IsNumber() — guard with isfinite so a bad
@@ -1014,10 +1039,10 @@ static Napi::Value GetNoteVerdicts(const Napi::CallbackInfo& info)
     {
         const double songTime = info[0].As<Napi::Number>().DoubleValue();
         if (std::isfinite(songTime))
-            engine->setPlayhead(songTime, info[1].As<Napi::Boolean>().Value());
+            liveEngine->setPlayhead(songTime, info[1].As<Napi::Boolean>().Value());
     }
 
-    const auto verdicts = engine->getNoteVerdicts();
+    const auto verdicts = liveEngine->getNoteVerdicts();
     auto arr = Napi::Array::New(env, verdicts.size());
     for (size_t i = 0; i < verdicts.size(); ++i)
     {
@@ -1044,9 +1069,10 @@ static Napi::Value GetSampleRate(const Napi::CallbackInfo& info)
 {
     auto env = info.Env();
     constexpr double kFallbackSampleRate = 48000.0;
-    if (!engine)
+    auto liveEngine = snapshotEngine();
+    if (!liveEngine)
         return Napi::Number::New(env, kFallbackSampleRate);
-    const double sr = engine->getCurrentSampleRate();
+    const double sr = liveEngine->getCurrentSampleRate();
     if (!std::isfinite(sr) || sr <= 0.0)
         return Napi::Number::New(env, kFallbackSampleRate);
     return Napi::Number::New(env, sr);
@@ -1697,39 +1723,42 @@ static Napi::Value LoadIR(const Napi::CallbackInfo& info)
 
 static Napi::Value RemoveProcessor(const Napi::CallbackInfo& info)
 {
-    if (engine && info.Length() > 0)
+    auto liveEngine = snapshotEngine();
+    if (liveEngine && info.Length() > 0)
     {
         int slotId = info[0].As<Napi::Number>().Int32Value();
-        engine->getSignalChain().removeProcessor(slotId);
+        liveEngine->getSignalChain().removeProcessor(slotId);
     }
     return info.Env().Undefined();
 }
 
 static Napi::Value MoveProcessor(const Napi::CallbackInfo& info)
 {
-    if (engine && info.Length() >= 2)
+    auto liveEngine = snapshotEngine();
+    if (liveEngine && info.Length() >= 2)
     {
         int from = info[0].As<Napi::Number>().Int32Value();
         int to = info[1].As<Napi::Number>().Int32Value();
-        engine->getSignalChain().moveProcessor(from, to);
+        liveEngine->getSignalChain().moveProcessor(from, to);
     }
     return info.Env().Undefined();
 }
 
 static Napi::Value SetBypass(const Napi::CallbackInfo& info)
 {
-    if (engine && info.Length() >= 2)
+    auto liveEngine = snapshotEngine();
+    if (liveEngine && info.Length() >= 2)
     {
         int slotId = info[0].As<Napi::Number>().Int32Value();
         bool bypassed = info[1].As<Napi::Boolean>().Value();
-        engine->getSignalChain().setBypass(slotId, bypassed);
+        liveEngine->getSignalChain().setBypass(slotId, bypassed);
     }
     return info.Env().Undefined();
 }
 
 static Napi::Value ClearChain(const Napi::CallbackInfo& info)
 {
-    if (engine) engine->getSignalChain().clear();
+    if (auto liveEngine = snapshotEngine()) liveEngine->getSignalChain().clear();
     return info.Env().Undefined();
 }
 
@@ -1739,10 +1768,11 @@ static Napi::Value GetChainState(const Napi::CallbackInfo& info)
 {
     auto env = info.Env();
     auto result = Napi::Array::New(env);
+    auto liveEngine = snapshotEngine();
 
-    if (engine)
+    if (liveEngine)
     {
-        auto slots = engine->getSignalChain().getAllSlots();
+        auto slots = liveEngine->getSignalChain().getAllSlots();
         for (int i = 0; i < slots.size(); ++i)
         {
             auto obj = Napi::Object::New(env);
@@ -1799,7 +1829,8 @@ public:
 static Napi::Value OpenPluginEditor(const Napi::CallbackInfo& info)
 {
     auto env = info.Env();
-    if (!engine || info.Length() < 1)
+    auto liveEngine = snapshotEngine();
+    if (!liveEngine || info.Length() < 1)
         return Napi::Boolean::New(env, false);
 
     int slotId = info[0].As<Napi::Number>().Int32Value();
@@ -1817,7 +1848,7 @@ static Napi::Value OpenPluginEditor(const Napi::CallbackInfo& info)
         editorWindows.erase(it);
     }
 
-    auto slot = engine->getSignalChain().getSlot(slotId);
+    auto slot = liveEngine->getSignalChain().getSlot(slotId);
     if (!slot || !slot->processor || !slot->processor->hasEditor())
         return Napi::Boolean::New(env, false);
 
@@ -1869,10 +1900,11 @@ static Napi::Value ClosePluginEditor(const Napi::CallbackInfo& info)
 static Napi::Value GetParameters(const Napi::CallbackInfo& info)
 {
     auto env = info.Env();
-    if (!engine || info.Length() < 1) return Napi::Array::New(env);
+    auto liveEngine = snapshotEngine();
+    if (!liveEngine || info.Length() < 1) return Napi::Array::New(env);
 
     int slotId = info[0].As<Napi::Number>().Int32Value();
-    auto params = engine->getSignalChain().getParameters(slotId);
+    auto params = liveEngine->getSignalChain().getParameters(slotId);
     auto result = Napi::Array::New(env, params.size());
 
     for (int i = 0; i < params.size(); ++i)
@@ -1891,12 +1923,13 @@ static Napi::Value GetParameters(const Napi::CallbackInfo& info)
 
 static Napi::Value SetParameter(const Napi::CallbackInfo& info)
 {
-    if (engine && info.Length() >= 3)
+    auto liveEngine = snapshotEngine();
+    if (liveEngine && info.Length() >= 3)
     {
         int slotId = info[0].As<Napi::Number>().Int32Value();
         int paramIdx = info[1].As<Napi::Number>().Int32Value();
         float value = info[2].As<Napi::Number>().FloatValue();
-        engine->getSignalChain().setParameter(slotId, paramIdx, value);
+        liveEngine->getSignalChain().setParameter(slotId, paramIdx, value);
     }
     return info.Env().Undefined();
 }
@@ -1906,13 +1939,14 @@ static Napi::Value SetSlotState(const Napi::CallbackInfo& info)
 {
     // Type-guard both args (NAPI_DISABLE_CPP_EXCEPTIONS): a malformed IPC
     // payload is a clean no-op rather than a hard addon failure.
-    if (engine && info.Length() >= 2 && info[0].IsNumber() && info[1].IsString())
+    auto liveEngine = snapshotEngine();
+    if (liveEngine && info.Length() >= 2 && info[0].IsNumber() && info[1].IsString())
     {
         int slotId = info[0].As<Napi::Number>().Int32Value();
         auto base64 = info[1].As<Napi::String>().Utf8Value();
         juce::MemoryBlock mb;
         if (mb.fromBase64Encoding(juce::String(base64)) && mb.getSize() > 0)
-            engine->getSignalChain().setSlotState(slotId, mb);
+            liveEngine->getSignalChain().setSlotState(slotId, mb);
     }
     return info.Env().Undefined();
 }
@@ -1922,7 +1956,8 @@ static Napi::Value SetSlotState(const Napi::CallbackInfo& info)
 static Napi::Value SendMidiToSlot(const Napi::CallbackInfo& info)
 {
     auto env = info.Env();
-    if (!engine || info.Length() < 4)
+    auto liveEngine = snapshotEngine();
+    if (!liveEngine || info.Length() < 4)
         return Napi::Boolean::New(env, false);
 
     int slotId = info[0].As<Napi::Number>().Int32Value();
@@ -1944,7 +1979,7 @@ static Napi::Value SendMidiToSlot(const Napi::CallbackInfo& info)
     else
         return Napi::Boolean::New(env, false);
 
-    engine->getSignalChain().queueMidiMessage(slotId, midiMsg);
+    liveEngine->getSignalChain().queueMidiMessage(slotId, midiMsg);
     return Napi::Boolean::New(env, true);
 }
 
@@ -1953,47 +1988,52 @@ static Napi::Value SendMidiToSlot(const Napi::CallbackInfo& info)
 static Napi::Value LoadBackingTrack(const Napi::CallbackInfo& info)
 {
     auto env = info.Env();
-    if (!engine || info.Length() < 1) return Napi::Boolean::New(env, false);
+    auto liveEngine = snapshotEngine();
+    if (!liveEngine || info.Length() < 1) return Napi::Boolean::New(env, false);
 
     auto path = info[0].As<Napi::String>().Utf8Value();
-    bool result = engine->loadBackingTrack(juce::File(juce::String(path)));
+    bool result = liveEngine->loadBackingTrack(juce::File(juce::String(path)));
     return Napi::Boolean::New(env, result);
 }
 
 static Napi::Value StartBacking(const Napi::CallbackInfo& info)
 {
-    if (engine) engine->startBacking();
+    if (auto liveEngine = snapshotEngine()) liveEngine->startBacking();
     return info.Env().Undefined();
 }
 
 static Napi::Value StopBacking(const Napi::CallbackInfo& info)
 {
-    if (engine) engine->stopBacking();
+    if (auto liveEngine = snapshotEngine()) liveEngine->stopBacking();
     return info.Env().Undefined();
 }
 
 static Napi::Value SeekBacking(const Napi::CallbackInfo& info)
 {
-    if (engine && info.Length() > 0)
-        engine->setBackingPosition(info[0].As<Napi::Number>().DoubleValue());
+    auto liveEngine = snapshotEngine();
+    if (liveEngine && info.Length() > 0)
+        liveEngine->setBackingPosition(info[0].As<Napi::Number>().DoubleValue());
     return info.Env().Undefined();
 }
 
 static Napi::Value GetBackingPosition(const Napi::CallbackInfo& info)
 {
-    double pos = engine ? engine->getBackingPosition() : 0.0;
+    auto liveEngine = snapshotEngine();
+    double pos = liveEngine ? liveEngine->getBackingPosition() : 0.0;
     return Napi::Number::New(info.Env(), pos);
 }
 
 static Napi::Value GetBackingDuration(const Napi::CallbackInfo& info)
 {
-    double dur = engine ? engine->getBackingDuration() : 0.0;
+    auto liveEngine = snapshotEngine();
+    double dur = liveEngine ? liveEngine->getBackingDuration() : 0.0;
     return Napi::Number::New(info.Env(), dur);
 }
 
 static Napi::Value IsBackingPlaying(const Napi::CallbackInfo& info)
 {
-    bool playing = engine ? engine->isBackingPlaying() : false;
+    auto liveEngine = snapshotEngine();
+    bool playing = liveEngine ? liveEngine->isBackingPlaying() : false;
     return Napi::Boolean::New(info.Env(), playing);
 }
 
@@ -2002,8 +2042,9 @@ static Napi::Value IsBackingPlaying(const Napi::CallbackInfo& info)
 static Napi::Value SavePreset(const Napi::CallbackInfo& info)
 {
     auto env = info.Env();
-    if (!engine) return env.Null();
-    auto json = engine->getSignalChain().savePreset();
+    auto liveEngine = snapshotEngine();
+    if (!liveEngine) return env.Null();
+    auto json = liveEngine->getSignalChain().savePreset();
     return Napi::String::New(env, json.toStdString());
 }
 
@@ -2134,7 +2175,7 @@ static Napi::Value LoadPreset(const Napi::CallbackInfo& info)
     auto env = info.Env();
     auto deferred = Napi::Promise::Deferred::New(env);
 
-    if (!engine || info.Length() < 1) {
+    if (!snapshotEngine() || info.Length() < 1) {
         auto obj = Napi::Object::New(env);
         obj.Set("success", false);
         obj.Set("error", "No engine or missing argument");
@@ -2151,7 +2192,8 @@ static Napi::Value LoadPreset(const Napi::CallbackInfo& info)
 static Napi::Value SetMultiBypass(const Napi::CallbackInfo& info)
 {
     auto env = info.Env();
-    if (!engine || info.Length() < 1 || !info[0].IsArray())
+    auto liveEngine = snapshotEngine();
+    if (!liveEngine || info.Length() < 1 || !info[0].IsArray())
         return Napi::Boolean::New(env, false);
 
     auto arr = info[0].As<Napi::Array>();
@@ -2165,7 +2207,7 @@ static Napi::Value SetMultiBypass(const Napi::CallbackInfo& info)
         changes.add({ slotId, bypassed });
     }
 
-    engine->getSignalChain().setMultiBypass(changes);
+    liveEngine->getSignalChain().setMultiBypass(changes);
     return Napi::Boolean::New(env, true);
 }
 
