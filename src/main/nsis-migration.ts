@@ -86,13 +86,15 @@ function isUninstallKeyGone(): boolean {
 
 function sleepSync(ms: number): void {
     // Synchronous sleep inside the fast callback (we have no event loop to
-    // await on — the SDK exits as soon as we return). spawnSync with a tiny
-    // ping is the standard Windows trick to block without busy-spinning.
-    spawnSync('cmd.exe', ['/c', `ping -n 1 -w ${ms} 127.0.0.1 >nul`], {
-        stdio: 'ignore',
-        windowsHide: true,
-        timeout: ms + 1000,
-    });
+    // await on — the SDK exits as soon as we return). Atomics.wait is a
+    // real blocking sleep on Node's main thread (unlike browsers, Node
+    // allows it there). The first attempt here used `ping -n 1 -w <ms>
+    // 127.0.0.1` but `-w` is a per-reply timeout, not a delay — the
+    // loopback replies immediately so the call returns in <1ms and the
+    // polling loop spins, hammering `reg query` until the deadline.
+    if (ms <= 0) return;
+    const view = new Int32Array(new SharedArrayBuffer(4));
+    Atomics.wait(view, 0, 0, ms);
 }
 
 function waitForUninstall(): boolean {
