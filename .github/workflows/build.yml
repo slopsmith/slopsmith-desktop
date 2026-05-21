@@ -270,8 +270,6 @@ jobs:
           path: |
             release/*.AppImage
             release/*.deb
-            release/*.dmg
-            release/*.zip
             release/*.exe
             release/win-unpacked/**/*
             release/velopack/**/*
@@ -296,17 +294,18 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          # Explicitly select only real distributables. win-unpacked/** and
-          # the .exe glob are excluded because:
-          # - win-unpacked/** is in CI artifacts for inspection only, not a distributable
-          # - artifacts/**/*.exe would match win-unpacked/Slopsmith.exe in addition to
-          #   the Velopack Setup.exe; the Velopack Setup.exe is already captured by
-          #   the velopack/**/* glob below.
+          # Explicitly select only real distributables:
+          # - Linux ships electron-builder .AppImage / .deb
+          # - Windows + macOS ship via Velopack only (release/velopack/**):
+          #   Setup.exe, *-osx.zip, *.nupkg, releases.<channel>.json
+          # win-unpacked/** and a bare *.exe glob are deliberately omitted —
+          # win-unpacked/ is for CI inspection only, and *.exe would also
+          # match win-unpacked/Slopsmith.exe alongside the real Setup.exe.
+          # No electron-builder *.dmg / *.zip globs: macOS is Velopack-only,
+          # so they would match nothing or duplicate the Velopack *-osx.zip.
           files: |
             artifacts/**/*.AppImage
             artifacts/**/*.deb
-            artifacts/**/*.dmg
-            artifacts/**/*.zip
             artifacts/**/release/velopack/**/*
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-alpha.') || contains(github.ref_name, '-beta.') || contains(github.ref_name, '-rc.') }}

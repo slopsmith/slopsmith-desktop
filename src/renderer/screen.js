@@ -897,10 +897,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
         channelSelect.value = storedChannel;
 
         const updateApi = window.slopsmithDesktop?.update;
-        const isLinux = (() => {
-            const p = (navigator.platform || '').toLowerCase();
-            return p.includes('linux');
-        })();
+        const isLinux = window.slopsmithDesktop?.platform === 'linux';
 
         function showLinuxFallback(message) {
             if (linuxNote) linuxNote.classList.remove('hidden');

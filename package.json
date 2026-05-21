@@ -93,8 +93,7 @@
     },
     "mac": {
       "target": [
-        "dir",
-        "zip"
+        "dir"
       ],
       "category": "public.app-category.music",
       "icon": "resources/icons/icon.icns",
