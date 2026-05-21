@@ -28,12 +28,23 @@ static void cancelAllPendingLoads();
 
 #include <juce_events/juce_events.h>
 
-// shared_ptr (parallel to vstHost) so a worker thread can take a stable
-// snapshot for the duration of its work and not race the message-thread
-// reset. Most existing call sites still touch the global directly — that's
-// a pre-existing concern across the codebase; LoadVSTWorker::Execute uses
-// the snapshotEngine helper below to make at least the new async path race-
-// free during shutdown.
+// engine / vstHost — shared_ptr (not unique_ptr) so worker threads can take
+// a stable snapshot that keeps the object alive for the duration of their
+// work, even if the message thread reassigns the global mid-operation. This
+// matters most for the async VST load: createPluginInstanceAsync's JUCE
+// continuation must not have VSTHost / its formatManager torn out from
+// under it mid-load.
+//
+// snapshotEngine() / snapshotVstHost() take the global under the matching
+// mutex and return a private copy. EVERY cross-thread access *should* go
+// through these — the message thread mutates the globals (Init, doShutdown)
+// while worker threads read them. As of this PR all the worker / async-load
+// paths (LoadVSTWorker, LoadNAMWorker, LoadIRWorker, LoadPresetWorker,
+// ScanPluginsWorker, doShutdown) are converted. The remaining ~100 direct
+// reads in the synchronous napi handlers (SetGain, GetLevels, …) still
+// carry the *pre-existing* raw-read-vs-reset race they had when these were
+// unique_ptrs; migrating them is tracked as a dedicated follow-up rather
+// than expanding this PR.
 static std::shared_ptr<AudioEngine> engine;
 static std::mutex engineMutex;
 
@@ -42,18 +53,7 @@ static std::shared_ptr<AudioEngine> snapshotEngine()
     std::lock_guard<std::mutex> lock(engineMutex);
     return engine;
 }
-// shared_ptr (not unique_ptr) so async-load lambdas + their JUCE
-// createPluginInstanceAsync continuations can hold a reference for the
-// duration of the load. Without that, a shutdown that runs vstHost.reset()
-// while createPluginInstanceAsync is mid-load tears down the formatManager
-// underneath JUCE's in-flight work and crashes during teardown.
-//
-// The shared_ptr *object* is mutated from the message thread (Init,
-// doShutdown) and read from libuv worker threads (LoadVSTWorker /
-// LoadPresetWorker). A plain `auto local = vstHost;` copy on a worker
-// while the message thread reassigns the same shared_ptr is a data race
-// even though the refcount block itself is thread-safe — go through
-// vstHostMutex on every access.
+
 static std::shared_ptr<VSTHost> vstHost;
 static std::mutex vstHostMutex;
 
@@ -1269,10 +1269,13 @@ static std::unique_ptr<juce::AudioProcessor> loadVstSandboxAware(
     // macOS has no separate JUCE message thread (see startJuceMessageThread /
     // dispatchOnMessageThread): the JUCE MessageManager is bound to the
     // Node/main thread, and dispatchOnMessageThread historically ran inline
-    // on the caller. A callAsync + done->wait pattern from this worker
-    // thread would queue a callback to a pump that may never run.
+    // on the caller. A callAsync + done->wait pattern would queue a callback
+    // to a pump that may never run in this calling context.
     //
-    // Fall back to the sync loadPlugin on the worker thread. Caveat: the
+    // Fall back to the sync loadPlugin, executed on whichever thread called
+    // in — the Node/main thread for LoadVST's JUCE_MAC branch (correct: that
+    // *is* the MessageManager thread on macOS), or a libuv worker thread for
+    // LoadPresetWorker (the pre-existing macOS constraint). Caveat: the
     // existing dispatchOnMessageThread block on macOS already documents
     // that "VST/AU plugin instantiation (which genuinely requires a message
     // thread on macOS) is the one capability we give up until a proper
