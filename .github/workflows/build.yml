@@ -4,8 +4,11 @@ on:
   push:
     branches: [main]
     tags: ['v*']
-  pull_request:
-    branches: [main]
+  # PRs do not build automatically — every commit during review would
+  # otherwise re-run the full 3-platform matrix. Trigger the matrix build
+  # manually (Actions tab → Build → "Run workflow", pick the PR branch)
+  # once the review round is finished.
+  workflow_dispatch:
 
 jobs:
   build:
