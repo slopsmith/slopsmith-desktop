@@ -2,7 +2,7 @@
 // Starts the FastAPI server as a child process, monitors health,
 // and forwards logs.
 
-import { ChildProcess, spawn } from 'child_process';
+import { ChildProcess, spawn, spawnSync } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import { app } from 'electron';
@@ -129,6 +129,45 @@ function findPythonExecutable(): string {
     return 'python3';
 }
 
+function reapOrphanedPythonBackends(pythonPath: string): void {
+    if (process.platform === 'win32') return;
+    const result = spawnSync('ps', ['-ww', '-axo', 'pid=,ppid=,command='], { encoding: 'utf8' });
+    if (result.error || result.status !== 0 || typeof result.stdout !== 'string') return;
+
+    const expectedPrefixes = new Set<string>();
+    const uvicornArgs = ' -m uvicorn server:app';
+    if (path.isAbsolute(pythonPath)) {
+        expectedPrefixes.add(`${path.resolve(pythonPath)}${uvicornArgs}`);
+    } else {
+        expectedPrefixes.add(`${pythonPath}${uvicornArgs}`);
+        expectedPrefixes.add(`${path.basename(pythonPath)}${uvicornArgs}`);
+    }
+    const expectedPrefixList = [...expectedPrefixes];
+    const stalePids: number[] = [];
+    for (const line of result.stdout.split('\n')) {
+        const match = line.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/);
+        if (!match) continue;
+        const pid = Number(match[1]);
+        const ppid = Number(match[2]);
+        const command = match[3];
+        if (!Number.isInteger(pid) || ppid !== 1) continue;
+        if (!expectedPrefixList.some(prefix => command.startsWith(prefix))) continue;
+        stalePids.push(pid);
+    }
+
+    for (const pid of stalePids) {
+        try {
+            process.kill(pid, 'SIGTERM');
+        } catch (e: unknown) {
+            const code = (e as NodeJS.ErrnoException)?.code;
+            if (code !== 'ESRCH') console.warn(`[python] failed to reap orphaned backend ${pid} (${code})`);
+        }
+    }
+    if (stalePids.length) {
+        console.log(`[python] Reaped orphaned backend PIDs: ${stalePids.join(', ')}`);
+    }
+}
+
 function findSlopsmithDir(): string {
     // In packaged app, Slopsmith is bundled in resources
     if (app.isPackaged) {
@@ -238,8 +277,9 @@ export async function startPython(): Promise<void> {
     // previous spawn and probe a server that hasn't actually started yet.
     serverReady = false;
 
-    serverPort = await findPort(18000);
     const pythonPath = findPythonExecutable();
+    reapOrphanedPythonBackends(pythonPath);
+    serverPort = await findPort(18000);
     const configDir = getConfigDir();
     const dlcDir = getDLCDir();
     const pluginsDir = getPluginsDir();
