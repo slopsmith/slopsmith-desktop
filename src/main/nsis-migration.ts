@@ -32,7 +32,7 @@
 //      Velopack execution stub specifically, but it is the real app exe
 //      and launches the same app code Velopack would have routed to anyway.
 
-import { execSync, spawnSync } from 'child_process';
+import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -50,15 +50,20 @@ interface ParsedQuietUninstall {
 }
 
 function readNsisUninstaller(): ParsedQuietUninstall | null {
-    let raw: string;
-    try {
-        raw = execSync(`reg query "${NSIS_UNINSTALL_REG_KEY}" /v QuietUninstallString`, {
-            encoding: 'utf8',
-            stdio: ['ignore', 'pipe', 'ignore'],
-        });
-    } catch {
+    // spawnSync with an args array (no shell) + windowsHide keeps the MSI
+    // install UI clean — no console flash — and sidesteps shell quoting of
+    // the registry key path. Mirrors isUninstallKeyGone() below.
+    const proc = spawnSync('reg', ['query', NSIS_UNINSTALL_REG_KEY, '/v', 'QuietUninstallString'], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        windowsHide: true,
+    });
+    // reg query exits non-zero when the key is absent (the common no-legacy-
+    // install case); error is set if reg itself couldn't launch.
+    if (proc.status !== 0 || proc.error || typeof proc.stdout !== 'string') {
         return null;
     }
+    const raw = proc.stdout;
     // Output:
     //     QuietUninstallString    REG_SZ    "C:\Program Files\Slopsmith\Uninstall Slopsmith.exe" /allusers /S
     const match = raw.match(/QuietUninstallString\s+REG_SZ\s+(.+)/);
