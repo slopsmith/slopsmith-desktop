@@ -302,12 +302,17 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: slopsmith-${{ matrix.platform }}-${{ matrix.arch }}
+          # build/Release/*.pdb: Windows debug symbols for the native addon and
+          # the sandbox host. Archived as a workflow artifact (it is NOT
+          # attached to the public Release) so a tester's crash minidump can be
+          # symbolised. Empty on Linux/macOS — if-no-files-found: warn covers it.
           path: |
             release/*.AppImage
             release/*.deb
             release/*.exe
             release/win-unpacked/**/*
             release/velopack/**/*
+            build/Release/*.pdb
           if-no-files-found: warn
 
   release:

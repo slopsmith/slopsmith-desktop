@@ -127,6 +127,18 @@ elseif(WIN32)
     # Enable /EHa so catch(...) also catches SEH exceptions (ASIO driver crashes)
     if(MSVC)
         target_compile_options(slopsmith_audio PRIVATE /EHa)
+        # Emit a PDB for Release builds so field crash dumps (WER minidumps
+        # from testers) can be symbolised — without one, our own frames in a
+        # dump are just raw addresses. /Zi adds debug info to the objects;
+        # /DEBUG:FULL makes the linker write a standalone, portable PDB but
+        # also turns /OPT:REF + /OPT:ICF off by default, so re-enable them —
+        # the .node stays a fully optimised release build that merely also
+        # ships a matching PDB. The PDB is not bundled into the app: the
+        # electron-builder `files` config picks up *.node / onnxruntime* by
+        # name, not *.pdb.
+        target_compile_options(slopsmith_audio PRIVATE $<$<CONFIG:Release>:/Zi>)
+        target_link_options(slopsmith_audio PRIVATE
+            $<$<CONFIG:Release>:/DEBUG:FULL /OPT:REF /OPT:ICF>)
     endif()
 elseif(UNIX)
     # LV2 is Linux-only — on Windows, lilv probes every .vst3 bundle for a
