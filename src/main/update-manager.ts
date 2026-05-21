@@ -15,7 +15,9 @@
 //     dropdown — it just gets a clear "not supported here" status back.
 //
 // Velopack JS SDK API notes (verified against
-//   node_modules/velopack/lib/index.d.ts, package 0.0.1589-ga2c5a97):
+//   node_modules/velopack/lib/index.d.ts, package 0.0.1589-ga2c5a97,
+//   and the matching native source at src/lib-rust/src/sources/{mod,github}.rs
+//   in github.com/velopack/velopack):
 //   - There is **no** `GithubSource` class exported from the JS package
 //     (unlike the .NET SDK). `UpdateManager`'s constructor takes a plain
 //     `urlOrPath: string` — pointing it at the GitHub repo's HTML URL is
@@ -25,6 +27,15 @@
 //   - `UpdateOptions` exposes `AllowVersionDowngrade` (plan called it
 //     `AllowDowngrade`; the actual key in the typings is the longer name) +
 //     `ExplicitChannel` (matches the plan).
+//   - **`UpdateOptions` does NOT expose a `Prerelease` field**, and the
+//     native `AutoSource::new` for any github.com URL hardcodes
+//     `GithubSource::new(input, None, false)`. Result: this SDK cannot
+//     see GitHub releases marked `prerelease: true`. The CI release
+//     job therefore publishes every tag (incl. alpha/beta/rc) as
+//     non-prerelease — see the long comment in .github/workflows/build.yml
+//     above the `Create Release` step. Channel scoping is unaffected
+//     because Velopack picks the release by channel-manifest filename
+//     (releases.<channel>.json), not by GitHub prerelease flag.
 
 import { app, BrowserWindow } from 'electron';
 import type { UpdateInfo } from 'velopack';

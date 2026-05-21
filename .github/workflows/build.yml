@@ -372,10 +372,34 @@ jobs:
         with:
           path: artifacts
 
-      # prerelease: true for -alpha/-beta/-rc suffixes, false for bare
-      # vX.Y.Z stable tags. draft is intentionally NOT set — Velopack
-      # clients can't see draft releases, so the auto-update feed
-      # wouldn't pick anything up if we drafted.
+      # Every release is published with prerelease=false, but only
+      # stable (bare vX.Y.Z) tags get make_latest=true. Reason:
+      #
+      # The Velopack JS SDK at our pinned version 0.0.1589-ga2c5a97
+      # routes any github.com URL through AutoSource → GithubSource,
+      # and AutoSource hardcodes the third constructor arg
+      # (`prerelease: false`). UpdateOptions has no Prerelease field,
+      # so there is no SDK-side override. If we tagged alpha/beta/rc as
+      # prerelease=true on GitHub, the in-app updater on those channels
+      # would silently see zero updates (verified live during the
+      # v0.2.9-alpha.102 validation: toggling the prerelease flag off
+      # made the release visible to the running app).
+      #
+      # Using make_latest=false on alpha/beta/rc tags keeps the GitHub
+      # UI's "Latest release" badge pinned to the most recent stable
+      # tag — humans browsing the repo still see stable as latest, even
+      # though the underlying release rows are all prerelease=false.
+      # Per the action-gh-release@v2 docs:
+      #   "Drafts and prereleases cannot be set as latest"
+      # so we can't use prerelease=true + make_latest=true together.
+      #
+      # Channel scoping for the auto-updater is independent of either
+      # flag — Velopack picks the right release by the channel-named
+      # manifest asset (releases.<channel>.json), iterating recent
+      # releases until it finds the matching channel.
+      #
+      # draft is intentionally NOT set — Velopack clients can't see
+      # draft releases either way.
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -405,7 +429,12 @@ jobs:
             artifacts/**/*.deb
             artifacts/**/velopack/**/*
           generate_release_notes: true
-          prerelease: ${{ contains(github.ref_name, '-alpha.') || contains(github.ref_name, '-beta.') || contains(github.ref_name, '-rc.') }}
+          # All tags non-prerelease (Velopack SDK limitation, see the
+          # long comment above). Only stable tags become the GitHub
+          # "Latest release" — alpha/beta/rc are still visible to the
+          # in-app updater but won't be promoted in the repo UI.
+          prerelease: false
+          make_latest: ${{ (contains(github.ref_name, '-alpha.') || contains(github.ref_name, '-beta.') || contains(github.ref_name, '-rc.')) && 'false' || 'true' }}
 
   # Mirror release version to slopsmith core
   # Requires SLOPSMITH_SYNC_TOKEN secret
