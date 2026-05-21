@@ -18,9 +18,3 @@ export const IPC_UPDATE_APPLY = 'update:apply' as const;
 // update-manager broadcaster and the preload listeners can't drift.
 export const IPC_UPDATE_EVENT_AVAILABLE = 'update:available' as const;
 export const IPC_UPDATE_EVENT_DOWNLOADED = 'update:downloaded' as const;
-
-// Legacy NSIS → Velopack migration (Windows only). The renderer banner
-// queries isNSISInstall on boot; if true, it offers an Upgrade Now button
-// that calls upgradeFromNSIS to fetch the latest MSI and run it elevated.
-export const IPC_UPDATE_IS_NSIS_INSTALL = 'update:isNSISInstall' as const;
-export const IPC_UPDATE_UPGRADE_FROM_NSIS = 'update:upgradeFromNSIS' as const;

@@ -17,7 +17,24 @@ if (process.platform !== 'linux') {
     try {
         // eslint-disable-next-line @typescript-eslint/no-require-imports
         const { VelopackApp } = require('velopack') as typeof import('velopack');
-        VelopackApp.build().run();
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { maybeUninstallLegacyNsis } = require('./nsis-migration') as typeof import('./nsis-migration');
+        VelopackApp.build()
+            // Fires during MSI install (the InstallHookDeferred custom
+            // action in vpk's WiX template, post-InstallFiles). Detects a
+            // legacy NSIS install at HKLM\...\Uninstall\Slopsmith, runs
+            // its QuietUninstallString, and restores the Velopack stub
+            // that NSIS deletes as part of its cleanup. No-op on machines
+            // without the legacy install. 30-second hard budget — runs
+            // synchronously with a sync registry-poll, well within it.
+            .onAfterInstallFastCallback(() => {
+                try {
+                    maybeUninstallLegacyNsis();
+                } catch (err) {
+                    console.error('[main] NSIS cleanup hook failed:', err);
+                }
+            })
+            .run();
     } catch (err) {
         // Never crash over this — a launchable app beats a dead one. But in a
         // packaged build a hook failure means install/update lifecycle flags
@@ -62,8 +79,6 @@ import {
     IPC_UPDATE_SET_CHANNEL,
     IPC_UPDATE_CHECK_NOW,
     IPC_UPDATE_APPLY,
-    IPC_UPDATE_IS_NSIS_INSTALL,
-    IPC_UPDATE_UPGRADE_FROM_NSIS,
 } from './ipc-channels';
 import { initAudioBridge, shutdownAudio } from './audio-bridge';
 import { initDebugLogging, isDebugEnabled } from './debug-log';
@@ -71,7 +86,6 @@ import { initPluginManager } from './plugin-manager';
 import { initSoundfontManager } from './soundfont-manager';
 import * as updateManager from './update-manager';
 import type { UpdateChannel } from './update-manager';
-import * as nsisMigration from './nsis-migration';
 
 // Linux: enable Chromium's PipeWire capturer feature so getUserMedia can see
 // audio devices on PipeWire-only distros (Fedora 36+, recent Ubuntu, Arch).
@@ -672,21 +686,6 @@ async function startup(): Promise<void> {
     });
     ipcMain.handle(IPC_UPDATE_CHECK_NOW, () => updateManager.checkNow());
     ipcMain.handle(IPC_UPDATE_APPLY, () => updateManager.applyAndRestart());
-
-    // Legacy NSIS → Velopack migration. isNSISInstall is a pure path check;
-    // upgradeFromNSIS kicks off the elevated uninstall + MSI install and we
-    // app.quit() ourselves so the NSIS uninstaller can delete the locked exe.
-    ipcMain.handle(IPC_UPDATE_IS_NSIS_INSTALL, () => nsisMigration.isNSISInstall());
-    ipcMain.handle(IPC_UPDATE_UPGRADE_FROM_NSIS, async () => {
-        const result = await nsisMigration.upgradeFromNSIS();
-        if (result.ok) {
-            // The elevated PowerShell sleeps 3s before touching anything, so
-            // setImmediate(quit) gives the IPC reply a tick to return first
-            // and still leaves the script plenty of time to start.
-            setImmediate(() => app.quit());
-        }
-        return result;
-    });
 
     // Boot the updater after the main window exists so the first
     // update:available / update:downloaded broadcast has a renderer to land

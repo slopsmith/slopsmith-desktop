@@ -14,8 +14,6 @@ import {
     IPC_UPDATE_APPLY,
     IPC_UPDATE_EVENT_AVAILABLE,
     IPC_UPDATE_EVENT_DOWNLOADED,
-    IPC_UPDATE_IS_NSIS_INSTALL,
-    IPC_UPDATE_UPGRADE_FROM_NSIS,
 } from './ipc-channels';
 
 // Auto-update channel + event payloads. Kept here (rather than re-exported
@@ -335,15 +333,6 @@ contextBridge.exposeInMainWorld('slopsmithDesktop', {
             ipcRenderer.on(IPC_UPDATE_EVENT_DOWNLOADED, listener);
             return () => ipcRenderer.removeListener(IPC_UPDATE_EVENT_DOWNLOADED, listener);
         },
-        // Legacy NSIS migration. isNSISInstall is a cheap sync check; the
-        // renderer calls it on boot to decide whether to show the migration
-        // banner. upgradeFromNSIS fetches the latest MSI, then spawns an
-        // elevated PowerShell that uninstalls the NSIS install and installs
-        // the MSI under a single UAC prompt. The renderer should app.quit
-        // after a successful call so the NSIS uninstaller can succeed.
-        isNSISInstall: (): Promise<boolean> => ipcRenderer.invoke(IPC_UPDATE_IS_NSIS_INSTALL),
-        upgradeFromNSIS: (): Promise<{ ok: boolean; message?: string }> =>
-            ipcRenderer.invoke(IPC_UPDATE_UPGRADE_FROM_NSIS),
     },
 });
 
