@@ -19,7 +19,22 @@ if (process.platform !== 'linux') {
         const { VelopackApp } = require('velopack') as typeof import('velopack');
         VelopackApp.build().run();
     } catch (err) {
+        // Never crash over this — a launchable app beats a dead one. But in a
+        // packaged build a hook failure means install/update lifecycle flags
+        // won't be handled, so surface it with a dialog instead of a console
+        // line nobody reads. In dev/unpackaged builds the hook is a harmless
+        // no-op, so a logged warning is enough there.
         console.error('[main] Velopack startup hook failed:', err);
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { app, dialog } = require('electron');
+        if (app.isPackaged) {
+            dialog.showErrorBox(
+                'Slopsmith update system error',
+                'The Velopack updater failed to initialize. Slopsmith will still '
+                + 'run, but automatic updates may not work until it is reinstalled.'
+                + `\n\n${String(err)}`,
+            );
+        }
     }
 }
 // ──────────────────────────────────────────────────────────────────────────

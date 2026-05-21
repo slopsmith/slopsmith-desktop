@@ -236,8 +236,14 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          if [[ -z "${APPLE_SIGNING_IDENTITY:-}" ]]; then
-            echo "::warning::APPLE_SIGNING_IDENTITY not set — packing macOS Velopack release UNSIGNED. Gatekeeper will block auto-updates on user machines."
+          # The signed/notarized branch needs ALL four Apple secrets — vpk
+          # would fail outright if handed an empty --notary* value. If any
+          # is missing (forks, partial secret configs) fall back to an
+          # unsigned pack, matching the all-four check in build-macos.sh.
+          if [[ -z "${APPLE_SIGNING_IDENTITY:-}" || -z "${APPLE_ID:-}" \
+                || -z "${APPLE_APP_SPECIFIC_PASSWORD:-}" \
+                || -z "${APPLE_TEAM_ID:-}" ]]; then
+            echo "::warning::Apple signing/notarization secrets incomplete — packing macOS Velopack release UNSIGNED. Gatekeeper will block auto-updates on user machines."
             vpk pack \
               --packId Slopsmith \
               --packVersion "${{ steps.velopack_channel.outputs.version }}" \
