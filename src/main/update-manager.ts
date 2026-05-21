@@ -91,6 +91,17 @@ function currentVersion(): string | null {
     }
 }
 
+// Velopack requires every unique os/rid to have its own channel when one
+// feed (a single GitHub release) serves multiple platforms — otherwise the
+// per-channel `releases.<channel>.json` manifests collide as release
+// assets. We ship x64-only Windows and arm64-only macOS, so the rid prefix
+// is fixed per platform. `vpk pack` in CI publishes manifests under these
+// exact names (win-x64-<track> / osx-arm64-<track>).
+function veloChannel(track: UpdateChannel): string {
+    const rid = process.platform === 'win32' ? 'win-x64' : 'osx-arm64';
+    return `${rid}-${track}`;
+}
+
 function createManager(channel: UpdateChannel): void {
     // Note: main.ts already requires('velopack') unconditionally at the top
     // for the VelopackApp startup hook; if that require fails the app exits
@@ -101,7 +112,7 @@ function createManager(channel: UpdateChannel): void {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { UpdateManager } = require('velopack') as typeof import('velopack');
     velopackUm = new UpdateManager(FEED_URL, {
-        ExplicitChannel: channel,
+        ExplicitChannel: veloChannel(channel),
         AllowVersionDowngrade: false,
         MaximumDeltasBeforeFallback: 10,
     });

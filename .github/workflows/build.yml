@@ -197,6 +197,10 @@ jobs:
       # Windows: pack the electron-builder unpacked dir into Velopack
       # release assets (Setup.exe, *-full.nupkg, releases.<ch>.json).
       # Unsigned for now — see plan gotcha #3.
+      # The channel is rid-scoped (win-x64-<track>): Velopack requires a
+      # unique channel per os/rid so the win + macOS releases.<ch>.json
+      # manifests don't collide when published to one GitHub release.
+      # The client's update-manager.ts builds the same name to match.
       - name: Velopack pack (Windows)
         if: matrix.platform == 'win' && steps.velopack_channel.outputs.channel != ''
         shell: bash
@@ -205,7 +209,7 @@ jobs:
           vpk pack \
             --packId Slopsmith \
             --packVersion "${{ steps.velopack_channel.outputs.version }}" \
-            --channel "${{ steps.velopack_channel.outputs.channel }}" \
+            --channel "win-x64-${{ steps.velopack_channel.outputs.channel }}" \
             --packDir release/win-unpacked \
             -o release/velopack
 
@@ -237,7 +241,7 @@ jobs:
             vpk pack \
               --packId Slopsmith \
               --packVersion "${{ steps.velopack_channel.outputs.version }}" \
-              --channel "${{ steps.velopack_channel.outputs.channel }}" \
+              --channel "osx-arm64-${{ steps.velopack_channel.outputs.channel }}" \
               --packDir release/mac-arm64/Slopsmith.app \
               -o release/velopack
           else
@@ -250,7 +254,7 @@ jobs:
             vpk pack \
               --packId Slopsmith \
               --packVersion "${{ steps.velopack_channel.outputs.version }}" \
-              --channel "${{ steps.velopack_channel.outputs.channel }}" \
+              --channel "osx-arm64-${{ steps.velopack_channel.outputs.channel }}" \
               --packDir release/mac-arm64/Slopsmith.app \
               -o release/velopack \
               --signAppIdentity "$APPLE_SIGNING_IDENTITY" \
