@@ -4,8 +4,14 @@ on:
   push:
     branches: [main]
     tags: ['v*']
-  pull_request:
-    branches: [main]
+  # PRs do not build automatically — every commit during review would
+  # otherwise re-run the full 3-platform matrix. Trigger the matrix build
+  # manually (Actions tab → Build → "Run workflow", pick the PR branch)
+  # once the review round is finished.
+  # Note: workflow_dispatch only allows selecting branches that exist in
+  # this repository; it cannot target branches from contributor forks.
+  # For fork PRs, the maintainer must merge to a local branch first.
+  workflow_dispatch:
 
 jobs:
   build:
@@ -128,12 +134,13 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # electron-builder defensively skips code signing on
-          # pull_request events ("forks usually don't have signing
-          # secrets"). For this repo PRs DO have signing secrets — the
-          # PR's own CI run is also the real signed-build verification —
-          # so override the default and always sign + notarize.
-          # Without this the notary service rejects the submission with
+          # electron-builder defensively skips code signing when the
+          # triggering event is `pull_request` ("forks usually don't have
+          # signing secrets"). This workflow no longer runs on the
+          # pull_request event — it runs on push and workflow_dispatch —
+          # so this env var is currently a no-op. It is kept here as a
+          # safety net in case a pull_request trigger is ever re-added:
+          # without it the notary service would reject the submission with
           # "signature of the binary is invalid" + "no secure timestamp"
           # + "no hardened runtime" on every nested Electron Helper app.
           CSC_FOR_PULL_REQUEST: "true"
