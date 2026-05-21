@@ -165,9 +165,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Read the tag from the runtime env var, not a ${{ }} expansion —
-          # interpolating github.ref_name into the script text would let a
-          # tag containing shell syntax execute as code (template injection).
+          # Read the tag from the runtime env var rather than interpolating a
+          # GitHub Actions workflow expression into the script text — a tag
+          # containing shell syntax could otherwise execute (template injection).
           tag="${GITHUB_REF_NAME}"
           if [[ "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-alpha\.[0-9]+$ ]]; then
             channel=alpha
