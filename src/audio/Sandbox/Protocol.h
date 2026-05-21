@@ -76,11 +76,25 @@ inline constexpr const char* kEvtToSandboxSuffix  = "evt-in";
 inline constexpr int kDefaultEditorWidth  = 1000;
 inline constexpr int kDefaultEditorHeight = 600;
 
-// Watchdog: a sandbox that doesn't send `ready` this fast is presumed broken.
-// Generous because some plugins (NI Guitar Rig 6 in particular) spin up an
+// Watchdog: a sandbox that sends neither `ready` nor a `loading` heartbeat
+// within this window is presumed broken. The host measures the deadline
+// against the last signal of either kind (see event::kLoading), so a plugin
+// that keeps heart-beating through a long first-run init is not fast-failed —
+// only a genuinely silent (hung or crashed) sandbox trips it. Still generous
+// on its own because some plugins (NI Guitar Rig 6 in particular) spin up an
 // embedded Qt5/QML engine on first load, which can take 8-12 seconds on a
 // cold cache.
 inline constexpr int kReadyTimeoutMs = 30000;
+
+// Absolute upper bound on the ready handshake, independent of heartbeats.
+// event::kLoading heartbeats push the kReadyTimeoutMs deadline forward, but
+// the heartbeat is a fixed timer — not a real plugin-progress signal — so a
+// plugin whose load hangs while the sandbox's message loop stays responsive
+// would otherwise heartbeat forever and never trip the watchdog. This cap
+// fails the spawn regardless of heartbeats. Generous (4x kReadyTimeoutMs) so
+// a genuinely slow first-run load — cold license validation, network round
+// trips — still completes; a load that exceeds it is presumed stuck.
+inline constexpr int kReadyAbsoluteTimeoutMs = 120000;
 
 // Control channel — operation names.
 //
@@ -110,6 +124,13 @@ namespace op {
 // Control channel — sandbox-originated event names (requestId is null).
 namespace event {
     inline constexpr const char* kReady             = "ready";
+    // Heartbeat emitted by the sandbox while a slow plugin is still loading,
+    // so the host's kReadyTimeoutMs handshake watchdog measures its deadline
+    // against the last heartbeat rather than fast-failing a legitimately slow
+    // first-run load. Purely additive: pre-kLoading hosts ignore it as an
+    // unknown event, and pre-kLoading sandboxes simply never send it, so no
+    // protocol-version bump is needed.
+    inline constexpr const char* kLoading           = "loading";
     inline constexpr const char* kParameterChanged  = "parameterChanged";
     inline constexpr const char* kEditorClosed      = "editorClosed";
     inline constexpr const char* kLog               = "log";

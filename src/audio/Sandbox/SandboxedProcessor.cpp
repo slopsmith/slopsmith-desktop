@@ -259,8 +259,15 @@ bool SandboxedProcessor::initialise(juce::String& errorOut)
     {
         std::promise<bool> readyP;
         std::atomic<bool>  readySet{false};
+        // Millisecond-counter timestamp of the last `loading` heartbeat from
+        // the sandbox. The ready-wait below measures its timeout against this
+        // rather than against spawn time, so a slow-but-alive plugin that
+        // keeps heart-beating is never fast-failed.
+        std::atomic<juce::uint32> lastProgressMs{0};
     };
     auto readyState = std::make_shared<ReadyState>();
+    readyState->lastProgressMs.store(juce::Time::getMillisecondCounter(),
+                                     std::memory_order_relaxed);
     auto readyF     = readyState->readyP.get_future();
 
     // Ordering invariant for the cached fields below:
@@ -273,6 +280,14 @@ bool SandboxedProcessor::initialise(juce::String& errorOut)
     auto eventCb = [this, readyState](const juce::String& evname,
                                       const juce::var& data)
     {
+        if (evname == event::kLoading)
+        {
+            // Slow-load heartbeat: advance the ready-wait deadline, nothing
+            // else. Not forwarded to onControlEvent — it carries no payload.
+            readyState->lastProgressMs.store(juce::Time::getMillisecondCounter(),
+                                             std::memory_order_relaxed);
+            return;
+        }
         if (evname == event::kReady)
         {
             bool expected = false;
@@ -394,16 +409,39 @@ bool SandboxedProcessor::initialise(juce::String& errorOut)
         return false;
     }
 
-    if (readyF.wait_for(std::chrono::milliseconds(spawnConfig.spawnTimeoutMs))
-        != std::future_status::ready)
+    // Wait for the `ready` handshake against two independent bounds:
+    //   * per-heartbeat — fail if no `loading` heartbeat (or `ready`) arrives
+    //     within spawnTimeoutMs. Catches a dead or frozen sandbox.
+    //   * absolute — fail after kReadyAbsoluteTimeoutMs regardless of
+    //     heartbeats. The heartbeat is a fixed timer, not a real progress
+    //     signal, so a sandbox that stays alive and keeps heart-beating but
+    //     whose plugin load never completes would defeat the per-heartbeat
+    //     bound forever; the absolute cap is the hard backstop.
+    const juce::uint32 waitStartMs = juce::Time::getMillisecondCounter();
+    for (;;)
     {
-        errorOut = "sandbox did not become ready within timeout";
-        // Explicit teardown so all the resource-release wiring lives in
-        // one place. The destructor would otherwise pick this up when the
-        // outer unique_ptr drops, but it's clearer to tear down on the
-        // failure edge and not rely on destruction order.
-        teardown("ready timeout");
-        return false;
+        if (readyF.wait_for(std::chrono::milliseconds(250))
+            == std::future_status::ready)
+            break;
+        const juce::uint32 nowMs = juce::Time::getMillisecondCounter();
+        const juce::uint32 sinceProgress =
+            nowMs - readyState->lastProgressMs.load(std::memory_order_relaxed);
+        const juce::uint32 sinceStart = nowMs - waitStartMs;
+        const bool absoluteExceeded =
+            sinceStart > (juce::uint32) kReadyAbsoluteTimeoutMs;
+        if (sinceProgress > (juce::uint32) spawnConfig.spawnTimeoutMs
+            || absoluteExceeded)
+        {
+            errorOut = absoluteExceeded
+                         ? "sandbox did not become ready within absolute timeout"
+                         : "sandbox did not become ready within timeout";
+            // Explicit teardown so all the resource-release wiring lives in
+            // one place. The destructor would otherwise pick this up when the
+            // outer unique_ptr drops, but it's clearer to tear down on the
+            // failure edge and not rely on destruction order.
+            teardown("ready timeout");
+            return false;
+        }
     }
     if (!readyF.get())
     {

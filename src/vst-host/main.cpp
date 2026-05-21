@@ -611,13 +611,14 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
         // prepareToPlay. Mirrors the no-plugin guards in kSetBlockSize /
         // kSetState / kSetParameter.
         //
-        // Today this branch is unreachable: WinMain runs loadPlugin BEFORE
-        // control.start, and dispatchRequest only fires after the I/O
-        // thread is alive. The "no plugin loaded" wording is the same as
-        // the other ops for consistency; the more accurate description for
-        // a future-reachable path would be "loadPlugin failed before
-        // kPrepare". If a future code path detaches plugin loading from
-        // spawn (e.g. lazy-load on first kPrepare), revisit the message.
+        // Today this branch is unreachable: WinMain finishes the async
+        // plugin load BEFORE control.start, and dispatchRequest only fires
+        // after the I/O thread is alive. The "no plugin loaded" wording is
+        // the same as the other ops for consistency; the more accurate
+        // description for a future-reachable path would be "loadPlugin
+        // failed before kPrepare". If a future code path detaches plugin
+        // loading from spawn (e.g. lazy-load on first kPrepare), revisit
+        // the message.
         if (!st.plugin)
         {
             reply(false, {}, "no plugin loaded");
@@ -1234,17 +1235,73 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
 
     // Load the plugin BEFORE starting the control loop so we can return a
     // populated `ready` event.
-    hostLogf("calling host.loadPlugin");
-    st.plugin = st.host.loadPlugin(parsed.pluginPath,
-                                    (double)parsed.sampleRate,
-                                    parsed.maxBlock, err);
+    //
+    // Async load (issue #178): createPluginInstanceAsync keeps this thread's
+    // message pump running during plugin initialisation. A *synchronous* load
+    // blocks the pump, and plugins that post WM_USER / WM_TIMER messages to
+    // themselves during init (AmpliTube and other DAW-targeted VST3s) then
+    // never finish wiring up — they half-wire into an editor that crashes on
+    // its first dispatch. PR #173 fixed this for in-process loading; this is
+    // the same fix for the sandbox child, whose WinMain thread *is* its JUCE
+    // message thread.
+    hostLogf("calling host.loadPluginAsync");
+    std::atomic<bool> loadDone{false};
+    std::unique_ptr<juce::AudioPluginInstance> loadedPlugin;
+    juce::String loadError;
+    st.host.loadPluginAsync(
+        parsed.pluginPath, (double)parsed.sampleRate, parsed.maxBlock,
+        [&loadDone, &loadedPlugin, &loadError]
+        (std::unique_ptr<juce::AudioPluginInstance> p, juce::String e)
+        {
+            loadedPlugin = std::move(p);
+            loadError    = std::move(e);
+            // Release-store pairs with the acquire-load in the pump loop.
+            loadDone.store(true, std::memory_order_release);
+        });
+
+    // Pump this thread's message loop until the async load resolves — the
+    // callback above fires here, from inside runDispatchLoopUntil. Emit a
+    // `loading` heartbeat every kLoadHeartbeatMs so the host's ready-handshake
+    // watchdog doesn't fast-fail a legitimately slow first-run plugin
+    // (license validation, cold Qt/QML spin-up).
+    {
+        auto* mm = juce::MessageManager::getInstance();
+        constexpr juce::uint32 kLoadHeartbeatMs = 5000;
+        juce::uint32 lastHeartbeat = juce::Time::getMillisecondCounter();
+        while (!loadDone.load(std::memory_order_acquire))
+        {
+            mm->runDispatchLoopUntil(20);
+            // If the host gives up and posts WM_QUIT (SubprocessHandle::
+            // shutdown), the load is unrecoverable: createPluginInstanceAsync
+            // can't be cancelled, and runDispatchLoopUntil stops pumping once
+            // a quit message is posted — so the load can neither complete nor
+            // be cleanly unwound (~HostState would race the in-flight load).
+            // This is a disposable sandbox child the host has explicitly told
+            // to quit; terminate hard rather than busy-spin. The host
+            // force-kills us anyway — we just do it ourselves, immediately.
+            if (mm->hasStopMessageBeenSent())
+            {
+                hostLogf("stop requested during plugin load — terminating");
+                TerminateProcess(GetCurrentProcess(), 5);
+                return 5; // unreachable; documents the exit path
+            }
+            const juce::uint32 now = juce::Time::getMillisecondCounter();
+            if (now - lastHeartbeat >= kLoadHeartbeatMs)
+            {
+                lastHeartbeat = now;
+                st.control.sendEvent(event::kLoading, {});
+            }
+        }
+    }
+    st.plugin = std::move(loadedPlugin);
+
     if (!st.plugin)
     {
-        hostLogf("loadPlugin failed: %s", err.toRawUTF8());
+        hostLogf("loadPluginAsync failed: %s", loadError.toRawUTF8());
         // Control channel is connected (no I/O thread yet — start() hasn't
         // been called), so a sendEvent(kGoodbye) is the cheapest way to
         // tell the host "fast-fail" instead of letting it wait out the
-        // 30s handshake timeout. Best-effort; ignore failures.
+        // handshake timeout. Best-effort; ignore failures.
         st.control.sendEvent(event::kGoodbye, {});
         return 5;
     }
