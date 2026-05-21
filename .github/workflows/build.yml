@@ -217,6 +217,11 @@ jobs:
       # vary across vpk versions; the form below targets recent vpk
       # (>= 0.0.869). If flags differ in the actually-installed vpk,
       # adjust after the first dry-run tag.
+      # --packDir points directly at the .app bundle: Velopack uses a
+      # path ending in .app as a prebuilt bundle. A non-.app folder
+      # would instead trigger auto-bundle mode (which also needs
+      # --icon). electron-builder's "dir" target writes the bundle to
+      # release/mac-arm64/Slopsmith.app on the arm64 runner.
       - name: Velopack pack (macOS)
         if: matrix.platform == 'mac' && steps.velopack_channel.outputs.channel != ''
         shell: bash
@@ -233,7 +238,7 @@ jobs:
               --packId Slopsmith \
               --packVersion "${{ steps.velopack_channel.outputs.version }}" \
               --channel "${{ steps.velopack_channel.outputs.channel }}" \
-              --packDir release/mac-arm64 \
+              --packDir release/mac-arm64/Slopsmith.app \
               -o release/velopack
           else
             # vpk's macOS codesign + notarize flags. The exact flag
@@ -246,7 +251,7 @@ jobs:
               --packId Slopsmith \
               --packVersion "${{ steps.velopack_channel.outputs.version }}" \
               --channel "${{ steps.velopack_channel.outputs.channel }}" \
-              --packDir release/mac-arm64 \
+              --packDir release/mac-arm64/Slopsmith.app \
               -o release/velopack \
               --signAppIdentity "$APPLE_SIGNING_IDENTITY" \
               --notaryAppleId "$APPLE_ID" \
