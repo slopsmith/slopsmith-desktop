@@ -124,6 +124,7 @@ clone_slopsmith() {
 		byrongamatos/slopsmith-plugin-drums
 		byrongamatos/slopsmith-plugin-editor
 		byrongamatos/slopsmith-plugin-fretboard
+		byrongamatos/slopsmith-plugin-jumpingtab
 		byrongamatos/slopsmith-plugin-lyrics-karaoke
 		byrongamatos/slopsmith-plugin-metronome
 		byrongamatos/slopsmith-plugin-midi
@@ -148,7 +149,6 @@ clone_slopsmith() {
 		masc0t/slopsmith-plugin-themes
 		masc0t/slopsmith-update-manager:update_manager
 		narvasus/slopsmith-plugin-stem-mixer
-		renanboni/slopsmith-plugin-jumpingtab
 		topkoa/slopsmith-plugin-guitar-theory
 		topkoa/slopsmith-plugin-sloppak-converter
 		topkoa/slopsmith-plugin-splitscreen
