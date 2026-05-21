@@ -120,6 +120,7 @@ clone_slopsmith() {
 	cd "$clone_dir/plugins"
 	local plugins=(
 		# byrongamatos plugins
+		byrongamatos/slopsmith-plugin-drum-highway-3d
 		byrongamatos/slopsmith-plugin-drums
 		byrongamatos/slopsmith-plugin-editor
 		byrongamatos/slopsmith-plugin-fretboard
