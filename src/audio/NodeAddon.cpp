@@ -36,15 +36,19 @@ static void cancelAllPendingLoads();
 // under it mid-load.
 //
 // snapshotEngine() / snapshotVstHost() take the global under the matching
-// mutex and return a private copy. EVERY cross-thread access MUST go
-// through these — the message thread mutates the globals (Init, doShutdown)
-// while worker threads and the synchronous napi handlers read them. The
-// only code permitted to touch the bare `engine` / `vstHost` globals is
-// the snapshot helpers below and the mutex-guarded writes in Init /
-// doShutdown. Every napi handler takes a local snapshot at the top, null-
-// checks it, and dereferences only that local for the rest of its body, so
-// a concurrent doShutdown reset can never pull the object out from under an
-// in-flight call.
+// mutex and return a private copy. The only code permitted to touch the
+// bare `engine` / `vstHost` globals is the snapshot helpers below and the
+// mutex-guarded writes in Init / doShutdown — the message thread mutates
+// the globals there while worker threads and the napi handlers read them.
+//
+// Enforced rule: every *dereference* of engine / vstHost goes through a
+// local snapshot. A napi handler takes that snapshot at the top, null-
+// checks it, and uses only the local — either for the rest of its body,
+// or (for the handlers that hand off to an AsyncWorker — LoadVST,
+// LoadNAMModel, LoadIR, LoadPreset) purely as the availability guard
+// before queuing, with the worker re-snapshotting on its own thread.
+// Either way a concurrent doShutdown reset can never pull the object out
+// from under an in-flight dereference.
 static std::shared_ptr<AudioEngine> engine;
 static std::mutex engineMutex;
 
