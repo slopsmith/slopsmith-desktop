@@ -23,14 +23,15 @@
 // Timing of file overlap:
 //   1. MSI's InstallFiles places everything (incl. Velopack stub at root).
 //   2. MSI fires this hook.
-//   3. We run NSIS uninstaller (silent /S /allusers, already elevated since
+//   3. We snapshot the root Slopsmith.exe (the Velopack stub) to a temp file.
+//   4. We run NSIS uninstaller (silent /S /allusers, already elevated since
 //      the MSI install owns the UAC token).
-//   4. NSIS deletes every file it tracked, including the root Slopsmith.exe
+//   5. NSIS deletes every file it tracked, including the root Slopsmith.exe
 //      (the MSI stub now lives at that path).
-//   5. We copy current\Slopsmith.exe → root Slopsmith.exe to give the
-//      Start Menu shortcut a working target again. The copy isn't the
-//      Velopack execution stub specifically, but it is the real app exe
-//      and launches the same app code Velopack would have routed to anyway.
+//   6. We copy the snapshot back to the root so the Start Menu shortcut has
+//      a working target again. We restore the genuine Velopack stub — not
+//      current\Slopsmith.exe, which is the real Electron exe and would not
+//      launch without its sibling resources\ (absent at the root).
 
 import { spawnSync } from 'child_process';
 import * as fs from 'fs';
@@ -42,7 +43,16 @@ const NSIS_UNINSTALL_REG_KEY = 'HKLM\\Software\\Microsoft\\Windows\\CurrentVersi
 // NSIS /S returns immediately (it copies itself to %TEMP% and runs detached),
 // so we poll the registry as the real "uninstall finished" signal. The key
 // is the last thing NSIS removes before exiting, so its absence is reliable.
-const POLL_TIMEOUT_MS = 25_000;
+//
+// VelopackApp's after-install fast callback gives us ~30s total and the
+// process exits when the callback returns. Derive the poll budget from that
+// so the spawn timeout + poll + overhead can't silently sum past it.
+const FAST_CALLBACK_BUDGET_MS = 30_000;
+const UNINSTALL_SPAWN_TIMEOUT_MS = 5_000;
+// Reserve for the registry query, the two stub file copies, and process
+// startup overhead.
+const CALLBACK_OVERHEAD_RESERVE_MS = 4_000;
+const POLL_TIMEOUT_MS = FAST_CALLBACK_BUDGET_MS - UNINSTALL_SPAWN_TIMEOUT_MS - CALLBACK_OVERHEAD_RESERVE_MS;
 const POLL_INTERVAL_MS = 500;
 
 interface ParsedQuietUninstall {
@@ -154,11 +164,17 @@ function backupStub(): string | null {
  * present.
  */
 function restoreStub(backupPath: string | null): void {
+    // Only drop the temp backup when it is genuinely no longer needed —
+    // either no restore was required, or the restore copy succeeded. If the
+    // copy throws (disk full, locked file) the backup is the only surviving
+    // copy of the stub, so we keep it for manual recovery.
+    let backupSafeToDelete = false;
     try {
         const stub = stubPath();
         if (fs.existsSync(stub)) {
             // NSIS didn't delete it — its file list may never have tracked the
             // root Slopsmith.exe. Nothing to restore.
+            backupSafeToDelete = true;
             return;
         }
         if (!backupPath || !fs.existsSync(backupPath)) {
@@ -167,11 +183,15 @@ function restoreStub(backupPath: string | null): void {
         }
         fs.copyFileSync(backupPath, stub);
         console.log(`[nsis-cleanup] Restored Velopack stub at ${stub}.`);
+        backupSafeToDelete = true;
     } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error('[nsis-cleanup] Stub restoration failed:', message);
-    } finally {
         if (backupPath) {
+            console.error(`[nsis-cleanup] Stub backup kept for manual recovery at ${backupPath}`);
+        }
+    } finally {
+        if (backupPath && backupSafeToDelete) {
             try {
                 fs.rmSync(backupPath, { force: true });
             } catch {
@@ -206,11 +226,11 @@ export function maybeUninstallLegacyNsis(): void {
             // process returns immediately, so we don't gate on spawnSync's
             // exit status — waitForUninstall() polling the registry is the
             // real signal. Set a small timeout so a wedged launch can't burn
-            // through the whole 30s callback budget here.
+            // through the callback budget here.
             const result = spawnSync(uninstaller.exe, uninstaller.args, {
                 stdio: 'ignore',
                 windowsHide: true,
-                timeout: 5_000,
+                timeout: UNINSTALL_SPAWN_TIMEOUT_MS,
             });
             // spawnSync reports a launch failure (missing/blocked exe, or the
             // timeout above) via result.error rather than throwing.
@@ -233,7 +253,7 @@ export function maybeUninstallLegacyNsis(): void {
                 // Couldn't confirm completion within the budget — restoreStub()
                 // in the finally still runs, better than a missing stub if the
                 // uninstaller did partially succeed.
-                console.warn('[nsis-cleanup] NSIS uninstall did not signal completion within 25s.');
+                console.warn(`[nsis-cleanup] NSIS uninstall did not signal completion within ${POLL_TIMEOUT_MS / 1000}s.`);
             }
         }
     } finally {
