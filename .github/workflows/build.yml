@@ -8,6 +8,9 @@ on:
   # otherwise re-run the full 3-platform matrix. Trigger the matrix build
   # manually (Actions tab → Build → "Run workflow", pick the PR branch)
   # once the review round is finished.
+  # Note: workflow_dispatch only allows selecting branches that exist in
+  # this repository; it cannot target branches from contributor forks.
+  # For fork PRs, the maintainer must merge to a local branch first.
   workflow_dispatch:
 
 jobs:
