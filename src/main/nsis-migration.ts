@@ -152,14 +152,23 @@ export function maybeUninstallLegacyNsis(): void {
     console.log(`[nsis-cleanup] Legacy NSIS install detected; running ${uninstaller.exe}`);
     try {
         // NSIS's /S handler spawns a detached temp copy and the original
-        // process returns immediately. We don't care about spawnSync's exit —
-        // the work happens out-of-process. Set a small timeout so a wedged
-        // launch can't burn through the whole 30s callback budget here.
-        spawnSync(uninstaller.exe, uninstaller.args, {
+        // process returns immediately, so we don't gate on spawnSync's exit
+        // status — waitForUninstall() polling the registry is the real
+        // signal. Set a small timeout so a wedged launch can't burn through
+        // the whole 30s callback budget here.
+        const result = spawnSync(uninstaller.exe, uninstaller.args, {
             stdio: 'ignore',
             windowsHide: true,
             timeout: 5_000,
         });
+        // spawnSync reports a launch failure (missing/blocked exe, or the
+        // timeout above) via result.error rather than throwing. If the
+        // uninstaller never started there is nothing to poll for — bail now
+        // instead of wasting 25s in waitForUninstall().
+        if (result.error) {
+            console.error('[nsis-cleanup] NSIS uninstaller did not launch:', result.error.message);
+            return;
+        }
     } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error('[nsis-cleanup] Failed to launch NSIS uninstaller:', message);

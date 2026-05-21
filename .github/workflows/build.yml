@@ -279,7 +279,9 @@ jobs:
             echo "::notice::No Setup.exe output from vpk; shipping MSI-only artifacts."
           fi
           # Sanity check: the MSI must exist or the release is meaningless.
-          if ! ls release/velopack/*.msi >/dev/null 2>&1; then
+          # compgen -G, not `ls *.msi` — with nullglob on, an unmatched glob
+          # expands to nothing and `ls` would list the cwd and pass silently.
+          if ! compgen -G "release/velopack/*.msi" > /dev/null; then
             echo "::error::vpk pack --msi x64 did not produce a .msi file in release/velopack/"
             exit 1
           fi
