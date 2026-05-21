@@ -154,8 +154,10 @@ bundle_python_impl() {
 get_expected_artifacts() {
     # mac.target is "dir": electron-builder writes the unpacked
     # Slopsmith.app to release/mac-arm64/ (no .dmg/.zip). Velopack's
-    # pack step turns that .app into the actual release assets.
-    printf "%s\n" "$PROJECT_DIR/release/mac-arm64/Slopsmith.app"
+    # pack step turns that .app into the actual release assets. Glob
+    # mac*/ so the check also passes for an x64 (mac/) or universal
+    # (mac-universal/) local build — verify_artifacts expands this.
+    printf "%s\n" "$PROJECT_DIR/release/mac*/Slopsmith.app"
 }
 
 # Platform-specific: Bundle system binaries
