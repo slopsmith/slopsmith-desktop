@@ -208,12 +208,38 @@ jobs:
           echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
 
       # Windows: pack the electron-builder unpacked dir into Velopack
-      # release assets (Setup.exe, *-full.nupkg, releases.<ch>.json).
-      # Unsigned for now — see plan gotcha #3.
+      # release assets (per-machine MSI, *-full.nupkg, *-delta.nupkg,
+      # releases.<ch>.json). Unsigned for now — see plan gotcha #3.
+      #
       # The channel is rid-scoped (win-x64-<track>): Velopack requires a
       # unique channel per os/rid so the win + macOS releases.<ch>.json
       # manifests don't collide when published to one GitHub release.
       # The client's update-manager.ts builds the same name to match.
+      #
+      # --msi emits a machine-wide MSI bootstrap (validated decision #2 in
+      # the integration plan: install to %ProgramFiles%\Slopsmith). The flag
+      # is a bool — verified against vpk source at our pinned commit
+      # a2c5a97 (src/vpk/Velopack.Vpk/Commands/Packaging/WindowsPackCommand.cs):
+      #   AddOption<bool>((v) => BuildMsi = v, "--msi")
+      #
+      # --instLocation defaults to "Either" (a dual-mode MSI where the user
+      # picks at install time). We force PerMachine so the MSI is always
+      # machine-wide, matching the plan.
+      #
+      # vpk also writes a per-user Setup.exe by default — we delete it
+      # right after packing so only ONE install method ships. Reasons:
+      #   - Two install methods for the same app split the user base in
+      #     half for every support question ("where is my app installed?").
+      #   - The MSI is what the in-app NSIS migration banner downloads, so
+      #     it has to ship anyway.
+      # The Velopack feed assets (.nupkg, releases.<channel>.json) drive
+      # auto-update for both install methods, so dropping Setup.exe does
+      # NOT break auto-update for users who installed via the MSI.
+      #
+      # Velopack's WindowsVelopackLocator falls back to %LOCALAPPDATA% for
+      # the packages staging dir when Program Files isn't writable, so the
+      # auto-updater works without elevation. Apply-step elevation is
+      # handled by Update.exe's manifest.
       - name: Velopack pack (Windows)
         if: matrix.platform == 'win' && steps.velopack_channel.outputs.channel != ''
         shell: bash
@@ -224,7 +250,31 @@ jobs:
             --packVersion "${{ steps.velopack_channel.outputs.version }}" \
             --channel "win-x64-${{ steps.velopack_channel.outputs.channel }}" \
             --packDir release/win-unpacked \
+            --msi \
+            --instLocation PerMachine \
             -o release/velopack
+          # Drop the per-user Setup.exe (default vpk output) so only the
+          # per-machine MSI ships. Match permissively — the exact name
+          # varies between Velopack versions (Slopsmith-win-Setup.exe vs
+          # Slopsmith-win-x64-Setup.exe etc.).
+          shopt -s nullglob
+          removed=0
+          for f in release/velopack/*Setup.exe; do
+            echo "Removing per-user installer: $f"
+            rm -f "$f"
+            removed=$((removed+1))
+          done
+          if [[ "$removed" -eq 0 ]]; then
+            # Fail loudly rather than silently shipping nothing if vpk's
+            # output naming changes — the workflow assumes a Setup.exe was
+            # there to remove, and 0 matches means the assumption broke.
+            echo "::warning::Expected a *Setup.exe in release/velopack/ to remove, found none. Verify vpk output naming."
+          fi
+          # Sanity check: the MSI must exist or the release is meaningless.
+          if ! ls release/velopack/*.msi >/dev/null 2>&1; then
+            echo "::error::vpk pack --msi x64 did not produce a .msi file in release/velopack/"
+            exit 1
+          fi
 
       # macOS: same, but pass Apple signing identity + notarization
       # creds so Velopack codesigns + notarizes the bundle it generates

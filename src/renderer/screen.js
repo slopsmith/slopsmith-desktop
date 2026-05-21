@@ -4007,3 +4007,147 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
         console.warn('[updater] getStatus on init threw:', e);
     }
 })();
+
+// ── NSIS migration banner (Windows legacy install only) ───────────────────
+// Users still on the old NSIS installer (`C:\Program Files\Slopsmith\Slopsmith.exe`)
+// have no auto-update — Velopack only sees its own layout. This banner offers
+// a one-click upgrade to the new MSI build via the elevated PowerShell flow
+// in src/main/nsis-migration.ts. Sits above the update-downloaded banner so
+// both can coexist (very unlikely, but harmless).
+(function() {
+    'use strict';
+    const updateApi = window.slopsmithDesktop?.update;
+    if (!updateApi || typeof updateApi.isNSISInstall !== 'function') return;
+    // The IPC handler short-circuits to false off-Windows and in dev, so the
+    // banner never renders outside the legacy-install case. We still gate on
+    // the platform here to avoid the extra IPC round-trip on mac/linux.
+    if (window.slopsmithDesktop?.platform !== 'win32') return;
+
+    const BANNER_ID = 'slopsmith-nsis-migration-banner';
+    const DISMISS_KEY = 'slopsmith-nsis-migration-dismissed';
+
+    const hookState = window.__slopsmithDesktopAudioHooks;
+
+    function renderNsisBanner() {
+        if (document.getElementById(BANNER_ID)) return;
+
+        const banner = document.createElement('div');
+        banner.id = BANNER_ID;
+        banner.setAttribute('role', 'status');
+        banner.style.cssText = [
+            'position:fixed',
+            'top:0',
+            'left:0',
+            'right:0',
+            'z-index:99998', // one below the restart banner so both can stack
+            'padding:10px 16px',
+            'background:linear-gradient(90deg,#b45309,#92400e)',
+            'color:#fff',
+            'font-size:13px',
+            'font-family:system-ui,sans-serif',
+            'display:flex',
+            'align-items:center',
+            'justify-content:space-between',
+            'gap:12px',
+            'box-shadow:0 2px 8px rgba(0,0,0,0.4)',
+        ].join(';');
+
+        const text = document.createElement('span');
+        text.textContent = 'You\'re running the legacy Slopsmith installer. Upgrade to the new build to get automatic updates.';
+
+        const actions = document.createElement('span');
+        actions.style.cssText = 'display:flex;gap:8px;align-items:center';
+
+        const upgradeBtn = document.createElement('button');
+        upgradeBtn.textContent = 'Upgrade Now';
+        upgradeBtn.style.cssText = [
+            'padding:4px 12px',
+            'border-radius:4px',
+            'background:#fff',
+            'color:#92400e',
+            'border:none',
+            'font-weight:600',
+            'cursor:pointer',
+            'font-size:13px',
+        ].join(';');
+        upgradeBtn.addEventListener('click', async () => {
+            upgradeBtn.disabled = true;
+            upgradeBtn.textContent = 'Preparing…';
+            try {
+                const result = await updateApi.upgradeFromNSIS();
+                if (result?.ok) {
+                    // Main process schedules app.quit() right after returning
+                    // ok. Show a final state while we wait for the window to
+                    // close so the user doesn't click again.
+                    text.textContent = 'Upgrade started — Windows will prompt for permission. Slopsmith will close to let the installer run.';
+                    upgradeBtn.remove();
+                    dismissBtn.textContent = 'OK';
+                } else {
+                    text.textContent = result?.message
+                        ? `Upgrade failed: ${result.message}`
+                        : 'Upgrade failed. Please download the latest MSI from GitHub Releases.';
+                    upgradeBtn.disabled = false;
+                    upgradeBtn.textContent = 'Try again';
+                }
+            } catch (e) {
+                console.warn('[nsis-migration] upgrade failed:', e);
+                text.textContent = `Upgrade failed: ${e?.message || e}`;
+                upgradeBtn.disabled = false;
+                upgradeBtn.textContent = 'Try again';
+            }
+        });
+
+        const dismissBtn = document.createElement('button');
+        dismissBtn.textContent = 'Not Now';
+        dismissBtn.setAttribute('aria-label', 'Dismiss migration banner');
+        dismissBtn.style.cssText = [
+            'padding:4px 10px',
+            'border-radius:4px',
+            'background:transparent',
+            'color:#fff',
+            'border:1px solid rgba(255,255,255,0.4)',
+            'cursor:pointer',
+            'font-size:13px',
+        ].join(';');
+        dismissBtn.addEventListener('click', () => {
+            // Per-session dismiss — the banner re-renders on next launch
+            // until the user actually upgrades. NSIS users have been silently
+            // missing updates for months already; a once-per-session nag is
+            // appropriate.
+            try { sessionStorage.setItem(DISMISS_KEY, '1'); } catch (_) { /* defensive */ }
+            banner.remove();
+        });
+
+        actions.appendChild(upgradeBtn);
+        actions.appendChild(dismissBtn);
+        banner.appendChild(text);
+        banner.appendChild(actions);
+
+        const insert = () => {
+            if (document.body) document.body.appendChild(banner);
+            else document.addEventListener('DOMContentLoaded', () => document.body.appendChild(banner), { once: true });
+        };
+        insert();
+    }
+
+    // Honor an in-session dismiss so the banner doesn't reappear if screen.js
+    // is re-evaluated (renderer hot-reload, navigation back to the library).
+    try {
+        if (sessionStorage.getItem(DISMISS_KEY) === '1') return;
+    } catch (_) { /* defensive */ }
+
+    // Re-evaluation guard: only do the IPC round-trip once per page lifetime
+    // (subsequent calls are cheap but pointless).
+    if (hookState.nsisMigrationChecked) return;
+    hookState.nsisMigrationChecked = true;
+
+    try {
+        void Promise.resolve(updateApi.isNSISInstall()).then((isNSIS) => {
+            if (isNSIS) renderNsisBanner();
+        }).catch((e) => {
+            console.warn('[nsis-migration] isNSISInstall check failed:', e);
+        });
+    } catch (e) {
+        console.warn('[nsis-migration] isNSISInstall threw:', e);
+    }
+})();
