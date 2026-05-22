@@ -235,6 +235,20 @@ File bugs and feature requests on the
 Please include your OS / version, the Slopsmith Desktop version (visible
 in the title bar or in *About*), and steps to reproduce.
 
+## Support Slopsmith
+
+Slopsmith is free, open-source software (AGPL-3.0), built and maintained in
+spare time. Running it — AI-assisted development, code-signing certificates,
+build CI, and test/audio compute — costs money.
+
+If Slopsmith is useful to you, you can help cover those costs:
+
+- ❤️ **[Patreon](https://patreon.com/Slopsmith)** — recurring support; patrons get a spot on the [supporter wall](https://github.com/byrongamatos/slopsmith/blob/main/SUPPORTERS.md) and a role in the community Discord.
+- ☕ **[Ko-fi](https://ko-fi.com/slopsmith)** — one-time tip, any amount.
+- 💬 **[Discord](https://discord.gg/TzPVK8fNBm)** — join the community (free for everyone).
+
+Even €1 genuinely helps — your support funds open-source software development.
+
 ## License
 
 Slopsmith Desktop is licensed under the GNU Affero General Public
@@ -245,9 +259,9 @@ The audio engine statically links [JUCE 8](https://juce.com/), which is
 the combined desktop binary inherits AGPL-3.0 via that linkage.
 
 Bundled and build-time third-party components — JUCE, NAM, RTNeural,
-Rocksmith2014.NET / `rscli`, FluidSynth (Windows), the GeneralUser GS
-SoundFont, the embedded CPython runtime, Electron, and runtime npm
-dependencies — and their respective licences are listed in
+`rscli`, FluidSynth (Windows), the GeneralUser GS SoundFont, the embedded
+CPython runtime, Electron, and runtime npm dependencies — and their
+respective licences are listed in
 [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md).
 
 The Slopsmith server bundled inside this app
