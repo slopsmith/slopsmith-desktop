@@ -747,13 +747,11 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
         const juce::ScopedTryLock sl(backingLock);
         if (sl.isLocked() && backingResampler && backingTransport && backingPlaying.load())
         {
-            // The resampler was constructed with numChannels=2, so always
-            // allocate a 2-channel scratch buffer to match.  On mono output
-            // this avoids passing a 1-channel buffer into a 2-channel source;
-            // on >2-channel output the mix-back loop's jmin clamp folds the
-            // stereo signal into every output channel correctly.
-            const int resamplerChannels = 2;
-            backingBuffer.setSize(resamplerChannels, numSamples, false, false, true);
+            // The resampler was constructed with numChannels=2 (stereo backing
+            // tracks), so always use a 2-channel scratch buffer.  This avoids
+            // passing a narrower buffer into the resampler on mono output
+            // while keeping a well-defined channel count at all times.
+            backingBuffer.setSize(2, numSamples, false, false, true);
             backingBuffer.clear();
             juce::AudioSourceChannelInfo info(&backingBuffer, 0, numSamples);
             backingResampler->getNextAudioBlock(info);
@@ -767,11 +765,13 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
             if (!backingTransport->isPlaying())
                 backingPlaying.store(false);
 
+            // Mix stereo backing into the first two output channels only;
+            // channels beyond index 1 are left silent so a multi-channel
+            // device does not receive unexpected content on surround outputs.
             float bVol = backingVolume.load();
-            for (int ch = 0; ch < numOutputChannels; ++ch)
-                buffer.addFrom(ch, 0, backingBuffer,
-                               juce::jmin(ch, backingBuffer.getNumChannels() - 1),
-                               0, numSamples, bVol);
+            const int mixChannels = juce::jmin(numOutputChannels, 2);
+            for (int ch = 0; ch < mixChannels; ++ch)
+                buffer.addFrom(ch, 0, backingBuffer, ch, 0, numSamples, bVol);
         }
     }
 
