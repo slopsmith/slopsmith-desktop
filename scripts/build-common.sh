@@ -143,6 +143,7 @@ clone_slopsmith() {
 		byrongamatos/slopsmith-plugin-tones
 		# Community plugins
 		alleexx/slopsmith-plugin-transpose-chords
+		DeathlySin/slopsmith-plugin-song-preview
 		masc0t/slopsmith-plugin-find-more
 		masc0t/slopsmith-plugin-invert-highway
 		masc0t/slopsmith-plugin-the-daily
