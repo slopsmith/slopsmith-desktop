@@ -747,12 +747,12 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
         const juce::ScopedTryLock sl(backingLock);
         if (sl.isLocked() && backingResampler && backingTransport && backingPlaying.load())
         {
-            // Size the scratch buffer to at least 2 channels so it always
-            // matches the channel count the resampler was constructed with.
-            // On mono output this avoids passing a narrower buffer than the
-            // resampler expects; the mix-back loop below only reads up to
-            // numOutputChannels, so the extra channel is never written out.
-            const int resamplerChannels = juce::jmax(numOutputChannels, 2);
+            // The resampler was constructed with numChannels=2, so always
+            // allocate a 2-channel scratch buffer to match.  On mono output
+            // this avoids passing a 1-channel buffer into a 2-channel source;
+            // on >2-channel output the mix-back loop's jmin clamp folds the
+            // stereo signal into every output channel correctly.
+            const int resamplerChannels = 2;
             backingBuffer.setSize(resamplerChannels, numSamples, false, false, true);
             backingBuffer.clear();
             juce::AudioSourceChannelInfo info(&backingBuffer, 0, numSamples);
