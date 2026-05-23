@@ -41,6 +41,15 @@ const juce::StringArray kDefaultNeedsSandboxFilenames = {
     // crash by the renderer's VST crash guard and registered via
     // setCrashedPlugins().
     "Graphene",
+    // IK Multimedia TONEX — corrupts memory when hosted in-process and takes
+    // the whole app down. Field minidumps show two manifestations of the same
+    // disease: a 0xC0000374 heap double-free, and a 0xC0000005 DEP/execute
+    // fault from a call through a recycled vtable. The fault is inside TONEX's
+    // own code and only surfaces in-process, so route it out-of-process where
+    // a crash is contained to the sandbox child instead of killing Slopsmith.
+    // TONEX is an audio effect (no MIDI), so the sandbox MIDI caveat above
+    // does not apply.
+    "TONEX",
 };
 
 // Runtime crash blocklist: full plugin paths that crashed the app on a
