@@ -1,0 +1,22 @@
+name: "💡 Feature Request"
+description: Create a new ticket for a new feature request
+title: "💡 [REQUEST] - <title>"
+labels: [
+  "enhancement"
+]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: "Summary"
+      description: Tell us about your idea.
+      placeholder: "add a clear and concise description of your idea"
+    validations:
+      required: true
+  - type: upload
+    id: mockup
+    attributes:
+      label: "Mockup"
+      description: If applicable, add mockups to help explain your idea.
+    validations:
+      required: false
