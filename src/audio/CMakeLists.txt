@@ -72,6 +72,13 @@ target_compile_definitions(slopsmith_audio PRIVATE NAPI_VERSION=9 NAPI_DISABLE_C
 # it's only built into the addon — the host exe never calls scanDirectories.
 target_compile_definitions(slopsmith_audio PRIVATE SLOPSMITH_AUDIO_ADDON=1)
 
+if(SOUNDTOUCH_AVAILABLE)
+    target_link_libraries(slopsmith_audio PRIVATE SoundTouch)
+    target_compile_definitions(slopsmith_audio PRIVATE SLOPSMITH_SOUNDTOUCH_SUPPORT=1)
+else()
+    target_compile_definitions(slopsmith_audio PRIVATE SLOPSMITH_SOUNDTOUCH_SUPPORT=0)
+endif()
+
 # JUCE modules — headless (no GUI)
 target_link_libraries(slopsmith_audio PRIVATE
     juce::juce_audio_basics

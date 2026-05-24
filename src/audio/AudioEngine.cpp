@@ -520,8 +520,9 @@ bool AudioEngine::loadBackingTrack(const juce::File& file)
     backingTransport = std::make_unique<juce::AudioTransportSource>();
     backingTransport->setSource(backingSource.get(), 0, nullptr, readerSampleRate);
     backingResampler = std::make_unique<juce::ResamplingAudioSource>(backingTransport.get(), false, 2);
-    backingResampler->setResamplingRatio(backingSpeed.load(std::memory_order_relaxed));
     backingResampler->prepareToPlay(currentBlockSize.load(std::memory_order_relaxed), currentSampleRate.load(std::memory_order_relaxed));
+    applyBackingResamplingRatio(backingSpeed.load(std::memory_order_relaxed));
+    resetBackingTimeStretch();
     cachedBackingDuration.store(backingTransport->getLengthInSeconds());
     cachedBackingPosition.store(0.0);
     std::cerr << "[AudioEngine] loadBackingTrack OK sr=" << readerSampleRate
@@ -540,6 +541,10 @@ void AudioEngine::setBackingPosition(double seconds)
         {
             backingResampler->flushBuffers();
         }
+#if defined(SLOPSMITH_SOUNDTOUCH_SUPPORT) && SLOPSMITH_SOUNDTOUCH_SUPPORT
+        if (usePitchPreserveStretch())
+            backingSoundTouch.clear();
+#endif
         // Read back the actual position; the transport may clamp (e.g. negative or past EOF).
         cachedBackingPosition.store(backingTransport->getCurrentPosition());
     }
@@ -570,6 +575,108 @@ void AudioEngine::stopBacking()
     stopBackingNoLock();
 }
 
+#if defined(SLOPSMITH_SOUNDTOUCH_SUPPORT) && SLOPSMITH_SOUNDTOUCH_SUPPORT
+namespace {
+
+// High-quality SoundTouch profile for backing slowdown (preserve-pitch mode only).
+// Longer sequence/seek windows reduce echo and splice artifacts when tempo < 1.0.
+void applyBackingSoundTouchSlowdownQuality(soundtouch::SoundTouch& st, double tempo)
+{
+    st.setSetting(SETTING_USE_QUICKSEEK, 0);
+    st.setSetting(SETTING_USE_AA_FILTER, 1);
+    st.setSetting(SETTING_AA_FILTER_LENGTH, 64);
+
+    const int sequenceMs = tempo <= 0.60 ? 110 : (tempo <= 0.85 ? 95 : 82);
+    const int seekWindowMs = tempo <= 0.60 ? 30 : (tempo <= 0.85 ? 26 : 22);
+    st.setSetting(SETTING_SEQUENCE_MS, sequenceMs);
+    st.setSetting(SETTING_SEEKWINDOW_MS, seekWindowMs);
+    st.setSetting(SETTING_OVERLAP_MS, 12);
+}
+
+} // namespace
+#endif
+
+bool AudioEngine::usePitchPreserveStretch() const
+{
+#if defined(SLOPSMITH_SOUNDTOUCH_SUPPORT) && SLOPSMITH_SOUNDTOUCH_SUPPORT
+    return backingPreservePitch.load(std::memory_order_relaxed)
+        && backingSpeed.load(std::memory_order_relaxed) < 1.0;
+#else
+    return false;
+#endif
+}
+
+void AudioEngine::applyBackingResamplingRatio(double speed)
+{
+    if (!backingResampler)
+        return;
+    backingResampler->setResamplingRatio(usePitchPreserveStretch() ? 1.0 : speed);
+}
+
+void AudioEngine::resetBackingTimeStretch()
+{
+#if defined(SLOPSMITH_SOUNDTOUCH_SUPPORT) && SLOPSMITH_SOUNDTOUCH_SUPPORT
+    const double sr = currentSampleRate.load(std::memory_order_relaxed);
+    if (sr <= 0.0)
+        return;
+    backingSoundTouch.clear();
+    backingSoundTouch.setSampleRate(static_cast<uint>(sr));
+    backingSoundTouch.setChannels(2);
+    const double speed = backingSpeed.load(std::memory_order_relaxed);
+    if (backingPreservePitch.load(std::memory_order_relaxed) && speed < 1.0)
+        applyBackingSoundTouchSlowdownQuality(backingSoundTouch, speed);
+    backingSoundTouch.setTempo(speed);
+    backingSoundTouch.setPitchSemiTones(0);
+#endif
+}
+
+void AudioEngine::mixBackingWithTimeStretch(int numSamples)
+{
+#if defined(SLOPSMITH_SOUNDTOUCH_SUPPORT) && SLOPSMITH_SOUNDTOUCH_SUPPORT
+    backingBuffer.setSize(2, numSamples, false, false, true);
+    backingBuffer.clear();
+
+    // Feed SoundTouch larger blocks than the library minimum; reduces splice artifacts.
+    const int minFeedFrames = 256;
+    const int maxChunk = juce::jmax(minFeedFrames, numSamples);
+    backingStretchInterleaved.resize(static_cast<size_t>(maxChunk) * 2u);
+
+    int outFrames = 0;
+    while (outFrames < numSamples)
+    {
+        const int want = numSamples - outFrames;
+        const int received = backingSoundTouch.receiveSamples(
+            backingStretchInterleaved.data(), static_cast<uint>(want));
+        for (int i = 0; i < received; ++i)
+        {
+            backingBuffer.setSample(0, outFrames + i, backingStretchInterleaved[static_cast<size_t>(i) * 2]);
+            backingBuffer.setSample(1, outFrames + i, backingStretchInterleaved[static_cast<size_t>(i) * 2 + 1]);
+        }
+        outFrames += received;
+
+        if (outFrames >= numSamples)
+            break;
+
+        const double speed = backingSpeed.load(std::memory_order_relaxed);
+        int framesToRead = juce::jlimit(minFeedFrames, maxChunk,
+                                        (int) std::ceil((double) want / juce::jmax(speed, 0.01)));
+        backingStretchInput.setSize(2, framesToRead, false, false, true);
+        backingStretchInput.clear();
+        juce::AudioSourceChannelInfo readInfo(&backingStretchInput, 0, framesToRead);
+        backingResampler->getNextAudioBlock(readInfo);
+
+        for (int i = 0; i < framesToRead; ++i)
+        {
+            backingStretchInterleaved[static_cast<size_t>(i) * 2]
+                = backingStretchInput.getSample(0, i);
+            backingStretchInterleaved[static_cast<size_t>(i) * 2 + 1]
+                = backingStretchInput.getSample(1, i);
+        }
+        backingSoundTouch.putSamples(backingStretchInterleaved.data(), static_cast<uint>(framesToRead));
+    }
+#endif
+}
+
 void AudioEngine::setBackingSpeed(double speed)
 {
     if (!std::isfinite(speed) || speed <= 0.0)
@@ -579,10 +686,25 @@ void AudioEngine::setBackingSpeed(double speed)
 
     const juce::ScopedLock sl(backingLock);
     backingSpeed.store(speed);
-    if (backingResampler)
+    applyBackingResamplingRatio(speed);
+#if defined(SLOPSMITH_SOUNDTOUCH_SUPPORT) && SLOPSMITH_SOUNDTOUCH_SUPPORT
+    if (usePitchPreserveStretch())
     {
-        backingResampler->setResamplingRatio(speed);
+        applyBackingSoundTouchSlowdownQuality(backingSoundTouch, speed);
+        backingSoundTouch.setTempo(speed);
     }
+#endif
+}
+
+void AudioEngine::setBackingPreservePitch(bool preserve)
+{
+    const juce::ScopedLock sl(backingLock);
+    backingPreservePitch.store(preserve);
+    const double speed = backingSpeed.load(std::memory_order_relaxed);
+    applyBackingResamplingRatio(speed);
+#if defined(SLOPSMITH_SOUNDTOUCH_SUPPORT) && SLOPSMITH_SOUNDTOUCH_SUPPORT
+    resetBackingTimeStretch();
+#endif
 }
 
 void AudioEngine::resetPeaks()
@@ -637,6 +759,7 @@ void AudioEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
     {
         backingResampler->prepareToPlay(bs, sr);
     }
+    resetBackingTimeStretch();
 }
 
 void AudioEngine::audioDeviceStopped()
@@ -844,8 +967,15 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
             // while keeping a well-defined channel count at all times.
             backingBuffer.setSize(2, numSamples, false, false, true);
             backingBuffer.clear();
-            juce::AudioSourceChannelInfo info(&backingBuffer, 0, numSamples);
-            backingResampler->getNextAudioBlock(info);
+            if (usePitchPreserveStretch())
+            {
+                mixBackingWithTimeStretch(numSamples);
+            }
+            else
+            {
+                juce::AudioSourceChannelInfo info(&backingBuffer, 0, numSamples);
+                backingResampler->getNextAudioBlock(info);
+            }
 
             // Keep cached position and playing state up to date for lock-free polling.
             // backingTransport is non-null (checked above) and backingLock is held for

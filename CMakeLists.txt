@@ -47,6 +47,20 @@ endif()
 # be obtained. See cmake/onnxruntime.cmake.
 include("${CMAKE_SOURCE_DIR}/cmake/onnxruntime.cmake")
 
+# SoundTouch — pitch-preserving tempo change for backing tracks (Phase 2).
+set(SOUNDTOUCH_DIR "${CMAKE_SOURCE_DIR}/third_party/SoundTouch")
+if(EXISTS "${SOUNDTOUCH_DIR}/CMakeLists.txt")
+    set(SOUNDTOUCH_BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS})
+    set(BUILD_SHARED_LIBS OFF)
+    add_subdirectory("${SOUNDTOUCH_DIR}" soundtouch_build EXCLUDE_FROM_ALL)
+    set(BUILD_SHARED_LIBS ${SOUNDTOUCH_BUILD_SHARED_LIBS})
+    set(SOUNDTOUCH_AVAILABLE ON)
+    message(STATUS "SoundTouch found — backing pitch-preserve stretch enabled")
+else()
+    set(SOUNDTOUCH_AVAILABLE OFF)
+    message(STATUS "SoundTouch not found — backing uses resampling only")
+endif()
+
 add_subdirectory(src/audio)
 
 # VST scan / sandbox subprocess helpers (Windows host, macOS scan helper).

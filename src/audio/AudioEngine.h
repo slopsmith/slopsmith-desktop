@@ -1,4 +1,7 @@
 #pragma once
+#if defined(SLOPSMITH_SOUNDTOUCH_SUPPORT) && SLOPSMITH_SOUNDTOUCH_SUPPORT
+#include <SoundTouch.h>
+#endif
 #include "NoiseGate.h"
 #include "TonePolish.h"
 #include "SignalChain.h"
@@ -121,6 +124,7 @@ public:
     void startBacking();
     void stopBacking();
     void setBackingSpeed(double speed);
+    void setBackingPreservePitch(bool preserve);
     // Non-blocking reads — do not acquire backingLock and never block the audio callback
     bool isBackingPlaying() const { return backingPlaying.load(); }
     double getBackingPosition() const { return cachedBackingPosition.load(); }
@@ -198,6 +202,10 @@ private:
     void audioDeviceAboutToStart(juce::AudioIODevice* device) override;
     void audioDeviceStopped() override;
     void stopBackingNoLock(); // stop transport without acquiring backingLock (caller holds it)
+    bool usePitchPreserveStretch() const;
+    void applyBackingResamplingRatio(double speed);
+    void resetBackingTimeStretch();
+    void mixBackingWithTimeStretch(int numSamples);
 
     // ML-backed chord scoring against the MlNoteDetector's active-pitch set.
     // Used by scoreChord() when a Basic Pitch model is loaded.
@@ -238,6 +246,12 @@ private:
     std::atomic<double> cachedBackingPosition{0.0};
     std::atomic<double> cachedBackingDuration{0.0};
     std::atomic<double> backingSpeed{1.0};
+    std::atomic<bool> backingPreservePitch{false};
+#if defined(SLOPSMITH_SOUNDTOUCH_SUPPORT) && SLOPSMITH_SOUNDTOUCH_SUPPORT
+    soundtouch::SoundTouch backingSoundTouch;
+    juce::AudioBuffer<float> backingStretchInput;
+    std::vector<float> backingStretchInterleaved;
+#endif
     juce::CriticalSection backingLock;
 
     // Toggled from startAudio()/stopAudio() (main / device-management

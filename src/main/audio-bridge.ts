@@ -636,6 +636,18 @@ export function initAudioBridge(): void {
         }
     });
 
+    ipcMain.handle('audio:setBackingPreservePitch', (_event, preserve: boolean) => {
+        if (!audio || typeof audio.setBackingPreservePitch !== 'function') return false;
+        if (typeof preserve !== 'boolean') return false;
+        try {
+            audio.setBackingPreservePitch(preserve);
+            return true;
+        } catch (e: unknown) {
+            console.warn(`[audio] setBackingPreservePitch failed: ${e instanceof Error ? e.message : String(e)}`);
+            return false;
+        }
+    });
+
     // ── Presets ────────────────────────────────────────────────────────────
 
     ipcMain.handle('audio:savePreset', () => {

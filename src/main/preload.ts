@@ -259,6 +259,8 @@ contextBridge.exposeInMainWorld('slopsmithDesktop', {
         getBackingDuration: (): Promise<number> => ipcRenderer.invoke('audio:getBackingDuration'),
         isBackingPlaying: (): Promise<boolean> => ipcRenderer.invoke('audio:isBackingPlaying'),
         setBackingSpeed: (speed: number): Promise<boolean> => ipcRenderer.invoke('audio:setBackingSpeed', speed),
+        setBackingPreservePitch: (preserve: boolean): Promise<boolean> =>
+            ipcRenderer.invoke('audio:setBackingPreservePitch', preserve),
 
         // Presets
         savePreset: () => ipcRenderer.invoke('audio:savePreset'),

@@ -2069,6 +2069,20 @@ static Napi::Value SetBackingSpeed(const Napi::CallbackInfo& info)
     return env.Undefined();
 }
 
+static Napi::Value SetBackingPreservePitch(const Napi::CallbackInfo& info)
+{
+    auto env = info.Env();
+    if (info.Length() < 1 || !info[0].IsBoolean())
+    {
+        Napi::TypeError::New(env, "setBackingPreservePitch(preserve) requires a boolean")
+            .ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+    if (engine)
+        engine->setBackingPreservePitch(info[0].As<Napi::Boolean>().Value());
+    return env.Undefined();
+}
+
 // ── Presets ───────────────────────────────────────────────────────────────────
 
 static Napi::Value SavePreset(const Napi::CallbackInfo& info)
@@ -2403,6 +2417,7 @@ static Napi::Object InitModule(Napi::Env env, Napi::Object exports)
     exports.Set("getBackingDuration", Napi::Function::New(env, GetBackingDuration));
     exports.Set("isBackingPlaying", Napi::Function::New(env, IsBackingPlaying));
     exports.Set("setBackingSpeed", Napi::Function::New(env, SetBackingSpeed));
+    exports.Set("setBackingPreservePitch", Napi::Function::New(env, SetBackingPreservePitch));
 
     // Presets
     exports.Set("savePreset", Napi::Function::New(env, SavePreset));
