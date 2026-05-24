@@ -10,3 +10,9 @@
 	path = src/audio/third_party/NAM
 	url = https://github.com/sdatkinson/NeuralAmpModelerCore.git
 	branch = main
+[submodule "src/audio/third_party/signalsmith-stretch"]
+	path = src/audio/third_party/signalsmith-stretch
+	url = https://github.com/Signalsmith-Audio/signalsmith-stretch.git
+[submodule "src/audio/third_party/signalsmith-linear"]
+	path = src/audio/third_party/signalsmith-linear
+	url = https://github.com/Signalsmith-Audio/linear.git
