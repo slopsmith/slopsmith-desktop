@@ -2,6 +2,7 @@
 #if defined(SLOPSMITH_SOUNDTOUCH_SUPPORT) && SLOPSMITH_SOUNDTOUCH_SUPPORT
 #include <SoundTouch.h>
 #endif
+#include "BackingSlowdownStretch.h"
 #include "NoiseGate.h"
 #include "TonePolish.h"
 #include "SignalChain.h"
@@ -205,7 +206,7 @@ private:
     bool usePitchPreserveStretch() const;
     void applyBackingResamplingRatio(double speed);
     void resetBackingTimeStretch();
-    void mixBackingWithTimeStretch(int numSamples);
+    void mixBackingWithTimeStretch(int numSamples, double transportPositionSec);
 
     // ML-backed chord scoring against the MlNoteDetector's active-pitch set.
     // Used by scoreChord() when a Basic Pitch model is loaded.
@@ -251,6 +252,10 @@ private:
     soundtouch::SoundTouch backingSoundTouch;
     juce::AudioBuffer<float> backingStretchInput;
     std::vector<float> backingStretchInterleaved;
+    double backingStretchSmoothedTempo{1.0};
+    SlowdownQualityPreset backingStretchActivePreset{SlowdownQualityPreset::Balanced};
+    int backingStretchLoopFadeSamples{0};
+    double backingStretchLastTransportPos{-1.0};
 #endif
     juce::CriticalSection backingLock;
 
