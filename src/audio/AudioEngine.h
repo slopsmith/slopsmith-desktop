@@ -241,6 +241,8 @@ private:
     std::atomic<bool> backingPlaying{false};
     std::atomic<double> cachedBackingPosition{0.0};
     std::atomic<double> cachedBackingDuration{0.0};
+    // Musical playhead advanced by source frames consumed (stretch path), not transport read head.
+    std::atomic<double> backingHeardPositionSec{0.0};
     std::atomic<double> backingSpeed{1.0};
     juce::CriticalSection backingLock;
 
