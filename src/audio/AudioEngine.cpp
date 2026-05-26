@@ -417,6 +417,31 @@ bool AudioEngine::setDeviceType(const juce::String& typeName)
             try {
                 fprintf(stderr, "[AudioEngine] Setting input device type: %s\n", typeName.toRawUTF8());
                 inputDeviceManager.setCurrentAudioDeviceType(typeName, true);
+                // Legacy single-type API contract: callers expect both
+                // managers to track the same backend so a subsequent
+                // duplex configure or probe sees a consistent dual state.
+                // setOutputDeviceType() exists for callers that want to
+                // diverge the two sides intentionally. Best-effort — if
+                // the output side doesn't expose this backend the input
+                // change still stands so duplex on the matched backend
+                // keeps working.
+                if (auto* currentOutputType = outputDeviceManager.getCurrentDeviceTypeObject())
+                {
+                    if (currentOutputType->getTypeName() != typeName)
+                    {
+                        for (auto* outType : outputDeviceManager.getAvailableDeviceTypes())
+                        {
+                            if (outType->getTypeName() == typeName)
+                            {
+                                try { outputDeviceManager.setCurrentAudioDeviceType(typeName, true); }
+                                catch (...) {
+                                    fprintf(stderr, "[AudioEngine] setDeviceType: output sync threw (continuing)\n");
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
                 return true;
             } catch (const std::exception& e) {
                 fprintf(stderr, "[AudioEngine] setDeviceType crashed: %s\n", e.what());
@@ -904,9 +929,42 @@ AudioEngine::DeviceConfigResult AudioEngine::applySplitSetup(const DeviceConfig&
     // failure. closeAudioDevice is idempotent so unconditional calls are
     // safe even when only the input or neither side opened.
     auto rollbackOpenedDevices = [&]() {
+        // Drop any callback we already attached to the output manager —
+        // closeAudioDevice() does not invoke removeAudioCallback, and leaving
+        // outputCallbackRegistered=true would cause the next startAudio()
+        // to skip the re-attach (it gates on !outputCallbackRegistered),
+        // leaving split-mode output silent after a partial-open failure.
+        if (outputCallbackRegistered)
+        {
+            try { outputDeviceManager.removeAudioCallback(&outputCallback); } catch (...) {}
+            outputCallbackRegistered = false;
+        }
         try { inputDeviceManager.closeAudioDevice(); } catch (...) {}
         try { outputDeviceManager.closeAudioDevice(); } catch (...) {}
     };
+
+    // Mirror applyDuplexSetup's JUCE_LINUX close-before-reconfigure pattern:
+    // ALSA deadlocks if we let setAudioDeviceSetup mutate a live device. The
+    // device type is re-asserted afterwards so the close doesn't drop us back
+    // to whatever JUCE picked at startup. closeAudioDevice/setCurrentAudioDeviceType
+    // throwing is non-fatal — we still try the setup below and surface its error.
+#if JUCE_LINUX
+    {
+        juce::String currentInputTypeName;
+        if (auto* currentType = inputDeviceManager.getCurrentDeviceTypeObject())
+            currentInputTypeName = currentType->getTypeName();
+        if (inputDeviceManager.getCurrentAudioDevice() != nullptr)
+        {
+            try {
+                inputDeviceManager.closeAudioDevice();
+                if (currentInputTypeName.isNotEmpty())
+                    inputDeviceManager.setCurrentAudioDeviceType(currentInputTypeName, true);
+            } catch (...) {
+                fprintf(stderr, "[AudioEngine] split-mode input close threw, continuing\n");
+            }
+        }
+    }
+#endif
 
     juce::String inErr;
     try { inErr = inputDeviceManager.setAudioDeviceSetup(inSetup, true); }
@@ -946,6 +1004,26 @@ AudioEngine::DeviceConfigResult AudioEngine::applySplitSetup(const DeviceConfig&
     outSetup.inputChannels.clear();
     outSetup.outputChannels.setRange(0, juce::jmin(outputChannelCount, 2), true);
 
+    // Same JUCE_LINUX close-before-reconfigure as the input side above — also
+    // protects when split mode is re-applied with a different output device.
+#if JUCE_LINUX
+    {
+        juce::String currentOutputTypeName;
+        if (auto* currentType = outputDeviceManager.getCurrentDeviceTypeObject())
+            currentOutputTypeName = currentType->getTypeName();
+        if (outputDeviceManager.getCurrentAudioDevice() != nullptr)
+        {
+            try {
+                outputDeviceManager.closeAudioDevice();
+                if (currentOutputTypeName.isNotEmpty())
+                    outputDeviceManager.setCurrentAudioDeviceType(currentOutputTypeName, true);
+            } catch (...) {
+                fprintf(stderr, "[AudioEngine] split-mode output close threw, continuing\n");
+            }
+        }
+    }
+#endif
+
     juce::String outErr;
     try { outErr = outputDeviceManager.setAudioDeviceSetup(outSetup, true); }
     catch (...) { res.error = "output setAudioDeviceSetup threw"; rollbackOpenedDevices(); return res; }
@@ -975,7 +1053,7 @@ AudioEngine::DeviceConfigResult AudioEngine::applySplitSetup(const DeviceConfig&
     outputUnderflowCount.store(0, std::memory_order_relaxed);
     inputOverflowCount.store(0, std::memory_order_relaxed);
     for (auto& slot : outputPendingRing)
-        slot.store(0.0f, std::memory_order_relaxed);
+        slot.store(0u, std::memory_order_relaxed);
 
     signalChain.prepare(inSr, inBs);
     noiseGate.prepare(inSr, inBs);
@@ -1002,7 +1080,7 @@ void AudioEngine::teardownSplitMode()
     outputRingWriteIndex.store(0, std::memory_order_relaxed);
     outputRingReadIndex.store(0, std::memory_order_relaxed);
     for (auto& slot : outputPendingRing)
-        slot.store(0.0f, std::memory_order_relaxed);
+        slot.store(0u, std::memory_order_relaxed);
 }
 
 // ── Audio Control ─────────────────────────────────────────────────────────────
@@ -1634,8 +1712,11 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
         for (int i = 0; i < numSamples; ++i)
         {
             const uint64_t slot = (w + (uint64_t) i) & kMask;
-            outputPendingRing[slot * 2 + 0].store(L[i], std::memory_order_relaxed);
-            outputPendingRing[slot * 2 + 1].store(R[i], std::memory_order_relaxed);
+            // Single atomic store packs both channels — prevents the L/R tear
+            // a consumer could otherwise observe when the producer wraps
+            // mid-callback (relaxed because ordering is established by the
+            // release on outputRingWriteIndex below).
+            outputPendingRing[slot].store(packLR(L[i], R[i]), std::memory_order_relaxed);
         }
         outputRingWriteIndex.store(w + (uint64_t) numSamples, std::memory_order_release);
     }
@@ -1697,8 +1778,12 @@ void AudioEngine::audioOutputCallback(const float* const* /*inputData*/,
     for (int i = 0; i < pullCount; ++i)
     {
         const uint64_t slot = (r + (uint64_t) i) & kMask;
-        outputPullScratchL[(size_t) i] = outputPendingRing[slot * 2 + 0].load(std::memory_order_relaxed);
-        outputPullScratchR[(size_t) i] = outputPendingRing[slot * 2 + 1].load(std::memory_order_relaxed);
+        // Single atomic load → atomic unpack of both channels (matches the
+        // producer's packed store) so L and R always belong to the same frame.
+        float l, rr;
+        unpackLR(outputPendingRing[slot].load(std::memory_order_relaxed), l, rr);
+        outputPullScratchL[(size_t) i] = l;
+        outputPullScratchR[(size_t) i] = rr;
     }
     if (pullCount < outSamples)
     {

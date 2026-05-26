@@ -11,6 +11,7 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -390,22 +391,39 @@ private:
     // so the hot loop never allocates.
     std::vector<float> inputCaptureScratch;
 
-    // Split-mode SPSC ring (unused in duplex). Stereo interleaved [L0,R0, L1,R1, ...].
-    // ~85 ms @ 48 kHz — absorbs clock drift (tens of ppm) over typical sessions.
+    // Split-mode SPSC ring (unused in duplex). Each slot packs one stereo frame
+    // (L+R floats) into a single 64-bit atomic so the consumer reads both
+    // channels in one indivisible load — without packing, the producer's two
+    // separate atomic stores could interleave with the consumer's two loads
+    // during a drop-oldest wrap, surfacing as L_new+R_old (or vice versa)
+    // sample tears. ~85 ms @ 48 kHz — absorbs clock drift over typical sessions.
     static constexpr int kOutputRingFrames = 4096;
-    static constexpr int kOutputRingFloatsPerSlot = 2;
-    std::array<std::atomic<float>,
-               kOutputRingFrames * kOutputRingFloatsPerSlot> outputPendingRing{};
+    std::array<std::atomic<uint64_t>, kOutputRingFrames> outputPendingRing{};
     static_assert((kOutputRingFrames & (kOutputRingFrames - 1)) == 0,
                   "kOutputRingFrames must be a power of two for mask wraparound");
     // RT-thread reads + writes touch these slots, so a lock-based fallback
     // would risk priority inversion + audible dropouts. On the platforms we
-    // ship (x86_64 + arm64 across Linux/macOS/Windows) atomic<float> is
+    // ship (x86_64 + arm64 across Linux/macOS/Windows) atomic<uint64_t> is
     // always lock-free; this assert turns a regression into a build error
     // instead of a silent latency degradation if a future platform port
     // breaks the assumption.
-    static_assert(std::atomic<float>::is_always_lock_free,
-                  "outputPendingRing requires lock-free atomic<float> for RT safety");
+    static_assert(std::atomic<uint64_t>::is_always_lock_free,
+                  "outputPendingRing requires lock-free atomic<uint64_t> for RT safety");
+    static_assert(sizeof(float) == 4,
+                  "outputPendingRing pack/unpack assumes 32-bit float");
+
+    // Pack/unpack helpers — std::bit_cast (C++20) is constexpr + alias-safe.
+    static inline uint64_t packLR(float l, float r) noexcept
+    {
+        const uint32_t li = std::bit_cast<uint32_t>(l);
+        const uint32_t ri = std::bit_cast<uint32_t>(r);
+        return (static_cast<uint64_t>(ri) << 32) | static_cast<uint64_t>(li);
+    }
+    static inline void unpackLR(uint64_t v, float& l, float& r) noexcept
+    {
+        l = std::bit_cast<float>(static_cast<uint32_t>(v & 0xFFFFFFFFu));
+        r = std::bit_cast<float>(static_cast<uint32_t>(v >> 32));
+    }
 
     std::atomic<uint64_t> outputRingWriteIndex{0};
     std::atomic<uint64_t> outputRingReadIndex{0};
