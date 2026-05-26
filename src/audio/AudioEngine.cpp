@@ -148,21 +148,37 @@ AudioEngine::DeviceOptions AudioEngine::probeDeviceOptionsDual(const juce::Strin
         options.outputType = outputType->getTypeName();
         options.type = options.inputType;
 
-        auto inputs = inputType->getDeviceNames(true);
-        auto outputs = outputType->getDeviceNames(false);
         options.input = inputName;
         options.output = outputName;
-        if (options.input.isEmpty() && inputs.size() > 0) options.input = inputs[0];
-        if (options.output.isEmpty() && outputs.size() > 0) options.output = outputs[0];
 
-        const bool isDuplex = (options.inputType == options.outputType
-                               && options.input == options.output
-                               && options.input.isNotEmpty());
+        // userIntendsDuplex matches setAudioDevices's classification:
+        // identical names on both sides (typically both empty = OS default)
+        // means we'll go duplex regardless of which specific devices the
+        // first-enumerated lookup would have produced.
+        const bool userIntendsDuplex = (options.inputType == options.outputType
+                                        && options.input == options.output);
+
+        // For probing we still need a concrete device to instantiate.
+        // Resolve empty names to first-enumerated ONLY for the probe-device
+        // creation below — DON'T write back into options.input/options.output;
+        // those flow to the UI and the apply path, which treat empty as
+        // "OS default" per side.
+        auto inputs  = inputType->getDeviceNames(true);
+        auto outputs = outputType->getDeviceNames(false);
+        const juce::String probeInputName =
+            options.input.isEmpty() && inputs.size() > 0 ? inputs[0] : options.input;
+        const juce::String probeOutputName =
+            options.output.isEmpty() && outputs.size() > 0 ? outputs[0] : options.output;
+
+        const bool isDuplex = userIntendsDuplex
+                              || (options.inputType == options.outputType
+                                  && options.input == options.output
+                                  && options.input.isNotEmpty());
 
         if (isDuplex)
         {
             std::unique_ptr<juce::AudioIODevice> dev(
-                inputType->createDevice(options.output, options.input));
+                inputType->createDevice(probeOutputName, probeInputName));
             if (!dev) { options.error = "Could not create probe device"; options.compatible = false; return options; }
 
             options.inputChannels = dev->getInputChannelNames();
@@ -175,9 +191,9 @@ AudioEngine::DeviceOptions AudioEngine::probeDeviceOptionsDual(const juce::Strin
         else
         {
             std::unique_ptr<juce::AudioIODevice> inDev(
-                inputType->createDevice({}, options.input));
+                inputType->createDevice({}, probeInputName));
             std::unique_ptr<juce::AudioIODevice> outDev(
-                outputType->createDevice(options.output, {}));
+                outputType->createDevice(probeOutputName, {}));
             if (!inDev || !outDev)
             {
                 options.error = "Could not create dual probe devices";
