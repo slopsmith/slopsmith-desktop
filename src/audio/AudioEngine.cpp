@@ -1637,6 +1637,14 @@ void AudioEngine::audioOutputCallback(const float* const* /*inputData*/,
     const uint64_t available = w - r;
     const int      pullCount = juce::jmin(outSamples, (int) available);
 
+    // When scratchCap clamped outSamples below numSamples (device-reconfig
+    // race), we still need to consume the ring frames that match the
+    // device callback's full block size — otherwise those extras stay
+    // queued and play back late, accumulating ring/output-clock skew
+    // until the latency is audible. Drop them from the ring without
+    // copying into scratch.
+    const int      consumeCount = juce::jmin(numSamples, (int) available);
+
     for (int i = 0; i < pullCount; ++i)
     {
         const uint64_t slot = (r + (uint64_t) i) & kMask;
@@ -1652,7 +1660,7 @@ void AudioEngine::audioOutputCallback(const float* const* /*inputData*/,
         }
         outputUnderflowCount.fetch_add(1, std::memory_order_relaxed);
     }
-    outputRingReadIndex.store(r + (uint64_t) pullCount, std::memory_order_release);
+    outputRingReadIndex.store(r + (uint64_t) consumeCount, std::memory_order_release);
 
     buffer.clear();
     const int copyChannels = juce::jmin(numOutputChannels, 2);
