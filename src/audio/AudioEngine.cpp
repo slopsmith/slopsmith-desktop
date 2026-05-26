@@ -466,6 +466,15 @@ AudioEngine::DeviceConfigResult AudioEngine::setAudioDevices(const DeviceConfig&
     juce::String resolvedOutputType = config.outputType.isEmpty()
         ? resolvedInputType : config.outputType;
 
+    // Stop audio BEFORE mutating device-type or device setup. JUCE can
+    // tear down and re-scan devices inside setCurrentAudioDeviceType /
+    // setAudioDeviceSetup, and doing that while the audio callback is
+    // still attached risks crashes/deadlocks on some backends (ASIO is
+    // the usual culprit). stopAudio() detaches both callbacks first;
+    // we'll re-start at the end if we were running.
+    const bool wasRunning = audioRunning.load(std::memory_order_relaxed);
+    if (wasRunning) stopAudio();
+
     // setCurrentAudioDeviceType can throw from inside JUCE backends (ASIO
     // is the usual culprit). Catch and propagate as a structured error so
     // the N-API caller doesn't see the exception cross the boundary.
@@ -515,9 +524,6 @@ AudioEngine::DeviceConfigResult AudioEngine::setAudioDevices(const DeviceConfig&
     const bool isDuplex = (resolvedInputType == resolvedOutputType
                            && resolvedInput == resolvedOutput
                            && resolvedInput.isNotEmpty());
-
-    const bool wasRunning = audioRunning.load(std::memory_order_relaxed);
-    if (wasRunning) stopAudio();
 
     // Normalize before branching — applyDuplexSetup() only checks `> 0` and
     // would otherwise let Infinity (or NaN slipping past N-API) reach JUCE
