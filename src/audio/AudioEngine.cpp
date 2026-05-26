@@ -472,8 +472,16 @@ AudioEngine::DeviceConfigResult AudioEngine::setAudioDevices(const DeviceConfig&
     // still attached risks crashes/deadlocks on some backends (ASIO is
     // the usual culprit). stopAudio() detaches both callbacks first;
     // we'll re-start at the end if we were running.
+    //
+    // Unconditional: audioDeviceStopped() can clear audioRunning during a
+    // transient input stop while the output callback intentionally stays
+    // registered for JUCE's auto-restart. A reconfigure that races that
+    // window would otherwise skip the stopAudio() detach and leave the
+    // stale output callback attached. stopAudio() is itself idempotent
+    // (R9 fix — removeAudioCallback is a no-op when not registered), so
+    // running it unconditionally is safe regardless of audioRunning.
     const bool wasRunning = audioRunning.load(std::memory_order_relaxed);
-    if (wasRunning) stopAudio();
+    stopAudio();
 
     // setCurrentAudioDeviceType can throw from inside JUCE backends (ASIO
     // is the usual culprit). Catch and propagate as a structured error so
@@ -906,7 +914,12 @@ void AudioEngine::startAudio()
     // callback pulls — otherwise split mode underflows once at start.
     inputDeviceManager.addAudioCallback(this);
 
-    if (!duplexMode.load(std::memory_order_relaxed))
+    // Guard against double-registration: audioRunning can be cleared by
+    // audioDeviceStopped() on a transient input unplug while the output
+    // callback intentionally stays registered (JUCE auto-restart relies on
+    // that). A later startAudio() would then add the same callback again
+    // and JUCE would dispatch it twice per block.
+    if (!duplexMode.load(std::memory_order_relaxed) && !outputCallbackRegistered)
     {
         outputDeviceManager.addAudioCallback(&outputCallback);
         outputCallbackRegistered = true;
@@ -1088,6 +1101,14 @@ void AudioEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
 {
     // Fires on the input manager — duplex serves output here too; split has
     // audioOutputAboutToStart on the second manager.
+    //
+    // Also fires when JUCE auto-restarts the input after a transient stop
+    // (hot-replug, OS resume). audioDeviceStopped() cleared audioRunning;
+    // restore it here so scoreChord() / getActiveDetection() come back
+    // online without requiring a manual stopAudio()/startAudio() cycle,
+    // and so a subsequent setAudioDevices() sees the engine as running
+    // and runs its defensive stopAudio() before mutating device state.
+    audioRunning.store(true, std::memory_order_relaxed);
     const double sr = device->getCurrentSampleRate();
     const int bs = device->getCurrentBufferSizeSamples();
     currentSampleRate.store(sr, std::memory_order_relaxed);
@@ -1165,10 +1186,12 @@ void AudioEngine::audioDeviceStopped()
     // device by re-firing audioDeviceAboutToStart() on its own; that path
     // doesn't re-add the output callback, so detaching would break
     // automatic recovery (output stays silent until a manual reconfigure).
-    // While input is down, the output side naturally produces silence —
-    // there's no producer feeding outputPendingRing, so the consumer's
-    // underflow branch zero-fills and the device buffer goes quiet without
-    // a teardown. Real teardown belongs to stopAudio() / teardownSplitMode().
+    // While input is down, the guitar/DSP side of the output goes silent
+    // (no producer feeding outputPendingRing, so the consumer's underflow
+    // branch zero-fills), but the backing track keeps playing — the output
+    // callback mixes backingTransport independently of ring state. That's
+    // intentional UX: a user unplugging their interface mid-song doesn't
+    // lose their place. Real teardown belongs to stopAudio() / teardownSplitMode().
 }
 
 void AudioEngine::audioOutputAboutToStart(juce::AudioIODevice* device)
