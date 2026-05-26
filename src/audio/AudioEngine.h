@@ -6,10 +6,12 @@
 #include "ChordScorer.h"
 #include "MlNoteDetector.h"
 #include "NoteVerifier.h"
+#include "signalsmith-stretch.h"
 #include <juce_audio_devices/juce_audio_devices.h>
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <vector>
 
@@ -232,8 +234,10 @@ private:
     // Backing track
     std::unique_ptr<juce::AudioFormatReaderSource> backingSource;
     std::unique_ptr<juce::AudioTransportSource> backingTransport;
-    std::unique_ptr<juce::ResamplingAudioSource> backingResampler;
-    juce::AudioBuffer<float> backingBuffer;
+    signalsmith::stretch::SignalsmithStretch<float> backingStretch;
+    juce::AudioBuffer<float> backingInputBuffer; // pulled from transport at device rate
+    juce::AudioBuffer<float> backingBuffer; // stretch output, mixed into device buffer
+    std::atomic<int> backingStretchLatencySamples{0};
     std::atomic<bool> backingPlaying{false};
     std::atomic<double> cachedBackingPosition{0.0};
     std::atomic<double> cachedBackingDuration{0.0};
