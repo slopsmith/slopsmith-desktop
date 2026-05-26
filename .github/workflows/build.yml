@@ -379,6 +379,12 @@ jobs:
             release/velopack/**/*
             build/Release/*.pdb
           if-no-files-found: warn
+          # Default retention (90 days) snowballed the org Actions storage cap
+          # — a single matrix run uploads ~2.5 GB across the three platforms,
+          # and old builds piled up for months. Tag builds don't need long
+          # retention either: the `release` job downloads and attaches these
+          # to the GitHub Release within the same workflow run.
+          retention-days: 7
 
   release:
     needs: build
