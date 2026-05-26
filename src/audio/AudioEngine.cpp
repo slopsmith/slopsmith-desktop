@@ -197,7 +197,13 @@ AudioEngine::DeviceOptions AudioEngine::probeDeviceOptionsDual(const juce::Strin
                 {
                     if (std::abs(r - r2) < 0.5)
                     {
-                        options.sampleRates.addIfNotAlreadyThere(r);
+                        // Round to nominal: backends sometimes report
+                        // fractional near-48000 rates and surfacing the
+                        // raw value into the UI would round-trip back to
+                        // setAudioDeviceSetup, which expects an exact
+                        // supported rate. Round to the nearest integer
+                        // so the UI option matches what JUCE will accept.
+                        options.sampleRates.addIfNotAlreadyThere(std::round(r));
                         break;
                     }
                 }
@@ -1208,8 +1214,21 @@ void AudioEngine::audioOutputAboutToStart(juce::AudioIODevice* device)
     // its expected size. The output side uses backingBuffer / backingInputBuffer,
     // sized below.
 
+    // Prefer the output device's reported rate as authoritative. The
+    // stored currentSampleRate (set from the input side) was the right
+    // fallback during initial setup, but if the OS or driver reopened
+    // the output device at a different rate (format change, sleep/resume,
+    // user-changed default), trusting the stored value would seed the
+    // stretcher with a mismatched rate. Compare and warn so the
+    // discrepancy is visible in logs; the device-reported rate wins.
     const double srStored = currentSampleRate.load(std::memory_order_relaxed);
-    const double sr = srStored > 0.0 ? srStored : device->getCurrentSampleRate();
+    const double srDev    = device->getCurrentSampleRate();
+    const double sr = srDev > 0.0 ? srDev : srStored;
+    if (srStored > 0.0 && srDev > 0.0 && std::abs(srStored - srDev) > 0.5)
+    {
+        fprintf(stderr, "[AudioEngine] audioOutputAboutToStart: stored sr=%.0f differs from device sr=%.0f — using device\n",
+                srStored, srDev);
+    }
     {
         const juce::ScopedLock sl(backingLock);
         if (backingTransport && sr > 0.0 && bs > 0)

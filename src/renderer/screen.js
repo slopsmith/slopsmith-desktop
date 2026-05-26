@@ -628,7 +628,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
             }
             if ('input' in saved && selectHasValue(inputDeviceSelect, saved.input)) inputDeviceSelect.value = String(saved.input);
             if ('output' in saved && selectHasValue(outputDeviceSelect, saved.output)) outputDeviceSelect.value = String(saved.output);
-            await refreshDeviceOptions({
+            const probedOptions = await refreshDeviceOptions({
                 sampleRate: saved.sampleRate,
                 bufferSize: saved.bufferSize,
                 inputChannel: saved.inputChannel,
@@ -637,6 +637,20 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
             setSelectValueIfPresent(bufferSizeSelect, saved.bufferSize);
             setSelectValueIfPresent(inputChannelSelect, saved.inputChannel);
             if (saved.monitorMute !== undefined) monitorMuteCheckbox.checked = saved.monitorMute;
+
+            // Respect refreshDeviceOptions's fail-closed verdict: if the
+            // probe didn't explicitly confirm compatible=true, don't
+            // auto-apply on init. The user will see the mismatch banner
+            // and have to fix the selection manually — better than
+            // silently retrying setDevice with a config the probe just
+            // rejected and leaving the user with no audio + no UI cue.
+            if (probedOptions == null || probedOptions.compatible !== true) {
+                statusText.textContent = (probedOptions && typeof probedOptions.error === 'string' && probedOptions.error)
+                    ? `Saved device config not compatible: ${probedOptions.error}`
+                    : 'Saved device config not compatible';
+                statusDot.className = 'w-3 h-3 rounded-full bg-red-500';
+                return;
+            }
 
             const result = await api.setDevice({
                 inputType: deviceTypeSelect.value,
