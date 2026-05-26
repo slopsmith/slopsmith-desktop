@@ -5,6 +5,8 @@
 
 // Hard ceiling on backing playback speed. This drives input buffer sizing and runtime clamp.
 static constexpr double kMaxBackingSpeed = 4.0;
+// Transparent full-speed path — skip the stretcher when rate is effectively 1×.
+static constexpr double kBackingSpeedBypassEpsilon = 1.0e-4;
 
 // On Windows, ASIO drivers can crash with access violations.
 // We catch C++ exceptions but can't easily catch SEH in functions with dtors.
@@ -1204,6 +1206,7 @@ bool AudioEngine::loadBackingTrack(const juce::File& file)
 
     cachedBackingDuration.store(backingTransport->getLengthInSeconds());
     cachedBackingPosition.store(0.0);
+    backingHeardPositionSec.store(0.0, std::memory_order_relaxed);
     std::cerr << "[AudioEngine] loadBackingTrack OK sr=" << readerSampleRate
               << " len=" << readerLengthInSamples
               << std::endl;
@@ -1218,7 +1221,9 @@ void AudioEngine::setBackingPosition(double seconds)
         backingTransport->setPosition(seconds);
         backingStretch.reset();
         // Read back the actual position; the transport may clamp (e.g. negative or past EOF).
-        cachedBackingPosition.store(backingTransport->getCurrentPosition());
+        const double pos = backingTransport->getCurrentPosition();
+        cachedBackingPosition.store(pos);
+        backingHeardPositionSec.store(pos, std::memory_order_relaxed);
     }
 }
 
@@ -1229,6 +1234,8 @@ void AudioEngine::startBacking()
     {
         backingTransport->start();
         backingPlaying.store(true);
+        backingHeardPositionSec.store(backingTransport->getCurrentPosition(),
+                                      std::memory_order_relaxed);
     }
 }
 
@@ -1255,11 +1262,28 @@ void AudioEngine::setBackingSpeed(double speed)
         return;
     }
 
-    // Clamp to the same range the RT callback would enforce so the stored
-    // value is authoritative — callers that ask for 10× get 4× recorded
-    // instead of having the API silently disagree with playback behaviour.
-    backingSpeed.store(juce::jlimit(0.01, kMaxBackingSpeed, speed),
-                       std::memory_order_relaxed);
+    const double clamped = juce::jlimit(0.01, kMaxBackingSpeed, speed);
+    const double prev = backingSpeed.load(std::memory_order_relaxed);
+    if (std::abs(clamped - prev) < 0.001)
+    {
+        return;
+    }
+
+    // Reset stretch and re-anchor heard position before publishing the new rate.
+    // RT reads backingSpeed under tryLock; publishing early could process one block
+    // at the new rate with stale stretch state (CodeRabbit PR #237).
+    const juce::ScopedLock sl(backingLock);
+    if (backingTransport)
+    {
+        backingStretch.reset();
+        const double pos = backingTransport->getCurrentPosition();
+        backingHeardPositionSec.store(pos, std::memory_order_relaxed);
+    }
+
+    backingSpeed.store(clamped, std::memory_order_release);
+
+    std::cerr << "[AudioEngine] setBackingSpeed(" << clamped << ") stretch reset"
+              << std::endl;
 }
 
 void AudioEngine::resetPeaks()
@@ -1646,30 +1670,48 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
             const int outCap = backingBuffer.getNumSamples();
             const int inCap  = backingInputBuffer.getNumSamples();
             const int outSamples = juce::jmin(numSamples, outCap);
-            const int inputFrames = juce::jmin((int) std::ceil(outSamples * rate), inCap);
+            const double sr = currentSampleRate.load(std::memory_order_relaxed);
+            const bool bypassStretch = std::abs(rate - 1.0) < kBackingSpeedBypassEpsilon;
 
-            backingInputBuffer.clear(0, inputFrames);
-            juce::AudioSourceChannelInfo info(&backingInputBuffer, 0, inputFrames);
-            backingTransport->getNextAudioBlock(info);
+            int sourceFramesPulled = 0;
 
-            // Stretch always outputs 2 channels, the mix-down loop uses jmin to handle
-            // mono or multi-channel device configs.
-            backingBuffer.clear(0, outSamples);
+            if (bypassStretch)
+            {
+                // 1× — bit-transparent transport read, no phase-vocoder path.
+                backingBuffer.clear(0, outSamples);
+                juce::AudioSourceChannelInfo info(&backingBuffer, 0, outSamples);
+                backingTransport->getNextAudioBlock(info);
+                sourceFramesPulled = outSamples;
+            }
+            else
+            {
+                // Slow/fast path — pull only the source frames needed for this output
+                // block (output * rate), then stretch in-process to fill outSamples.
+                const int inputFrames = juce::jmin((int) std::ceil(outSamples * rate), inCap);
 
-            const float* const* inPtrs  = backingInputBuffer.getArrayOfReadPointers();
-            float* const* outPtrs = backingBuffer.getArrayOfWritePointers();
-            backingStretch.process(inPtrs, inputFrames, outPtrs, outSamples);
+                backingInputBuffer.clear(0, inputFrames);
+                juce::AudioSourceChannelInfo info(&backingInputBuffer, 0, inputFrames);
+                backingTransport->getNextAudioBlock(info);
+                sourceFramesPulled = inputFrames;
 
-            // Report the song position when audible at the speakers:
-            // subtract the stretcher's output latency converted to input-time seconds.
-            // sr can transiently be 0 if the device-setup error path zeroes it
-            // (AudioEngine.cpp:457) while a callback is still being drained —
-            // fall back to the uncompensated position rather than divide by zero.
-            const double srNow = currentSampleRate.load(std::memory_order_relaxed);
-            const double latencyInputSec = (srNow > 0.0)
-                ? (backingStretchLatencySamples.load(std::memory_order_relaxed) * rate) / srNow
-                : 0.0;
-            cachedBackingPosition.store(juce::jmax(0.0, backingTransport->getCurrentPosition() - latencyInputSec));
+                backingBuffer.clear(0, outSamples);
+
+                const float* const* inPtrs  = backingInputBuffer.getArrayOfReadPointers();
+                float* const* outPtrs = backingBuffer.getArrayOfWritePointers();
+                backingStretch.process(inPtrs, inputFrames, outPtrs, outSamples);
+            }
+
+            if (sr > 0.0 && sourceFramesPulled > 0)
+            {
+                const double heard = backingHeardPositionSec.load(std::memory_order_relaxed)
+                                     + static_cast<double>(sourceFramesPulled) / sr;
+                backingHeardPositionSec.store(heard, std::memory_order_relaxed);
+
+                const double latencyInputSec = bypassStretch
+                    ? static_cast<double>(backingStretchLatencySamples.load(std::memory_order_relaxed)) / sr
+                    : (backingStretchLatencySamples.load(std::memory_order_relaxed) * rate) / sr;
+                cachedBackingPosition.store(juce::jmax(0.0, heard - latencyInputSec));
+            }
 
             // Sync the flag if transport stopped at EOF
             if (!backingTransport->isPlaying())
