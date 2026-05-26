@@ -24,6 +24,32 @@ export type UpdateChannel = 'stable' | 'rc' | 'beta' | 'alpha';
 export interface UpdateAvailablePayload { version: string; channel: UpdateChannel }
 export interface UpdateDownloadedPayload { version: string; channel: UpdateChannel }
 
+// Audio setDevice payload — duplex when input/output types match and device
+// names match (or both empty); split otherwise. NodeAddon validates the
+// shape and coerces sampleRate/bufferSize via Number() before forwarding.
+export interface DeviceConfig {
+    inputType: string;
+    inputDevice: string;
+    outputType: string;
+    outputDevice: string;
+    sampleRate: number;
+    bufferSize: number;
+}
+
+// setDevice result. `duplex` reports the resolved mode (the engine may pick
+// duplex even when the renderer sent type-mismatched devices, e.g. when the
+// user lands on the same driver via different UI dropdowns). On failure
+// `ok` is false and `error` carries the message; the other fields may still
+// be set from a partial open before rollback.
+export interface DeviceConfigResult {
+    ok: boolean;
+    error?: string;
+    duplex: boolean;
+    sampleRate?: number;
+    inputBlockSize?: number;
+    outputBlockSize?: number;
+}
+
 // Audio sync offset — set as a mutable property via the isolated world bridge.
 // The settings panel reads/writes localStorage and updates this at runtime.
 
@@ -134,12 +160,29 @@ contextBridge.exposeInMainWorld('slopsmithDesktop', {
         getDeviceTypes: () => ipcRenderer.invoke('audio:getDeviceTypes'),
         getSampleRates: () => ipcRenderer.invoke('audio:getSampleRates'),
         getBufferSizes: () => ipcRenderer.invoke('audio:getBufferSizes'),
-        probeDeviceOptions: (typeName: string, input: string, output: string) =>
-            ipcRenderer.invoke('audio:probeDeviceOptions', typeName, input, output),
+        probeDeviceOptions: (
+            inputTypeOrType: string,
+            inputName: string,
+            outputTypeOrOutputName: string,
+            outputName?: string,
+        ) => outputName === undefined
+            ? ipcRenderer.invoke('audio:probeDeviceOptions', inputTypeOrType, inputName, outputTypeOrOutputName)
+            : ipcRenderer.invoke('audio:probeDeviceOptions', inputTypeOrType, inputName, outputTypeOrOutputName, outputName),
         getCurrentDevice: () => ipcRenderer.invoke('audio:getCurrentDevice'),
         setDeviceType: (typeName: string) => ipcRenderer.invoke('audio:setDeviceType', typeName),
-        setDevice: (input: string, output: string, sampleRate: number, bufferSize: number) =>
-            ipcRenderer.invoke('audio:setDevice', input, output, sampleRate, bufferSize),
+        setOutputDeviceType: (typeName: string) => ipcRenderer.invoke('audio:setOutputDeviceType', typeName),
+        setDevice: ((
+            arg0: DeviceConfig | string,
+            arg1?: string,
+            arg2?: number,
+            arg3?: number,
+        ): Promise<DeviceConfigResult> => arg1 === undefined
+            ? ipcRenderer.invoke('audio:setDevice', arg0)
+            : ipcRenderer.invoke('audio:setDevice', arg0, arg1, arg2, arg3)) as {
+                (payload: DeviceConfig): Promise<DeviceConfigResult>;
+                (input: string, output: string, sampleRate: number, bufferSize: number): Promise<DeviceConfigResult>;
+            },
+        getDeviceMetrics: () => ipcRenderer.invoke('audio:getDeviceMetrics'),
         loadDeviceSettings: () => ipcRenderer.invoke('audio:loadDeviceSettings'),
         saveDeviceSettings: (settings: unknown) => ipcRenderer.invoke('audio:saveDeviceSettings', settings),
 

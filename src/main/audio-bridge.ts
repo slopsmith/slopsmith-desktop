@@ -14,7 +14,9 @@ type AudioModule = Record<string, (...args: any[]) => any>;
 let audio: AudioModule | null = null;
 
 type AudioDeviceSettings = {
-    type: string;
+    type: string;          // legacy alias = inputType when only type was stored
+    inputType?: string;
+    outputType?: string;
     input: string;
     output: string;
     sampleRate: string;
@@ -52,8 +54,12 @@ function normalizeDeviceSettings(settings: unknown): AudioDeviceSettings | null 
     const record = asRecord(settings);
     if (!record) return null;
 
+    // Accept legacy ('type' only) or new ('inputType'+'outputType'). Legacy
+    // values are mirrored into both slots so the engine stays in duplex.
+    const hasLegacyType = typeof record.type === 'string';
+    const hasDualType = typeof record.inputType === 'string' && typeof record.outputType === 'string';
     const hasExpectedShape =
-        typeof record.type === 'string'
+        (hasLegacyType || hasDualType)
         && typeof record.input === 'string'
         && typeof record.output === 'string'
         && isSelectValue(record.sampleRate)
@@ -61,8 +67,14 @@ function normalizeDeviceSettings(settings: unknown): AudioDeviceSettings | null 
         && isSelectValue(record.inputChannel);
     if (!hasExpectedShape) return null;
 
+    const legacyType = typeof record.type === 'string' ? record.type : '';
+    const inputType = typeof record.inputType === 'string' ? record.inputType : legacyType;
+    const outputType = typeof record.outputType === 'string' ? record.outputType : legacyType || inputType;
+
     const normalized: AudioDeviceSettings = {
-        type: typeof record.type === 'string' ? record.type : '',
+        type: legacyType || inputType,
+        inputType,
+        outputType,
         input: typeof record.input === 'string' ? record.input : '',
         output: typeof record.output === 'string' ? record.output : '',
         sampleRate: normalizeSelectValue(record.sampleRate),
@@ -79,16 +91,38 @@ function normalizeDeviceSettings(settings: unknown): AudioDeviceSettings | null 
     return normalized;
 }
 
-function normalizeDeviceOptions(options: unknown, fallback: { type: string; input: string; output: string; error?: string }) {
+function normalizeDeviceOptions(
+    options: unknown,
+    fallback: {
+        type: string;
+        inputType?: string;
+        outputType?: string;
+        input: string;
+        output: string;
+        error?: string;
+        compatible?: boolean;
+    },
+) {
     const record = asRecord(options);
+    const inputType = String(record?.inputType ?? record?.type ?? fallback.inputType ?? fallback.type ?? '');
+    const outputType = String(record?.outputType ?? record?.type ?? fallback.outputType ?? fallback.type ?? inputType);
+    // Default to NOT compatible when the probe didn't say so — defaulting to
+    // true here would leave Apply enabled in the addon-unavailable fallback
+    // even though the same path also reports an error.
+    const compatible = typeof record?.compatible === 'boolean'
+        ? record.compatible
+        : (fallback.compatible ?? false);
     return {
-        type: String(record?.type ?? fallback.type ?? ''),
+        type: String(record?.type ?? fallback.type ?? inputType),
+        inputType,
+        outputType,
         input: String(record?.input ?? fallback.input ?? ''),
         output: String(record?.output ?? fallback.output ?? ''),
         inputChannels: normalizeStringArray(record?.inputChannels),
         outputChannels: normalizeStringArray(record?.outputChannels),
         sampleRates: normalizeNumberArray(record?.sampleRates),
         bufferSizes: normalizeNumberArray(record?.bufferSizes),
+        compatible,
         error: String(record?.error ?? fallback.error ?? ''),
     };
 }
@@ -239,15 +273,41 @@ export function initAudioBridge(): void {
         return audio?.getBufferSizes() ?? [];
     });
 
-    ipcMain.handle('audio:probeDeviceOptions', (_event, typeName: string, input: string, output: string) => {
-        const options = audio && typeof audio.probeDeviceOptions === 'function'
-            ? audio.probeDeviceOptions(typeName, input, output)
-            : null;
+    ipcMain.handle('audio:probeDeviceOptions', (_event, ...args: any[]) => {
+        // (inputType, inputName, outputType, outputName) | legacy (type, input, output)
+        const isDual = args.length >= 4;
+        const inputType: string  = args[0] ?? '';
+        const inputName: string  = args[1] ?? '';
+        const outputType: string = isDual ? (args[2] ?? '') : inputType;
+        const outputName: string = isDual ? (args[3] ?? '') : (args[2] ?? '');
+
+        // Probe can throw from the JUCE backend (createDevice failures,
+        // ASIO weirdness). Wrap so the IPC promise resolves with a
+        // normalized incompatible payload instead of rejecting — the
+        // renderer relies on a structured response to drive the warning
+        // banner.
+        let options: unknown = null;
+        let probeError = '';
+        if (audio && typeof audio.probeDeviceOptions === 'function') {
+            try {
+                options = isDual
+                    ? audio.probeDeviceOptions(inputType, inputName, outputType, outputName)
+                    : audio.probeDeviceOptions(inputType, inputName, outputName);
+            } catch (e: unknown) {
+                probeError = e instanceof Error ? e.message : String(e);
+                console.warn(`[audio] probeDeviceOptions threw: ${probeError}`);
+            }
+        } else {
+            probeError = 'Native audio addon not available';
+        }
         return normalizeDeviceOptions(options, {
-            type: String(typeName || ''),
-            input: String(input || ''),
-            output: String(output || ''),
-            error: 'Native audio addon not available',
+            type: String(inputType || ''),
+            inputType: String(inputType || ''),
+            outputType: String(outputType || ''),
+            input: String(inputName || ''),
+            output: String(outputName || ''),
+            error: probeError,
+            compatible: false,
         });
     });
 
@@ -259,8 +319,55 @@ export function initAudioBridge(): void {
         return audio?.setDeviceType(typeName) ?? false;
     });
 
-    ipcMain.handle('audio:setDevice', (_event, input: string, output: string, sampleRate: number, bufferSize: number) => {
-        return audio?.setDevice(input, output, sampleRate, bufferSize) ?? false;
+    ipcMain.handle('audio:setOutputDeviceType', (_event, typeName: string) => {
+        if (!audio || typeof audio.setOutputDeviceType !== 'function') return false;
+        try { return audio.setOutputDeviceType(typeName); }
+        catch (e: any) {
+            console.warn(`[audio] setOutputDeviceType failed: ${e?.message ?? e}`);
+            return false;
+        }
+    });
+
+    ipcMain.handle('audio:setDevice', (_event, ...args: any[]) => {
+        if (!audio) return { ok: false, error: 'Native audio addon not available', duplex: true };
+        // Object payload: setDevice({inputType, inputDevice, outputType, outputDevice, sampleRate, bufferSize})
+        // Legacy positional: setDevice(input, output, sampleRate, bufferSize)
+        // setAudioDeviceSetup can throw from the JUCE backend (ASIO drivers
+        // are especially fond of this) — catch so the IPC promise resolves
+        // with a structured error instead of rejecting into an unhandled
+        // main-process exception.
+        try {
+            if (args.length === 1 && args[0] && typeof args[0] === 'object' && !Array.isArray(args[0])) {
+                // NodeAddon's object-payload path expects numeric
+                // sampleRate/bufferSize (it falls back to 48000/256 when
+                // the key isn't a Number). Saved settings round-trip
+                // through JSON / DOM strings, so coerce here so a
+                // string-shaped "48000" doesn't silently reopen at the
+                // fallback rate. Non-finite values fall through to the
+                // native fallback (handled there too as defense-in-depth).
+                const payload = { ...args[0] };
+                const sr = Number(payload.sampleRate);
+                const bs = Number(payload.bufferSize);
+                if (Number.isFinite(sr) && sr > 0) payload.sampleRate = sr;
+                if (Number.isFinite(bs) && bs > 0) payload.bufferSize = bs;
+                return audio.setDevice(payload);
+            }
+            const [input, output, sampleRate, bufferSize] = args;
+            return audio.setDevice(input, output, sampleRate, bufferSize);
+        } catch (e: unknown) {
+            const error = e instanceof Error ? e.message : String(e);
+            console.warn(`[audio] setDevice threw: ${error}`);
+            return { ok: false, error, duplex: true };
+        }
+    });
+
+    ipcMain.handle('audio:getDeviceMetrics', () => {
+        if (!audio || typeof audio.getDeviceMetrics !== 'function') return null;
+        try { return audio.getDeviceMetrics(); }
+        catch (e: any) {
+            console.warn(`[audio] getDeviceMetrics failed: ${e?.message ?? e}`);
+            return null;
+        }
     });
 
     ipcMain.handle('audio:loadDeviceSettings', () => readAudioSettings());

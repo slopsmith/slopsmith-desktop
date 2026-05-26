@@ -18,8 +18,14 @@
         <h3 class="text-lg font-semibold mb-3 text-slate-200">Audio Device</h3>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-                <label class="block text-xs text-slate-400 mb-1">Device Type</label>
+                <label class="block text-xs text-slate-400 mb-1">Input Device Type</label>
                 <select id="ae-device-type" class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm">
+                    <option>Loading...</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-xs text-slate-400 mb-1">Output Device Type</label>
+                <select id="ae-output-device-type" class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm">
                     <option>Loading...</option>
                 </select>
             </div>
@@ -48,6 +54,9 @@
                 <select id="ae-output-device" class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm">
                     <option>Select device type first</option>
                 </select>
+            </div>
+            <div id="ae-sr-mismatch-warning" role="alert" aria-live="polite" class="md:col-span-2 hidden p-2 rounded bg-amber-900/40 border border-amber-600/40 text-xs text-amber-200">
+                Input and output devices don't share a compatible sample rate. Pick devices that both support the same rate (typical: 48000 Hz) or use the same device for both directions.
             </div>
             <div>
                 <label class="block text-xs text-slate-400 mb-1">Sample Rate</label>

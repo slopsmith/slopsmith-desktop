@@ -11,6 +11,7 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -21,7 +22,9 @@ public:
     AudioEngine();
     ~AudioEngine() override;
 
-    juce::AudioDeviceManager& getDeviceManager() { return deviceManager; }
+    juce::AudioDeviceManager& getDeviceManager() { return inputDeviceManager; }
+    juce::AudioDeviceManager& getInputDeviceManager() { return inputDeviceManager; }
+    juce::AudioDeviceManager& getOutputDeviceManager() { return outputDeviceManager; }
     SignalChain& getSignalChain() { return signalChain; }
     PitchDetector& getPitchDetector() { return pitchDetector; }
     MlNoteDetector& getMlNoteDetector() { return mlNoteDetector; }
@@ -46,31 +49,78 @@ public:
     };
     struct DeviceOptions
     {
-        juce::String type;
+        juce::String type;          // legacy alias = inputType
+        juce::String inputType;
+        juce::String outputType;
         juce::String input;
         juce::String output;
         juce::StringArray inputChannels;
         juce::StringArray outputChannels;
-        juce::Array<double> sampleRates;
+        juce::Array<double> sampleRates;   // intersection when dual-type
         juce::Array<int> bufferSizes;
+        bool compatible = true;     // false when types share no usable sample rate
         juce::String error;
     };
+
+    struct DeviceConfig
+    {
+        juce::String inputType;
+        juce::String inputDevice;
+        juce::String outputType;
+        juce::String outputDevice;
+        double sampleRate = 48000.0;
+        int bufferSize = 256;
+    };
+    struct DeviceConfigResult
+    {
+        bool ok = false;
+        juce::String error;
+        double sampleRate = 0.0;
+        int inputBlockSize = 0;
+        int outputBlockSize = 0;
+        bool duplex = true;
+    };
+
+    struct DeviceMetrics
+    {
+        uint64_t inputOverflowCount = 0;
+        uint64_t outputUnderflowCount = 0;
+        // Counts are in audio frames (stereo pairs), not interleaved-float
+        // samples — the ring stores 2 floats per slot but the index math
+        // and consumer-facing health metric tick once per frame.
+        int outputRingFillFrames = 0;
+        int outputRingCapacityFrames = 0;
+        bool duplex = true;
+    };
+
     juce::Array<DeviceTypeInfo> getDeviceTypes();
     juce::Array<double> getSampleRates();
     juce::Array<int> getBufferSizes();
     DeviceOptions probeDeviceOptions(const juce::String& typeName,
                                      const juce::String& inputName,
                                      const juce::String& outputName);
-    juce::String getCurrentDeviceType();
+    DeviceOptions probeDeviceOptionsDual(const juce::String& inputTypeName,
+                                         const juce::String& inputName,
+                                         const juce::String& outputTypeName,
+                                         const juce::String& outputName);
+    juce::String getCurrentDeviceType();    // = getCurrentInputDeviceType
+    juce::String getCurrentInputDeviceType();
+    juce::String getCurrentOutputDeviceType();
     juce::String getCurrentInputDevice();
     juce::String getCurrentOutputDevice();
+    bool isDuplex() const { return duplexMode.load(std::memory_order_relaxed); }
     double getCurrentSampleRate() const { return currentSampleRate.load(std::memory_order_relaxed); }
-    int getCurrentBlockSize() const { return currentBlockSize.load(std::memory_order_relaxed); }
+    int getCurrentBlockSize() const { return inputBlockSize.load(std::memory_order_relaxed); }
+    int getCurrentInputBlockSize() const { return inputBlockSize.load(std::memory_order_relaxed); }
+    int getCurrentOutputBlockSize() const { return outputBlockSize.load(std::memory_order_relaxed); }
+    DeviceMetrics getDeviceMetrics() const;
 
-    // Device selection
     bool setDeviceType(const juce::String& typeName);
+    bool setInputDeviceType(const juce::String& typeName) { return setDeviceType(typeName); }
+    bool setOutputDeviceType(const juce::String& typeName);
     bool setAudioDevice(const juce::String& inputName, const juce::String& outputName,
                         double sampleRate = 48000.0, int bufferSize = 256);
+    DeviceConfigResult setAudioDevices(const DeviceConfig& config);
 
     // Audio start/stop
     void startAudio();
@@ -191,6 +241,8 @@ public:
     void setPlayhead(double songTime, bool playing) { noteVerifier.setPlayhead(songTime, playing); }
 
 private:
+    // Input-device callback. In duplex it writes outputData directly; in split
+    // it pushes processed stereo into outputPendingRing for OutputCallback.
     void audioDeviceIOCallbackWithContext(const float* const* inputData,
                                           int numInputChannels,
                                           float* const* outputData,
@@ -199,13 +251,54 @@ private:
                                           const juce::AudioIODeviceCallbackContext& context) override;
     void audioDeviceAboutToStart(juce::AudioIODevice* device) override;
     void audioDeviceStopped() override;
-    void stopBackingNoLock(); // stop transport without acquiring backingLock (caller holds it)
+    void stopBackingNoLock(); // caller holds backingLock
+
+    // Split-mode only: drains outputPendingRing, mixes backing, writes to device.
+    void audioOutputCallback(const float* const* inputData,
+                             int numInputChannels,
+                             float* const* outputData,
+                             int numOutputChannels,
+                             int numSamples);
+    void audioOutputAboutToStart(juce::AudioIODevice* device);
+    void audioOutputStopped();
+
+    class OutputCallback : public juce::AudioIODeviceCallback
+    {
+    public:
+        explicit OutputCallback(AudioEngine& e) : engine(e) {}
+        void audioDeviceIOCallbackWithContext(const float* const* inputData,
+                                              int numInputChannels,
+                                              float* const* outputData,
+                                              int numOutputChannels,
+                                              int numSamples,
+                                              const juce::AudioIODeviceCallbackContext&) override
+        {
+            engine.audioOutputCallback(inputData, numInputChannels, outputData, numOutputChannels, numSamples);
+        }
+        void audioDeviceAboutToStart(juce::AudioIODevice* device) override { engine.audioOutputAboutToStart(device); }
+        void audioDeviceStopped() override { engine.audioOutputStopped(); }
+    private:
+        AudioEngine& engine;
+    };
+    OutputCallback outputCallback{ *this };
+
+    juce::String applyDuplexSetup(const juce::String& inputName,
+                                  const juce::String& outputName,
+                                  double sampleRate,
+                                  int bufferSize);
+    DeviceConfigResult applySplitSetup(const DeviceConfig& config);
+    void teardownSplitMode();
 
     // ML-backed chord scoring against the MlNoteDetector's active-pitch set.
     // Used by scoreChord() when a Basic Pitch model is loaded.
     ChordScorer::Result scoreChordWithMl(const ChordScorer::Request& req) const;
 
-    juce::AudioDeviceManager deviceManager;
+    // Duplex mode: inputDeviceManager owns both directions, outputDeviceManager idle.
+    // Split mode: input-only on inputDeviceManager, output-only on outputDeviceManager
+    // with an SPSC ring between them.
+    juce::AudioDeviceManager inputDeviceManager;
+    juce::AudioDeviceManager outputDeviceManager;
+    std::atomic<bool> duplexMode{true};
     SignalChain signalChain;
     PitchDetector pitchDetector;
     MlNoteDetector mlNoteDetector;
@@ -257,10 +350,10 @@ private:
     // hot reads use relaxed since the consumer just wants the latest
     // observable value, not a synchronization point.
     std::atomic<double> currentSampleRate{48000.0};
-    // Block size has the same race shape as sample rate — written from
-    // device callbacks, read from getLatencyMs() / loadBackingTrack()
-    // on the JS/management thread. Atomic for the same reason.
-    std::atomic<int> currentBlockSize{256};
+    // Split mode allows different input vs output block sizes; the ring absorbs
+    // the asymmetry. DSP prepares against input; backing resampler against output.
+    std::atomic<int> inputBlockSize{256};
+    std::atomic<int> outputBlockSize{256};
 
     // Lock-free SPSC ring buffer for raw mono input. Single producer is
     // the audio thread (audioDeviceIOCallbackWithContext); single consumer
@@ -297,6 +390,51 @@ private:
     // pitch detector and ring. Pre-sized in audioDeviceAboutToStart()
     // so the hot loop never allocates.
     std::vector<float> inputCaptureScratch;
+
+    // Split-mode SPSC ring (unused in duplex). Each slot packs one stereo frame
+    // (L+R floats) into a single 64-bit atomic so the consumer reads both
+    // channels in one indivisible load — without packing, the producer's two
+    // separate atomic stores could interleave with the consumer's two loads
+    // during a drop-oldest wrap, surfacing as L_new+R_old (or vice versa)
+    // sample tears. ~85 ms @ 48 kHz — absorbs clock drift over typical sessions.
+    static constexpr int kOutputRingFrames = 4096;
+    std::array<std::atomic<uint64_t>, kOutputRingFrames> outputPendingRing{};
+    static_assert((kOutputRingFrames & (kOutputRingFrames - 1)) == 0,
+                  "kOutputRingFrames must be a power of two for mask wraparound");
+    // RT-thread reads + writes touch these slots, so a lock-based fallback
+    // would risk priority inversion + audible dropouts. On the platforms we
+    // ship (x86_64 + arm64 across Linux/macOS/Windows) atomic<uint64_t> is
+    // always lock-free; this assert turns a regression into a build error
+    // instead of a silent latency degradation if a future platform port
+    // breaks the assumption.
+    static_assert(std::atomic<uint64_t>::is_always_lock_free,
+                  "outputPendingRing requires lock-free atomic<uint64_t> for RT safety");
+    static_assert(sizeof(float) == 4,
+                  "outputPendingRing pack/unpack assumes 32-bit float");
+
+    // Pack/unpack helpers — std::bit_cast (C++20) is constexpr + alias-safe.
+    static inline uint64_t packLR(float l, float r) noexcept
+    {
+        const uint32_t li = std::bit_cast<uint32_t>(l);
+        const uint32_t ri = std::bit_cast<uint32_t>(r);
+        return (static_cast<uint64_t>(ri) << 32) | static_cast<uint64_t>(li);
+    }
+    static inline void unpackLR(uint64_t v, float& l, float& r) noexcept
+    {
+        l = std::bit_cast<float>(static_cast<uint32_t>(v & 0xFFFFFFFFu));
+        r = std::bit_cast<float>(static_cast<uint32_t>(v >> 32));
+    }
+
+    std::atomic<uint64_t> outputRingWriteIndex{0};
+    std::atomic<uint64_t> outputRingReadIndex{0};
+    std::atomic<uint64_t> outputUnderflowCount{0};
+    std::atomic<uint64_t> inputOverflowCount{0};
+
+    // Pre-sized to outputBlockSize so the pull loop never allocates.
+    std::vector<float> outputPullScratchL;
+    std::vector<float> outputPullScratchR;
+    juce::AudioBuffer<float> outputBackingBuffer;
+    bool outputCallbackRegistered = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioEngine)
 };

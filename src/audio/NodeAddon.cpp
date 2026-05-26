@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cerrno>
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <set>
@@ -299,32 +300,59 @@ static Napi::Value ProbeDeviceOptions(const Napi::CallbackInfo& info)
     auto env = info.Env();
     auto liveEngine = snapshotEngine();
     auto obj = Napi::Object::New(env);
-    auto type = info.Length() > 0 && info[0].IsString() ? info[0].As<Napi::String>().Utf8Value() : "";
-    auto input = info.Length() > 1 && info[1].IsString() ? info[1].As<Napi::String>().Utf8Value() : "";
-    auto output = info.Length() > 2 && info[2].IsString() ? info[2].As<Napi::String>().Utf8Value() : "";
+    // 3-arg legacy (type, input, output) or 4-arg dual (inputType, input, outputType, output).
+    auto arg0 = info.Length() > 0 && info[0].IsString() ? info[0].As<Napi::String>().Utf8Value() : "";
+    auto arg1 = info.Length() > 1 && info[1].IsString() ? info[1].As<Napi::String>().Utf8Value() : "";
+    auto arg2 = info.Length() > 2 && info[2].IsString() ? info[2].As<Napi::String>().Utf8Value() : "";
+    auto arg3 = info.Length() > 3 && info[3].IsString() ? info[3].As<Napi::String>().Utf8Value() : "";
+
+    std::string inputType = arg0;
+    std::string inputName = arg1;
+    std::string outputType;
+    std::string outputName;
+    if (info.Length() >= 4)
+    {
+        outputType = arg2;
+        outputName = arg3;
+    }
+    else
+    {
+        outputType = arg0;
+        outputName = arg2;
+    }
+
     auto ratesArray = Napi::Array::New(env);
     auto buffersArray = Napi::Array::New(env);
     auto inputChannelsArray = Napi::Array::New(env);
     auto outputChannelsArray = Napi::Array::New(env);
 
-    obj.Set("type", type);
-    obj.Set("input", input);
-    obj.Set("output", output);
+    obj.Set("type", inputType);
+    obj.Set("inputType", inputType);
+    obj.Set("outputType", outputType);
+    obj.Set("input", inputName);
+    obj.Set("output", outputName);
     obj.Set("inputChannels", inputChannelsArray);
     obj.Set("outputChannels", outputChannelsArray);
     obj.Set("sampleRates", ratesArray);
     obj.Set("bufferSizes", buffersArray);
+    obj.Set("compatible", true);
     if (!liveEngine)
     {
         obj.Set("error", "Audio engine not initialized");
+        obj.Set("compatible", false);
         return obj;
     }
 
-    auto options = liveEngine->probeDeviceOptions(juce::String(type), juce::String(input), juce::String(output));
-    obj.Set("type", options.type.toStdString());
+    auto options = liveEngine->probeDeviceOptionsDual(
+        juce::String(inputType), juce::String(inputName),
+        juce::String(outputType), juce::String(outputName));
+    obj.Set("type", options.inputType.toStdString());      // legacy alias
+    obj.Set("inputType", options.inputType.toStdString());
+    obj.Set("outputType", options.outputType.toStdString());
     obj.Set("input", options.input.toStdString());
     obj.Set("output", options.output.toStdString());
     obj.Set("error", options.error.toStdString());
+    obj.Set("compatible", options.compatible);
 
     inputChannelsArray = Napi::Array::New(env, options.inputChannels.size());
     for (int i = 0; i < options.inputChannels.size(); ++i)
@@ -356,12 +384,42 @@ static Napi::Value GetCurrentDevice(const Napi::CallbackInfo& info)
     if (!liveEngine) return env.Null();
 
     auto obj = Napi::Object::New(env);
-    obj.Set("type", liveEngine->getCurrentDeviceType().toStdString());
+    const auto inputType = liveEngine->getCurrentInputDeviceType().toStdString();
+    const auto outputType = liveEngine->getCurrentOutputDeviceType().toStdString();
+    obj.Set("type", inputType);
+    obj.Set("inputType", inputType);
+    obj.Set("outputType", outputType);
     obj.Set("input", liveEngine->getCurrentInputDevice().toStdString());
     obj.Set("output", liveEngine->getCurrentOutputDevice().toStdString());
     obj.Set("sampleRate", liveEngine->getCurrentSampleRate());
     obj.Set("blockSize", liveEngine->getCurrentBlockSize());
+    obj.Set("inputBlockSize", liveEngine->getCurrentInputBlockSize());
+    obj.Set("outputBlockSize", liveEngine->getCurrentOutputBlockSize());
     obj.Set("latencyMs", liveEngine->getLatencyMs());
+    obj.Set("duplex", liveEngine->isDuplex());
+    return obj;
+}
+
+static Napi::Value GetDeviceMetrics(const Napi::CallbackInfo& info)
+{
+    auto env = info.Env();
+    auto liveEngine = snapshotEngine();
+    auto obj = Napi::Object::New(env);
+    if (!liveEngine)
+    {
+        obj.Set("duplex", true);
+        obj.Set("inputOverflowCount", 0.0);
+        obj.Set("outputUnderflowCount", 0.0);
+        obj.Set("outputRingFillFrames", 0);
+        obj.Set("outputRingCapacityFrames", 0);
+        return obj;
+    }
+    const auto m = liveEngine->getDeviceMetrics();
+    obj.Set("duplex", m.duplex);
+    obj.Set("inputOverflowCount", static_cast<double>(m.inputOverflowCount));
+    obj.Set("outputUnderflowCount", static_cast<double>(m.outputUnderflowCount));
+    obj.Set("outputRingFillFrames", m.outputRingFillFrames);
+    obj.Set("outputRingCapacityFrames", m.outputRingCapacityFrames);
     return obj;
 }
 
@@ -371,27 +429,102 @@ static Napi::Value SetDeviceType(const Napi::CallbackInfo& info)
 {
     auto env = info.Env();
     auto liveEngine = snapshotEngine();
-    if (!liveEngine || info.Length() < 1) return Napi::Boolean::New(env, false);
+    if (!liveEngine || info.Length() < 1 || !info[0].IsString())
+        return Napi::Boolean::New(env, false);
 
     auto typeName = info[0].As<Napi::String>().Utf8Value();
     bool result = liveEngine->setDeviceType(juce::String(typeName));
     return Napi::Boolean::New(env, result);
 }
 
+static Napi::Value SetOutputDeviceType(const Napi::CallbackInfo& info)
+{
+    auto env = info.Env();
+    auto liveEngine = snapshotEngine();
+    if (!liveEngine || info.Length() < 1 || !info[0].IsString())
+        return Napi::Boolean::New(env, false);
+    auto typeName = info[0].As<Napi::String>().Utf8Value();
+    return Napi::Boolean::New(env, liveEngine->setOutputDeviceType(juce::String(typeName)));
+}
+
 static Napi::Value SetDevice(const Napi::CallbackInfo& info)
 {
     auto env = info.Env();
     auto liveEngine = snapshotEngine();
-    if (!liveEngine) return Napi::Boolean::New(env, false);
+    auto result = Napi::Object::New(env);
+    result.Set("ok", false);
+    result.Set("duplex", true);
+    result.Set("sampleRate", 0.0);
+    result.Set("inputBlockSize", 0);
+    result.Set("outputBlockSize", 0);
+    result.Set("error", "");
+    if (!liveEngine)
+    {
+        result.Set("error", "Audio engine not initialized");
+        return result;
+    }
 
-    auto input = info.Length() > 0 && !info[0].IsNull() ? info[0].As<Napi::String>().Utf8Value() : "";
-    auto output = info.Length() > 1 && !info[1].IsNull() ? info[1].As<Napi::String>().Utf8Value() : "";
-    double sr = info.Length() > 2 && !info[2].IsUndefined() ? info[2].As<Napi::Number>().DoubleValue() : 48000.0;
-    int bs = info.Length() > 3 && !info[3].IsUndefined() ? info[3].As<Napi::Number>().Int32Value() : 256;
+    // Object payload: setDevice({inputType, inputDevice, outputType, outputDevice, sampleRate, bufferSize})
+    // Legacy positional: setDevice(input, output, sampleRate, bufferSize)
+    AudioEngine::DeviceConfig cfg;
+    if (info.Length() > 0 && info[0].IsObject() && !info[0].IsNull() && !info[0].IsArray())
+    {
+        auto obj = info[0].As<Napi::Object>();
+        auto readStr = [&](const char* key) -> std::string {
+            if (obj.Has(key) && obj.Get(key).IsString()) return obj.Get(key).As<Napi::String>().Utf8Value();
+            return {};
+        };
+        // Reject NaN/Infinity at the JS→C boundary so they can't poison
+        // downstream comparisons (NaN <= 0 is false, so the validation
+        // fallback in setAudioDevices() wouldn't catch them). Casting a
+        // non-finite double to int is also UB in C++.
+        auto readNum = [&](const char* key, double def) -> double {
+            if (obj.Has(key) && obj.Get(key).IsNumber())
+            {
+                const double v = obj.Get(key).As<Napi::Number>().DoubleValue();
+                if (std::isfinite(v)) return v;
+            }
+            return def;
+        };
+        cfg.inputType    = juce::String(readStr("inputType"));
+        cfg.inputDevice  = juce::String(readStr("inputDevice"));
+        if (cfg.inputDevice.isEmpty()) cfg.inputDevice = juce::String(readStr("input"));
+        cfg.outputType   = juce::String(readStr("outputType"));
+        cfg.outputDevice = juce::String(readStr("outputDevice"));
+        if (cfg.outputDevice.isEmpty()) cfg.outputDevice = juce::String(readStr("output"));
+        cfg.sampleRate = readNum("sampleRate", 48000.0);
+        // Clamp before the double→int cast: finite-but-out-of-range values
+        // (e.g. a JS-side bug passing 1e18) are UB to convert to int. readNum
+        // already filtered non-finite; we just need a range check here.
+        {
+            const double bsd = readNum("bufferSize", 256.0);
+            if (bsd >= 1.0 && bsd <= (double) std::numeric_limits<int>::max())
+                cfg.bufferSize = (int) bsd;
+            else
+                cfg.bufferSize = 256;
+        }
+    }
+    else
+    {
+        auto input  = info.Length() > 0 && info[0].IsString() ? info[0].As<Napi::String>().Utf8Value() : "";
+        auto output = info.Length() > 1 && info[1].IsString() ? info[1].As<Napi::String>().Utf8Value() : "";
+        double sr = info.Length() > 2 && info[2].IsNumber() ? info[2].As<Napi::Number>().DoubleValue() : 48000.0;
+        int bs    = info.Length() > 3 && info[3].IsNumber() ? info[3].As<Napi::Number>().Int32Value() : 256;
+        cfg.inputDevice = juce::String(input);
+        cfg.outputDevice = juce::String(output);
+        cfg.sampleRate = sr;
+        cfg.bufferSize = bs;
+    }
 
-    // Must run on the main thread — JUCE's ALSA backend deadlocks if called from a worker
-    bool result = liveEngine->setAudioDevice(juce::String(input), juce::String(output), sr, bs);
-    return Napi::Boolean::New(env, result);
+    // Main thread only — JUCE's ALSA backend deadlocks if called from a worker.
+    const auto r = liveEngine->setAudioDevices(cfg);
+    result.Set("ok", r.ok);
+    result.Set("duplex", r.duplex);
+    result.Set("sampleRate", r.sampleRate);
+    result.Set("inputBlockSize", r.inputBlockSize);
+    result.Set("outputBlockSize", r.outputBlockSize);
+    result.Set("error", r.error.toStdString());
+    return result;
 }
 
 // ── Audio Control ─────────────────────────────────────────────────────────────
@@ -2337,7 +2470,10 @@ static Napi::Object InitModule(Napi::Env env, Napi::Object exports)
     exports.Set("probeDeviceOptions", Napi::Function::New(env, ProbeDeviceOptions));
     exports.Set("getCurrentDevice", Napi::Function::New(env, GetCurrentDevice));
     exports.Set("setDeviceType", Napi::Function::New(env, SetDeviceType));
+    exports.Set("setInputDeviceType", Napi::Function::New(env, SetDeviceType));
+    exports.Set("setOutputDeviceType", Napi::Function::New(env, SetOutputDeviceType));
     exports.Set("setDevice", Napi::Function::New(env, SetDevice));
+    exports.Set("getDeviceMetrics", Napi::Function::New(env, GetDeviceMetrics));
 
     // Audio control
     exports.Set("startAudio", Napi::Function::New(env, StartAudio));

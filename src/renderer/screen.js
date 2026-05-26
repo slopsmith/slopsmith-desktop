@@ -40,8 +40,10 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
     const latencyEl = $('ae-latency');
     const toggleBtn = $('ae-toggle');
     const deviceTypeSelect = $('ae-device-type');
+    const outputDeviceTypeSelect = $('ae-output-device-type');
     const inputDeviceSelect = $('ae-input-device');
     const outputDeviceSelect = $('ae-output-device');
+    const srMismatchWarning = $('ae-sr-mismatch-warning');
     const sampleRateSelect = $('ae-sample-rate');
     const bufferSizeSelect = $('ae-buffer-size');
     const inputChannelSelect = $('ae-input-channel');
@@ -108,8 +110,12 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
 
     // ── Persistence ─────────────────────────────────────────────────────────
     function captureDeviceSettings() {
+        const inputType = deviceTypeSelect.value;
+        const outputType = outputDeviceTypeSelect?.value || inputType;
         return {
-            type: deviceTypeSelect.value,
+            type: inputType,
+            inputType,
+            outputType,
             input: inputDeviceSelect.value,
             output: outputDeviceSelect.value,
             sampleRate: sampleRateSelect.value,
@@ -144,8 +150,12 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
 
     function normalizeDeviceSettings(settings) {
         if (!isDeviceSettingsObject(settings)) return null;
+        // Accept legacy ('type') or dual ('inputType'+'outputType'). Legacy
+        // mirrors into both slots so the engine stays in duplex.
+        const hasLegacy = typeof settings.type === 'string';
+        const hasDual = typeof settings.inputType === 'string' && typeof settings.outputType === 'string';
         const hasExpectedShape =
-            typeof settings.type === 'string'
+            (hasLegacy || hasDual)
             && typeof settings.input === 'string'
             && typeof settings.output === 'string'
             && isSelectSettingValue(settings.sampleRate)
@@ -153,8 +163,17 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
             && isSelectSettingValue(settings.inputChannel);
         if (!hasExpectedShape) return null;
 
+        const inputType = typeof settings.inputType === 'string'
+            ? settings.inputType
+            : (settings.type || '');
+        const outputType = typeof settings.outputType === 'string'
+            ? settings.outputType
+            : (settings.type || inputType);
+
         const normalized = {
-            type: settings.type,
+            type: settings.type || inputType,
+            inputType,
+            outputType,
             input: settings.input,
             output: settings.output,
             sampleRate: normalizeSelectSettingValue(settings.sampleRate),
@@ -175,7 +194,10 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
     function isDeviceFormApplied() {
         if (!lastAppliedDeviceSettings) return false;
         const current = captureDeviceSettings();
-        return current.type === String(lastAppliedDeviceSettings.type ?? '')
+        const lastInputType  = String(lastAppliedDeviceSettings.inputType ?? lastAppliedDeviceSettings.type ?? '');
+        const lastOutputType = String(lastAppliedDeviceSettings.outputType ?? lastAppliedDeviceSettings.type ?? lastInputType);
+        return current.inputType === lastInputType
+            && current.outputType === lastOutputType
             && current.input === String(lastAppliedDeviceSettings.input ?? '')
             && current.output === String(lastAppliedDeviceSettings.output ?? '')
             && current.sampleRate === String(lastAppliedDeviceSettings.sampleRate ?? '')
@@ -326,35 +348,6 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
         replaceSelectOptions(inputChannelSelect, choices, preferredAvailable ? preferred : (currentAvailable ? current : '-1'));
     }
 
-    function coerceAsioSingleDriverSelection() {
-        if (deviceTypeSelect.value !== 'ASIO') return false;
-        if (!inputDeviceSelect.value && !outputDeviceSelect.value) return false;
-        if (inputDeviceSelect.value && !outputDeviceSelect.value) {
-            if (selectHasValue(outputDeviceSelect, inputDeviceSelect.value)) {
-                outputDeviceSelect.value = inputDeviceSelect.value;
-                return true;
-            }
-            return false;
-        }
-        if (!inputDeviceSelect.value && outputDeviceSelect.value) {
-            if (selectHasValue(inputDeviceSelect, outputDeviceSelect.value)) {
-                inputDeviceSelect.value = outputDeviceSelect.value;
-                return true;
-            }
-            return false;
-        }
-        if (inputDeviceSelect.value === outputDeviceSelect.value) return false;
-
-        if (selectHasValue(outputDeviceSelect, inputDeviceSelect.value)) {
-            outputDeviceSelect.value = inputDeviceSelect.value;
-            return true;
-        }
-        if (selectHasValue(inputDeviceSelect, outputDeviceSelect.value)) {
-            inputDeviceSelect.value = outputDeviceSelect.value;
-            return true;
-        }
-        return false;
-    }
 
     async function refreshDeviceOptions(preferred = {}) {
         const requestId = ++latestDeviceOptionsRequest;
@@ -365,26 +358,64 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
             return null;
         }
 
-        coerceAsioSingleDriverSelection();
-        const requestedType = deviceTypeSelect.value;
+        const requestedInputType = deviceTypeSelect.value;
+        const requestedOutputType = outputDeviceTypeSelect?.value || requestedInputType;
         const requestedInput = inputDeviceSelect.value;
         const requestedOutput = outputDeviceSelect.value;
+
         let options = null;
         try {
             options = await api.probeDeviceOptions(
-                requestedType,
+                requestedInputType,
                 requestedInput,
-                requestedOutput
+                requestedOutputType,
+                requestedOutput,
             );
         } catch (e) {
             console.warn('[audio-engine] Failed to probe device options:', e);
         }
 
         if (requestId !== latestDeviceOptionsRequest
-            || deviceTypeSelect.value !== requestedType
+            || deviceTypeSelect.value !== requestedInputType
+            || (outputDeviceTypeSelect && outputDeviceTypeSelect.value !== requestedOutputType)
             || inputDeviceSelect.value !== requestedInput
             || outputDeviceSelect.value !== requestedOutput) {
             return null;
+        }
+
+        // Fail closed: require the probe to explicitly affirm compatibility.
+        // Missing options, missing `compatible` field, and `compatible: false`
+        // all leave Apply disabled — we only enable when the native side
+        // says `compatible: true`.
+        const compatible = options != null && options.compatible === true;
+        if (srMismatchWarning) {
+            // `compatible: false` can come from non-SR causes (addon
+            // unavailable, device type missing, probe failure). Surface
+            // options.error when present so the user sees the actual
+            // reason instead of the generic SR-mismatch copy.
+            srMismatchWarning.classList.toggle('hidden', compatible);
+            const errMsg = (typeof options?.error === 'string' && options.error.length > 0)
+                ? options.error
+                : '';
+            // Distinguish probe-failure ("options is null") from probe-
+            // returned-incompatible — falling back to the SR-mismatch
+            // copy on a thrown probe would be misleading when the actual
+            // issue is an IPC failure, a missing addon, or the native
+            // probeDeviceOptions throwing.
+            let banner;
+            if (compatible) {
+                banner = '';
+            } else if (options == null) {
+                banner = 'Failed to probe device compatibility — Apply is disabled until a usable config is selected.';
+            } else if (errMsg) {
+                banner = errMsg;
+            } else {
+                banner = "Input and output devices don't share a compatible sample rate. Pick devices that both support the same rate (typical: 48000 Hz) or use the same device for both directions.";
+            }
+            srMismatchWarning.textContent = banner;
+        }
+        if (applyDeviceBtn) {
+            applyDeviceBtn.disabled = !compatible;
         }
 
         renderSampleRateOptions(options?.sampleRates, preferred.sampleRate);
@@ -593,17 +624,24 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
         setupEvents();
         startMetering();
 
-        // Restore saved device settings and auto-start
         const saved = await loadDeviceSettings();
         if (saved) {
-            if (saved.type && selectHasValue(deviceTypeSelect, saved.type)) {
-                deviceTypeSelect.value = saved.type;
-                const typeInfo = currentDeviceTypes.find(t => t.name === saved.type);
-                if (typeInfo) updateDeviceDropdowns(typeInfo);
+            const savedInputType  = saved.inputType  || saved.type || '';
+            const savedOutputType = saved.outputType || saved.type || savedInputType;
+            if (savedInputType && selectHasValue(deviceTypeSelect, savedInputType)) {
+                deviceTypeSelect.value = savedInputType;
+                const inputTypeInfo = currentDeviceTypes.find(t => t.name === savedInputType);
+                if (inputTypeInfo) updateInputDeviceDropdown(inputTypeInfo);
+            }
+            if (savedOutputType && outputDeviceTypeSelect
+                && selectHasValue(outputDeviceTypeSelect, savedOutputType)) {
+                outputDeviceTypeSelect.value = savedOutputType;
+                const outputTypeInfo = currentDeviceTypes.find(t => t.name === savedOutputType);
+                if (outputTypeInfo) updateOutputDeviceDropdown(outputTypeInfo);
             }
             if ('input' in saved && selectHasValue(inputDeviceSelect, saved.input)) inputDeviceSelect.value = String(saved.input);
             if ('output' in saved && selectHasValue(outputDeviceSelect, saved.output)) outputDeviceSelect.value = String(saved.output);
-            await refreshDeviceOptions({
+            const probedOptions = await refreshDeviceOptions({
                 sampleRate: saved.sampleRate,
                 bufferSize: saved.bufferSize,
                 inputChannel: saved.inputChannel,
@@ -613,25 +651,43 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
             setSelectValueIfPresent(inputChannelSelect, saved.inputChannel);
             if (saved.monitorMute !== undefined) monitorMuteCheckbox.checked = saved.monitorMute;
 
-            // Auto-apply and start
-            await api.setDeviceType(deviceTypeSelect.value);
-            const ok = await api.setDevice(
-                inputDeviceSelect.value, outputDeviceSelect.value,
-                parseFloat(sampleRateSelect.value || '48000'),
-                parseInt(bufferSizeSelect.value || '256')
-            );
-            if (ok) {
-                const inputChannel = parseInt(inputChannelSelect.value);
-                if (Number.isFinite(inputChannel)) await api.setInputChannel(inputChannel);
-                if (saved.monitorMute !== undefined) await api.setMonitorMute(saved.monitorMute);
-                await api.startAudio();
-                audioRunning = true;
-                toggleBtn.textContent = 'Stop';
-                statusDot.className = 'w-3 h-3 rounded-full bg-emerald-500';
-                statusText.textContent = 'Audio running';
-                aeApplyNoiseGateToEngine();
-                rememberAppliedDeviceSettings();
-                aeApplyTonePolishToEngine();
+            // Respect refreshDeviceOptions's fail-closed verdict: if the
+            // probe didn't explicitly confirm compatible=true, skip the
+            // auto-apply block but DO NOT return from init() — the user's
+            // preset / chain / FX state should still restore so they can
+            // fix device selection manually without losing the rest of
+            // their setup (common case: unplugged interface at startup).
+            const probedCompatible = probedOptions != null && probedOptions.compatible === true;
+            if (!probedCompatible) {
+                statusText.textContent = (probedOptions && typeof probedOptions.error === 'string' && probedOptions.error)
+                    ? `Saved device config not compatible: ${probedOptions.error}`
+                    : 'Saved device config not compatible';
+                statusDot.className = 'w-3 h-3 rounded-full bg-red-500';
+            } else {
+                const result = await api.setDevice({
+                    inputType: deviceTypeSelect.value,
+                    inputDevice: inputDeviceSelect.value,
+                    outputType: outputDeviceTypeSelect?.value || deviceTypeSelect.value,
+                    outputDevice: outputDeviceSelect.value,
+                    sampleRate: parseFloat(sampleRateSelect.value || '48000'),
+                    bufferSize: parseInt(bufferSizeSelect.value || '256'),
+                });
+                const ok = typeof result === 'boolean' ? result : !!result?.ok;
+                if (ok) {
+                    const inputChannel = parseInt(inputChannelSelect.value);
+                    if (Number.isFinite(inputChannel)) await api.setInputChannel(inputChannel);
+                    if (saved.monitorMute !== undefined) await api.setMonitorMute(saved.monitorMute);
+                    await api.startAudio();
+                    audioRunning = true;
+                    toggleBtn.textContent = 'Stop';
+                    statusDot.className = 'w-3 h-3 rounded-full bg-emerald-500';
+                    const modeLabel = (typeof result === 'object' && result?.duplex === false)
+                        ? ' (split mode)' : '';
+                    statusText.textContent = 'Audio running' + modeLabel;
+                    aeApplyNoiseGateToEngine();
+                    rememberAppliedDeviceSettings();
+                    aeApplyTonePolishToEngine();
+                }
             }
         }
 
@@ -726,24 +782,40 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
     async function loadDeviceTypes() {
         currentDeviceTypes = await api.getDeviceTypes();
         deviceTypeSelect.innerHTML = '';
+        if (outputDeviceTypeSelect) outputDeviceTypeSelect.innerHTML = '';
 
         for (const type of currentDeviceTypes) {
             const opt = document.createElement('option');
             opt.value = type.name;
             opt.textContent = type.name;
             deviceTypeSelect.appendChild(opt);
+
+            if (outputDeviceTypeSelect) {
+                const outOpt = document.createElement('option');
+                outOpt.value = type.name;
+                outOpt.textContent = type.name;
+                outputDeviceTypeSelect.appendChild(outOpt);
+            }
         }
 
         if (currentDeviceTypes.length > 0) {
             updateDeviceDropdowns(currentDeviceTypes[0]);
         }
 
-        // Load current device info
         const current = await api.getCurrentDevice();
-        if (current && current.type) {
-            deviceTypeSelect.value = current.type;
-            const typeInfo = currentDeviceTypes.find(t => t.name === current.type);
-            if (typeInfo) updateDeviceDropdowns(typeInfo);
+        if (current) {
+            const inputType = current.inputType || current.type;
+            const outputType = current.outputType || current.type || inputType;
+            if (inputType) {
+                deviceTypeSelect.value = inputType;
+                const inputTypeInfo = currentDeviceTypes.find(t => t.name === inputType);
+                if (inputTypeInfo) updateInputDeviceDropdown(inputTypeInfo);
+            }
+            if (outputType && outputDeviceTypeSelect) {
+                outputDeviceTypeSelect.value = outputType;
+                const outputTypeInfo = currentDeviceTypes.find(t => t.name === outputType);
+                if (outputTypeInfo) updateOutputDeviceDropdown(outputTypeInfo);
+            }
             if (current.input) inputDeviceSelect.value = current.input;
             if (current.output) outputDeviceSelect.value = current.output;
         }
@@ -751,7 +823,7 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
         await refreshDeviceOptions();
     }
 
-    function updateDeviceDropdowns(typeInfo) {
+    function updateInputDeviceDropdown(typeInfo) {
         inputDeviceSelect.innerHTML = '<option value="">Default</option>';
         for (const name of typeInfo.inputs) {
             const opt = document.createElement('option');
@@ -759,7 +831,9 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
             opt.textContent = name;
             inputDeviceSelect.appendChild(opt);
         }
+    }
 
+    function updateOutputDeviceDropdown(typeInfo) {
         outputDeviceSelect.innerHTML = '<option value="">Default</option>';
         for (const name of typeInfo.outputs) {
             const opt = document.createElement('option');
@@ -767,6 +841,11 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
             opt.textContent = name;
             outputDeviceSelect.appendChild(opt);
         }
+    }
+
+    function updateDeviceDropdowns(typeInfo) {
+        updateInputDeviceDropdown(typeInfo);
+        updateOutputDeviceDropdown(typeInfo);
     }
 
     // ── Signal Chain ──────────────────────────────────────────────────────────
@@ -932,12 +1011,26 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
             }
         });
 
-        // Device type change
         deviceTypeSelect.addEventListener('change', async () => {
             const typeInfo = currentDeviceTypes.find(t => t.name === deviceTypeSelect.value);
-            if (typeInfo) updateDeviceDropdowns(typeInfo);
+            if (typeInfo) {
+                updateInputDeviceDropdown(typeInfo);
+                // When the output-type select is absent (legacy single-type
+                // UI), the output dropdown must follow the input type or it
+                // stays pinned to the previous backend and Apply would target
+                // a different output device than the user expects.
+                if (!outputDeviceTypeSelect) updateOutputDeviceDropdown(typeInfo);
+            }
             await refreshDeviceOptions();
         });
+
+        if (outputDeviceTypeSelect) {
+            outputDeviceTypeSelect.addEventListener('change', async () => {
+                const typeInfo = currentDeviceTypes.find(t => t.name === outputDeviceTypeSelect.value);
+                if (typeInfo) updateOutputDeviceDropdown(typeInfo);
+                await refreshDeviceOptions();
+            });
+        }
 
         inputDeviceSelect.addEventListener('change', async () => {
             await refreshDeviceOptions();
@@ -954,25 +1047,30 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
             );
         });
 
-        // Apply device settings and start audio
         applyDeviceBtn.addEventListener('click', async () => {
             statusText.textContent = 'Configuring device...';
-            // Stop audio first to release the device before reconfiguring
             if (audioRunning) {
                 await api.stopAudio();
                 audioRunning = false;
+                // Reflect the stopped state in the UI immediately so a
+                // subsequent setDevice failure doesn't leave the label
+                // saying "Stop" while audioRunning is already false —
+                // the next click would otherwise *start* audio despite
+                // the label.
+                toggleBtn.textContent = 'Start';
             }
-            const typeName = deviceTypeSelect.value;
-            if (coerceAsioSingleDriverSelection()) {
-                statusText.textContent = 'ASIO uses one driver; matching input and output...';
-            }
-            await api.setDeviceType(typeName);
-            const ok = await api.setDevice(
-                inputDeviceSelect.value,
-                outputDeviceSelect.value,
-                parseFloat(sampleRateSelect.value),
-                parseInt(bufferSizeSelect.value)
-            );
+            const inputType = deviceTypeSelect.value;
+            const outputType = outputDeviceTypeSelect?.value || inputType;
+            const result = await api.setDevice({
+                inputType,
+                inputDevice: inputDeviceSelect.value,
+                outputType,
+                outputDevice: outputDeviceSelect.value,
+                sampleRate: parseFloat(sampleRateSelect.value),
+                bufferSize: parseInt(bufferSizeSelect.value),
+            });
+            const ok = typeof result === 'boolean' ? result : !!result?.ok;
+            const errMsg = (typeof result === 'object' && result?.error) ? String(result.error) : '';
             if (ok) {
                 const inputChannel = parseInt(inputChannelSelect.value);
                 if (Number.isFinite(inputChannel)) await api.setInputChannel(inputChannel);
@@ -981,13 +1079,17 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                 audioRunning = true;
                 toggleBtn.textContent = 'Stop';
                 statusDot.className = 'w-3 h-3 rounded-full bg-emerald-500';
-                statusText.textContent = 'Audio running';
+                const modeLabel = (typeof result === 'object' && result?.duplex === false)
+                    ? ' (split mode)' : '';
+                statusText.textContent = 'Audio running' + modeLabel;
                 aeApplyNoiseGateToEngine();
                 aeApplyTonePolishToEngine();
                 const applied = rememberAppliedDeviceSettings();
                 await saveDeviceSettings(applied);
             } else {
-                statusText.textContent = 'Failed to configure device';
+                statusText.textContent = errMsg
+                    ? `Failed to configure device: ${errMsg}`
+                    : 'Failed to configure device';
                 statusDot.className = 'w-3 h-3 rounded-full bg-red-500';
             }
         });
