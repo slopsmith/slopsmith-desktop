@@ -281,18 +281,33 @@ export function initAudioBridge(): void {
         const outputType: string = isDual ? (args[2] ?? '') : inputType;
         const outputName: string = isDual ? (args[3] ?? '') : (args[2] ?? '');
 
-        const options = audio && typeof audio.probeDeviceOptions === 'function'
-            ? (isDual
-                ? audio.probeDeviceOptions(inputType, inputName, outputType, outputName)
-                : audio.probeDeviceOptions(inputType, inputName, outputName))
-            : null;
+        // Probe can throw from the JUCE backend (createDevice failures,
+        // ASIO weirdness). Wrap so the IPC promise resolves with a
+        // normalized incompatible payload instead of rejecting — the
+        // renderer relies on a structured response to drive the warning
+        // banner.
+        let options: unknown = null;
+        let probeError = '';
+        if (audio && typeof audio.probeDeviceOptions === 'function') {
+            try {
+                options = isDual
+                    ? audio.probeDeviceOptions(inputType, inputName, outputType, outputName)
+                    : audio.probeDeviceOptions(inputType, inputName, outputName);
+            } catch (e: unknown) {
+                probeError = e instanceof Error ? e.message : String(e);
+                console.warn(`[audio] probeDeviceOptions threw: ${probeError}`);
+            }
+        } else {
+            probeError = 'Native audio addon not available';
+        }
         return normalizeDeviceOptions(options, {
             type: String(inputType || ''),
             inputType: String(inputType || ''),
             outputType: String(outputType || ''),
             input: String(inputName || ''),
             output: String(outputName || ''),
-            error: 'Native audio addon not available',
+            error: probeError,
+            compatible: false,
         });
     });
 

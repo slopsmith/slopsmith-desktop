@@ -398,6 +398,14 @@ private:
                kOutputRingFrames * kOutputRingFloatsPerSlot> outputPendingRing{};
     static_assert((kOutputRingFrames & (kOutputRingFrames - 1)) == 0,
                   "kOutputRingFrames must be a power of two for mask wraparound");
+    // RT-thread reads + writes touch these slots, so a lock-based fallback
+    // would risk priority inversion + audible dropouts. On the platforms we
+    // ship (x86_64 + arm64 across Linux/macOS/Windows) atomic<float> is
+    // always lock-free; this assert turns a regression into a build error
+    // instead of a silent latency degradation if a future platform port
+    // breaks the assumption.
+    static_assert(std::atomic<float>::is_always_lock_free,
+                  "outputPendingRing requires lock-free atomic<float> for RT safety");
 
     std::atomic<uint64_t> outputRingWriteIndex{0};
     std::atomic<uint64_t> outputRingReadIndex{0};

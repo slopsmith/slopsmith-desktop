@@ -383,7 +383,11 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
             return null;
         }
 
-        const compatible = options?.compatible !== false;
+        // Default to NOT compatible when the probe returned nothing
+        // (IPC failure, addon missing, exception). Treating null as
+        // compatible would leave Apply enabled against an unvalidated
+        // config — better to fail closed.
+        const compatible = options != null && options.compatible !== false;
         if (srMismatchWarning) {
             // `compatible: false` can come from non-SR causes (addon
             // unavailable, device type missing, probe failure). Surface

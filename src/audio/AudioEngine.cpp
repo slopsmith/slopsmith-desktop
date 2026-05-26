@@ -224,6 +224,14 @@ AudioEngine::DeviceOptions AudioEngine::probeDeviceOptionsDual(const juce::Strin
                     }
                 }
             }
+            // An empty intersection means there's no buffer size both sides
+            // accept; setting compatible=false stops the UI from re-enabling
+            // Apply against a guaranteed-fail config.
+            if (options.bufferSizes.isEmpty() && options.error.isEmpty())
+            {
+                options.error = "Input and output devices share no common buffer size";
+                options.compatible = false;
+            }
         }
 
         fprintf(stderr, "[AudioEngine] Probed device options: inType='%s' outType='%s' in='%s' out='%s' "
