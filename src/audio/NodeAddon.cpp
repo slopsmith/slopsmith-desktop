@@ -409,16 +409,16 @@ static Napi::Value GetDeviceMetrics(const Napi::CallbackInfo& info)
         obj.Set("duplex", true);
         obj.Set("inputOverflowCount", 0.0);
         obj.Set("outputUnderflowCount", 0.0);
-        obj.Set("outputRingFillSamples", 0);
-        obj.Set("outputRingCapacitySamples", 0);
+        obj.Set("outputRingFillFrames", 0);
+        obj.Set("outputRingCapacityFrames", 0);
         return obj;
     }
     const auto m = liveEngine->getDeviceMetrics();
     obj.Set("duplex", m.duplex);
     obj.Set("inputOverflowCount", static_cast<double>(m.inputOverflowCount));
     obj.Set("outputUnderflowCount", static_cast<double>(m.outputUnderflowCount));
-    obj.Set("outputRingFillSamples", m.outputRingFillSamples);
-    obj.Set("outputRingCapacitySamples", m.outputRingCapacitySamples);
+    obj.Set("outputRingFillFrames", m.outputRingFillFrames);
+    obj.Set("outputRingCapacityFrames", m.outputRingCapacityFrames);
     return obj;
 }
 

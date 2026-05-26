@@ -232,5 +232,14 @@ else()
     target_compile_definitions(slopsmith_audio PRIVATE SLOPSMITH_ONNX_SUPPORT=0)
 endif()
 
+# Signalsmith Stretch: pitch-preserving time-stretch for the backing track.
+# signalsmith-stretch.h includes "signalsmith-linear/stft.h",
+# so the linear repo's parent must also be in the include path.
+set(SS_STRETCH_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/signalsmith-stretch")
+set(SS_LINEAR_PARENT "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
+target_include_directories(slopsmith_audio PRIVATE
+    "${SS_STRETCH_DIR}"
+    "${SS_LINEAR_PARENT}")
+
 # Include directory for our headers
 target_include_directories(slopsmith_audio PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")

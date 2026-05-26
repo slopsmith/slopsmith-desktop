@@ -144,6 +144,7 @@ clone_slopsmith() {
 		# Community plugins
 		alleexx/slopsmith-plugin-transpose-chords
 		DeathlySin/slopsmith-plugin-song-preview
+		Jafz2001/slopsmith-plugin-nam-rig-builder
 		masc0t/slopsmith-plugin-find-more
 		masc0t/slopsmith-plugin-invert-highway
 		masc0t/slopsmith-plugin-the-daily
