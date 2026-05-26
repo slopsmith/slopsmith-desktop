@@ -852,21 +852,32 @@ AudioEngine::DeviceConfigResult AudioEngine::applySplitSetup(const DeviceConfig&
     }
 
     juce::AudioDeviceManager::AudioDeviceSetup inSetup;
-    inSetup.inputDeviceName  = config.inputDevice;
+    // Resolve empty name to first-enumerated input device — matches the
+    // rateSupportedBy preflight above AND probeDeviceOptionsDual. Using
+    // empty + useDefault*Channels here would make JUCE open the OS
+    // default, which can differ from inputs[0] on platforms where the
+    // OS-default differs from JUCE's enumeration order. The probe + SR
+    // preflight + actual open all need to agree on the same concrete
+    // device for the apply path to behave consistently with what the UI
+    // showed the user.
+    juce::String resolvedInputName = config.inputDevice;
+    if (resolvedInputName.isEmpty())
+    {
+        auto names = inputType->getDeviceNames(true);
+        if (names.size() > 0) resolvedInputName = names[0];
+    }
+
+    inSetup.inputDeviceName  = resolvedInputName;
     inSetup.outputDeviceName = "";
     inSetup.sampleRate = config.sampleRate;
     inSetup.bufferSize = config.bufferSize;
-    // Empty inputDeviceName == "use OS default input" — mirror what
-    // applyDuplexSetup does. Setting useDefaultInputChannels=true asks
-    // JUCE to pick the platform default's channel mask, which is the
-    // right thing when we haven't been given a specific device name.
-    inSetup.useDefaultInputChannels = config.inputDevice.isEmpty();
+    inSetup.useDefaultInputChannels = false;
     inSetup.useDefaultOutputChannels = false;
 
     int inputChannelCount = 0;
     {
         try {
-            std::unique_ptr<juce::AudioIODevice> probe(inputType->createDevice({}, config.inputDevice));
+            std::unique_ptr<juce::AudioIODevice> probe(inputType->createDevice({}, resolvedInputName));
             if (probe) inputChannelCount = probe->getInputChannelNames().size();
         } catch (...) {}
     }
@@ -894,20 +905,27 @@ AudioEngine::DeviceConfigResult AudioEngine::applySplitSetup(const DeviceConfig&
     const double inSr = inDev->getCurrentSampleRate();
     const int    inBs = inDev->getCurrentBufferSizeSamples();
 
+    // Same first-enumerated resolution on the output side — see input note
+    // above for why this matches the probe + SR preflight strategy.
+    juce::String resolvedOutputName = config.outputDevice;
+    if (resolvedOutputName.isEmpty())
+    {
+        auto names = outputType->getDeviceNames(false);
+        if (names.size() > 0) resolvedOutputName = names[0];
+    }
+
     juce::AudioDeviceManager::AudioDeviceSetup outSetup;
     outSetup.inputDeviceName  = "";
-    outSetup.outputDeviceName = config.outputDevice;
+    outSetup.outputDeviceName = resolvedOutputName;
     outSetup.sampleRate = config.sampleRate;
     outSetup.bufferSize = config.bufferSize;
     outSetup.useDefaultInputChannels = false;
-    // Same default-channel semantics for empty outputDeviceName as the
-    // input side above.
-    outSetup.useDefaultOutputChannels = config.outputDevice.isEmpty();
+    outSetup.useDefaultOutputChannels = false;
 
     int outputChannelCount = 0;
     {
         try {
-            std::unique_ptr<juce::AudioIODevice> probe(outputType->createDevice(config.outputDevice, {}));
+            std::unique_ptr<juce::AudioIODevice> probe(outputType->createDevice(resolvedOutputName, {}));
             if (probe) outputChannelCount = probe->getOutputChannelNames().size();
         } catch (...) {}
     }
@@ -1297,6 +1315,12 @@ void AudioEngine::audioOutputAboutToStart(juce::AudioIODevice* device)
         fprintf(stderr, "[AudioEngine] audioOutputAboutToStart: stored sr=%.0f differs from device sr=%.0f — using device\n",
                 srStored, srDev);
     }
+    // Propagate the authoritative rate to currentSampleRate so downstream
+    // consumers (audioOutputCallback's latency comp, getLatencyMs(),
+    // scoreChord's fallback) all see the same value. Without this, a
+    // device-side rate change (sleep/resume, format change) would leave
+    // currentSampleRate stuck at the input-side seed value.
+    if (sr > 0.0) currentSampleRate.store(sr, std::memory_order_relaxed);
     {
         const juce::ScopedLock sl(backingLock);
         if (backingTransport && sr > 0.0 && bs > 0)
