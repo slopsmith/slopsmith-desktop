@@ -805,11 +805,23 @@ AudioEngine::DeviceConfigResult AudioEngine::applySplitSetup(const DeviceConfig&
     }
 
     // v1 forces matching nominal SR — no adaptive resampler yet.
+    // Resolve empty name to first-enumerated for the createDevice probe
+    // call (matches probeDeviceOptionsDual's strategy). createDevice("")
+    // is implementation-defined per backend — some return the default,
+    // some return null. Using first-enumerated keeps probe and apply
+    // checking the SAME concrete device, so an empty-name config can't
+    // pass the UI probe and then fail this check.
     auto rateSupportedBy = [&](juce::AudioIODeviceType* t,
                                const juce::String& dev, bool isInput, double sr) {
         if (!t) return false;
+        juce::String resolved = dev;
+        if (resolved.isEmpty())
+        {
+            auto names = t->getDeviceNames(isInput);
+            if (names.size() > 0) resolved = names[0];
+        }
         std::unique_ptr<juce::AudioIODevice> probe(
-            isInput ? t->createDevice({}, dev) : t->createDevice(dev, {}));
+            isInput ? t->createDevice({}, resolved) : t->createDevice(resolved, {}));
         if (!probe) return false;
         // Tolerance matches the probe-side rounding: probeDeviceOptionsDual
         // rounds the matched rate to the nearest integer (see :208), so a
