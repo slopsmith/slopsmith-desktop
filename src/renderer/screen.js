@@ -1000,7 +1000,14 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
 
         deviceTypeSelect.addEventListener('change', async () => {
             const typeInfo = currentDeviceTypes.find(t => t.name === deviceTypeSelect.value);
-            if (typeInfo) updateInputDeviceDropdown(typeInfo);
+            if (typeInfo) {
+                updateInputDeviceDropdown(typeInfo);
+                // When the output-type select is absent (legacy single-type
+                // UI), the output dropdown must follow the input type or it
+                // stays pinned to the previous backend and Apply would target
+                // a different output device than the user expects.
+                if (!outputDeviceTypeSelect) updateOutputDeviceDropdown(typeInfo);
+            }
             await refreshDeviceOptions();
         });
 

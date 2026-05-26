@@ -195,7 +195,13 @@ AudioEngine::DeviceOptions AudioEngine::probeDeviceOptionsDual(const juce::Strin
             {
                 for (auto r2 : outRates)
                 {
-                    if (std::abs(r - r2) < 0.5)
+                    // <= 0.5 (not <) to match applySplitSetup's rateSupportedBy
+                    // check. A backend reporting 47999.5 on both sides has
+                    // |r - r2| = 0 (matches anyway) but a backend mixing
+                    // 47999.5 in / 48000.0 out has |diff| = 0.5 exactly, which
+                    // < 0.5 would reject from the probe even though the
+                    // apply-side check accepts it.
+                    if (std::abs(r - r2) <= 0.5)
                     {
                         // Round to nominal: backends sometimes report
                         // fractional near-48000 rates and surfacing the
