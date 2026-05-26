@@ -397,9 +397,22 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
             const errMsg = (typeof options?.error === 'string' && options.error.length > 0)
                 ? options.error
                 : '';
-            srMismatchWarning.textContent = !compatible && errMsg
-                ? errMsg
-                : "Input and output devices don't share a compatible sample rate. Pick devices that both support the same rate (typical: 48000 Hz) or use the same device for both directions.";
+            // Distinguish probe-failure ("options is null") from probe-
+            // returned-incompatible — falling back to the SR-mismatch
+            // copy on a thrown probe would be misleading when the actual
+            // issue is an IPC failure, a missing addon, or the native
+            // probeDeviceOptions throwing.
+            let banner;
+            if (compatible) {
+                banner = '';
+            } else if (options == null) {
+                banner = 'Failed to probe device compatibility — Apply is disabled until a usable config is selected.';
+            } else if (errMsg) {
+                banner = errMsg;
+            } else {
+                banner = "Input and output devices don't share a compatible sample rate. Pick devices that both support the same rate (typical: 48000 Hz) or use the same device for both directions.";
+            }
+            srMismatchWarning.textContent = banner;
         }
         if (applyDeviceBtn) {
             applyDeviceBtn.disabled = !compatible;

@@ -127,7 +127,18 @@ AudioEngine::DeviceOptions AudioEngine::probeDeviceOptionsDual(const juce::Strin
     };
 
     auto* inputType  = findType(inputDeviceManager, options.inputType);
-    auto* outputType = findType(outputDeviceManager, options.outputType);
+
+    // Match setAudioDevices's resolution: when the caller didn't specify
+    // an output type, default it to the SAME type the input side resolved
+    // to (using the type's name, looked up in outputDeviceManager). Without
+    // this, an empty `options.outputType` would let findType pick whatever
+    // outputDeviceManager enumerates first — potentially a different
+    // backend than inputDeviceManager picked from the empty string, which
+    // then disagrees with the apply path's duplex classification.
+    juce::String effectiveOutputTypeName = options.outputType;
+    if (effectiveOutputTypeName.isEmpty() && inputType != nullptr)
+        effectiveOutputTypeName = inputType->getTypeName();
+    auto* outputType = findType(outputDeviceManager, effectiveOutputTypeName);
 
     if (inputType == nullptr)
     {
@@ -338,9 +349,13 @@ AudioEngine::DeviceMetrics AudioEngine::getDeviceMetrics() const
     m.duplex = duplexMode.load(std::memory_order_relaxed);
     m.inputOverflowCount = inputOverflowCount.load(std::memory_order_relaxed);
     m.outputUnderflowCount = outputUnderflowCount.load(std::memory_order_relaxed);
-    m.outputRingCapacityFrames = kOutputRingFrames;
+    // The output ring is only used in split mode. Report 0/0 in duplex so
+    // consumers don't think there's a live ring buffer to monitor when
+    // there isn't one. Capacity reads-as-zero in duplex matches the
+    // "no ring activity" semantic — the ring is structurally inert.
     if (! m.duplex)
     {
+        m.outputRingCapacityFrames = kOutputRingFrames;
         // Output device can stop while the input keeps writing, leaving
         // (w - r) larger than capacity. Clamp uint64 → int via the
         // capacity ceiling so the consumer-facing field never overflows
