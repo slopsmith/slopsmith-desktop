@@ -639,42 +639,42 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
             if (saved.monitorMute !== undefined) monitorMuteCheckbox.checked = saved.monitorMute;
 
             // Respect refreshDeviceOptions's fail-closed verdict: if the
-            // probe didn't explicitly confirm compatible=true, don't
-            // auto-apply on init. The user will see the mismatch banner
-            // and have to fix the selection manually — better than
-            // silently retrying setDevice with a config the probe just
-            // rejected and leaving the user with no audio + no UI cue.
-            if (probedOptions == null || probedOptions.compatible !== true) {
+            // probe didn't explicitly confirm compatible=true, skip the
+            // auto-apply block but DO NOT return from init() — the user's
+            // preset / chain / FX state should still restore so they can
+            // fix device selection manually without losing the rest of
+            // their setup (common case: unplugged interface at startup).
+            const probedCompatible = probedOptions != null && probedOptions.compatible === true;
+            if (!probedCompatible) {
                 statusText.textContent = (probedOptions && typeof probedOptions.error === 'string' && probedOptions.error)
                     ? `Saved device config not compatible: ${probedOptions.error}`
                     : 'Saved device config not compatible';
                 statusDot.className = 'w-3 h-3 rounded-full bg-red-500';
-                return;
-            }
-
-            const result = await api.setDevice({
-                inputType: deviceTypeSelect.value,
-                inputDevice: inputDeviceSelect.value,
-                outputType: outputDeviceTypeSelect?.value || deviceTypeSelect.value,
-                outputDevice: outputDeviceSelect.value,
-                sampleRate: parseFloat(sampleRateSelect.value || '48000'),
-                bufferSize: parseInt(bufferSizeSelect.value || '256'),
-            });
-            const ok = typeof result === 'boolean' ? result : !!result?.ok;
-            if (ok) {
-                const inputChannel = parseInt(inputChannelSelect.value);
-                if (Number.isFinite(inputChannel)) await api.setInputChannel(inputChannel);
-                if (saved.monitorMute !== undefined) await api.setMonitorMute(saved.monitorMute);
-                await api.startAudio();
-                audioRunning = true;
-                toggleBtn.textContent = 'Stop';
-                statusDot.className = 'w-3 h-3 rounded-full bg-emerald-500';
-                const modeLabel = (typeof result === 'object' && result?.duplex === false)
-                    ? ' (split mode)' : '';
-                statusText.textContent = 'Audio running' + modeLabel;
-                aeApplyNoiseGateToEngine();
-                rememberAppliedDeviceSettings();
-                aeApplyTonePolishToEngine();
+            } else {
+                const result = await api.setDevice({
+                    inputType: deviceTypeSelect.value,
+                    inputDevice: inputDeviceSelect.value,
+                    outputType: outputDeviceTypeSelect?.value || deviceTypeSelect.value,
+                    outputDevice: outputDeviceSelect.value,
+                    sampleRate: parseFloat(sampleRateSelect.value || '48000'),
+                    bufferSize: parseInt(bufferSizeSelect.value || '256'),
+                });
+                const ok = typeof result === 'boolean' ? result : !!result?.ok;
+                if (ok) {
+                    const inputChannel = parseInt(inputChannelSelect.value);
+                    if (Number.isFinite(inputChannel)) await api.setInputChannel(inputChannel);
+                    if (saved.monitorMute !== undefined) await api.setMonitorMute(saved.monitorMute);
+                    await api.startAudio();
+                    audioRunning = true;
+                    toggleBtn.textContent = 'Stop';
+                    statusDot.className = 'w-3 h-3 rounded-full bg-emerald-500';
+                    const modeLabel = (typeof result === 'object' && result?.duplex === false)
+                        ? ' (split mode)' : '';
+                    statusText.textContent = 'Audio running' + modeLabel;
+                    aeApplyNoiseGateToEngine();
+                    rememberAppliedDeviceSettings();
+                    aeApplyTonePolishToEngine();
+                }
             }
         }
 

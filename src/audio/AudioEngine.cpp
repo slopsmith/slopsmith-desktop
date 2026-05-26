@@ -767,8 +767,14 @@ AudioEngine::DeviceConfigResult AudioEngine::applySplitSetup(const DeviceConfig&
         std::unique_ptr<juce::AudioIODevice> probe(
             isInput ? t->createDevice({}, dev) : t->createDevice(dev, {}));
         if (!probe) return false;
+        // Tolerance matches the probe-side rounding: probeDeviceOptionsDual
+        // rounds the matched rate to the nearest integer (see :208), so a
+        // backend reporting e.g. 47999.5 surfaces 48000 in the UI. If we
+        // kept `< 0.5` here, the round-trip would fail at apply time because
+        // |47999.5 - 48000.0| is exactly 0.5. Use `<= 0.5` so the boundary
+        // case the probe accepted is also accepted at apply.
         for (auto r : probe->getAvailableSampleRates())
-            if (std::abs(r - sr) < 0.5) return true;
+            if (std::abs(r - sr) <= 0.5) return true;
         return false;
     };
     juce::AudioIODeviceType* inputType = nullptr;
