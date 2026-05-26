@@ -498,7 +498,7 @@ static Napi::Value SetDevice(const Napi::CallbackInfo& info)
         // already filtered non-finite; we just need a range check here.
         {
             const double bsd = readNum("bufferSize", 256.0);
-            if (bsd >= 1.0 && bsd <= (double) std::numeric_limits<int>::max())
+            if (bsd >= 1.0 && bsd <= (double) (std::numeric_limits<int>::max) ())
                 cfg.bufferSize = (int) bsd;
             else
                 cfg.bufferSize = 256;
