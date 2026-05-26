@@ -4,6 +4,7 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_audio_devices/juce_audio_devices.h>
 #include <array>
+#include <cstdint>
 #include <deque>
 #include <vector>
 
@@ -39,6 +40,8 @@ private:
     void clearDryFifo();
     void deinterleavePut(const juce::AudioBuffer<float>& buf, int numFrames);
     int pullFromResampler(juce::ResamplingAudioSource& resampler, int numFrames);
+    void markSpeedChangeForDiagnostics();
+    void flushSpeedDiagnostics(double transportPositionSec);
 
     soundtouch::SoundTouch stretch;
     double sampleRate = 48000.0;
@@ -52,6 +55,24 @@ private:
     bool loggedEnabled = false;
     bool nearUnityProfileActive = false;
     bool profileApplied = false;
+
+    // Temporary stretch-path diagnostics (logged on speed change, not per callback).
+    enum class StretchOutputPath : uint8_t
+    {
+        Bypass = 0,
+        Stretched,
+        StretchedPartial,
+        Silence,
+    };
+    mutable StretchOutputPath lastOutputPath = StretchOutputPath::Silence;
+    uint64_t diagCallbackCount = 0;
+    uint64_t diagRequestedOutFrames = 0;
+    uint64_t diagSourceFramesPulled = 0;
+    uint64_t diagStretchReceived = 0;
+    uint64_t diagStretchReadyMax = 0;
+    double diagTransportStartSec = 0.0;
+    bool diagTransportStartValid = false;
+    bool diagPendingSpeedSummary = false;
 
     juce::AudioBuffer<float> resamplerPull;
     std::vector<float> interleavedIn;
