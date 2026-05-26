@@ -123,6 +123,7 @@ clone_slopsmith() {
 		byrongamatos/slopsmith-plugin-drum-highway-3d
 		byrongamatos/slopsmith-plugin-drums
 		byrongamatos/slopsmith-plugin-editor
+		byrongamatos/slopsmith-plugin-flappy-bend
 		byrongamatos/slopsmith-plugin-fretboard
 		byrongamatos/slopsmith-plugin-jumpingtab
 		byrongamatos/slopsmith-plugin-lyrics-karaoke
