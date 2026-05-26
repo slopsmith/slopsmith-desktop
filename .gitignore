@@ -54,3 +54,6 @@ package-lock.json
 # Venv
 .venv/
 .tmp/
+
+.venv/
+src/audio/third_party/soundtouch/
