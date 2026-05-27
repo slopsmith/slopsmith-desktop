@@ -242,6 +242,17 @@ public:
 
     void closeButtonPressed() override
     {
+        // Hide the window first so the user always sees an instant
+        // response to the X click — independent of whether the onClose
+        // callback can schedule its async teardown. The teardown path
+        // resets the window unique_ptr anyway (next message-loop tick
+        // in the normal case), but two paths could otherwise leave a
+        // visible window behind: (a) the in-flight CAS already taken
+        // by a racing kOpenEditor / kCloseEditor handler, in which case
+        // onClose returns early; (b) MessageManager::callAsync rejects
+        // the post during shutdown. setVisible(false) here ensures the
+        // close button still does what the user expects in both cases.
+        setVisible(false);
         if (onClose) onClose();
     }
 
