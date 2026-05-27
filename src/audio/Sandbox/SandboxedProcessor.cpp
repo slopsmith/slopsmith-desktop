@@ -10,167 +10,6 @@
 
 namespace slopsmith::sandbox {
 
-namespace {
-    // Editor wrapper: an AudioProcessorEditor that hosts the plugin's native
-    // HWND (returned from the sandbox over the openEditor request). v1 only
-    // reparents and resizes the embedded HWND locally; forwarding size
-    // changes back to the sandbox via op::kResizeEditor is on the follow-up
-    // checklist (see SANDBOX-DESIGN.md §3 "planned" ops).
-    class SandboxedEditor : public juce::AudioProcessorEditor
-    {
-    public:
-        SandboxedEditor(SandboxedProcessor& p, void* hwnd, int w, int h)
-            : juce::AudioProcessorEditor(&p), proc(p), nativeHwnd(hwnd)
-        {
-            setSize(w > 0 ? w : kDefaultEditorWidth,
-                    h > 0 ? h : kDefaultEditorHeight);
-            setOpaque(true);
-            // Reparenting the plugin HWND happens in parentHierarchyChanged()
-            // — we need a valid peer parent which doesn't exist until we're
-            // added to a Component hierarchy.
-        }
-
-        ~SandboxedEditor() override
-        {
-            // Cache the processor by reference at construction rather than
-            // re-fetching via getAudioProcessor() at destruction — if the
-            // host ever inverts the lifetime (editor outlives the processor,
-            // legal under JUCE's contract during atypical teardown), the
-            // base-class pointer dangles and dynamic_cast is UB. The
-            // reference points at the same processor that owns *this*
-            // editor, and JUCE guarantees the processor outlives any editor
-            // it created via createEditor().
-            proc.notifyEditorClosing();
-        }
-
-        void parentHierarchyChanged() override
-        {
-           #if JUCE_WINDOWS
-            tryEmbedNativeHwnd();
-           #endif
-        }
-
-       #if JUCE_WINDOWS
-        // Reparent the sandbox plugin's HWND under this editor's top-level
-        // OS window so it appears inside the editor frame.
-        //
-        // parentHierarchyChanged() fires while the host DocumentWindow is
-        // still being constructed (during setContentOwned), before the window
-        // has been added to the desktop — so getPeer() is null on that first
-        // call. Rather than give up, re-post the attempt: by the next message
-        // loop cycle the window's setVisible(true) has run and the OS peer
-        // exists. Bounded so a genuinely peerless host can't spin forever.
-        void tryEmbedNativeHwnd()
-        {
-            if (!nativeHwnd || embedded)
-                return;
-
-            auto* peer = getPeer();
-            HWND parent = peer ? (HWND)peer->getNativeHandle() : nullptr;
-            if (!parent)
-            {
-                if (++peerRetries <= kMaxPeerRetries)
-                {
-                    juce::Component::SafePointer<SandboxedEditor> self(this);
-                    juce::MessageManager::callAsync([self]()
-                    {
-                        if (self != nullptr)
-                            self->tryEmbedNativeHwnd();
-                    });
-                }
-                else if (! peerlessLogged)
-                {
-                    VST_TRACE("[sandbox] SandboxedEditor: host window never "
-                              "got an OS peer after %d retries — editor HWND "
-                              "left unparented", kMaxPeerRetries);
-                    peerlessLogged = true;
-                }
-                return;
-            }
-
-            wchar_t winsta[128] = L"?";
-            DWORD winstaLen = 0;
-            GetUserObjectInformationW(GetProcessWindowStation(), UOI_NAME,
-                                      winsta, sizeof(winsta), &winstaLen);
-            VST_TRACE("[sandbox] SandboxedEditor: embed attempt — "
-                      "nativeHwnd=%p IsWindow=%d, parentHwnd=%p IsWindow=%d, "
-                      "winsta=%ls",
-                      nativeHwnd, IsWindow((HWND)nativeHwnd) ? 1 : 0,
-                      (void*)parent, IsWindow(parent) ? 1 : 0, winsta);
-
-            auto style = GetWindowLongPtrW((HWND)nativeHwnd, GWL_STYLE);
-            style = (style | WS_CHILD) & ~WS_POPUP;
-            SetWindowLongPtrW((HWND)nativeHwnd, GWL_STYLE, style);
-
-            // SetParent returns the *previous* parent, which is NULL both on
-            // failure and when the old parent was the desktop — ambiguous.
-            // Verify the reparent took by reading the parent back. Don't set
-            // `embedded` on failure: that flag gates the retry guard, so a
-            // false success would strand the editor offscreen forever.
-            SetLastError(0);
-            SetParent((HWND)nativeHwnd, parent);
-            if (GetParent((HWND)nativeHwnd) != parent)
-            {
-                VST_TRACE("[sandbox] SandboxedEditor: SetParent failed "
-                          "(GetLastError=%lu) — HWND not embedded",
-                          (unsigned long)GetLastError());
-                return;
-            }
-            if (! SetWindowPos((HWND)nativeHwnd, nullptr, 0, 0,
-                               getWidth(), getHeight(),
-                               SWP_NOZORDER | SWP_FRAMECHANGED))
-            {
-                VST_TRACE("[sandbox] SandboxedEditor: SetWindowPos failed "
-                          "after reparent");
-                return;
-            }
-            // The sandbox parks the editor window offscreen until it has a
-            // parent; make it visible now that it's embedded.
-            ShowWindow((HWND)nativeHwnd, SW_SHOW);
-            embedded = true;
-            VST_TRACE("[sandbox] SandboxedEditor: embedded plugin HWND under "
-                      "host window (%dx%d)", getWidth(), getHeight());
-
-            // The host window was shown and brought to front while it was
-            // being constructed — before this async embed completed — so it
-            // can end up behind the main app window. Raise it now that the
-            // plugin HWND is actually in place.
-            if (auto* top = getTopLevelComponent())
-                top->toFront(true);
-        }
-       #endif
-
-        void resized() override
-        {
-           #if JUCE_WINDOWS
-            if (nativeHwnd)
-                SetWindowPos((HWND)nativeHwnd, nullptr, 0, 0,
-                             getWidth(), getHeight(),
-                             SWP_NOZORDER | SWP_NOACTIVATE);
-           #endif
-        }
-
-        void paint(juce::Graphics& g) override
-        {
-            // Painted area is fully covered by the embedded HWND once the
-            // reparenting follow-up wires up the Electron-side embedding.
-            // Until then this fill is what users see if a host hasn't yet
-            // implemented the embedding — keep it a dim neutral grey so
-            // it reads as "loading placeholder" rather than the alarming
-            // opaque black rectangle a v1 host would otherwise show.
-            g.fillAll(juce::Colour::fromRGB(32, 32, 32));
-        }
-
-    private:
-        static constexpr int kMaxPeerRetries = 50;
-
-        SandboxedProcessor& proc;
-        void* nativeHwnd = nullptr;
-        bool embedded = false;
-        bool peerlessLogged = false;
-        int peerRetries = 0;
-    };
-} // anonymous
 
 SandboxedProcessor::SandboxedProcessor(SpawnConfig cfg)
     : juce::AudioProcessor(BusesProperties()
@@ -490,7 +329,7 @@ void SandboxedProcessor::teardown(const juce::String& reason)
     if (cb) cb(reason);
 }
 
-void SandboxedProcessor::notifyEditorClosing()
+void SandboxedProcessor::requestCloseEditor()
 {
     if (!control) return;
     if (!editorOpen.exchange(false, std::memory_order_acq_rel)) return;
@@ -591,83 +430,31 @@ void SandboxedProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     }
 }
 
-juce::AudioProcessorEditor* SandboxedProcessor::createEditor()
+bool SandboxedProcessor::requestOpenEditor()
 {
-    if (!isAlive() || !hasEditor()) return nullptr;
-    // If a previous editor is still alive (JUCE didn't destroy it before
-    // this createEditor call — atypical but legal), short-circuit with
-    // nullptr rather than firing a second kOpenEditor that would queue
-    // behind the first inside vst-host's dispatchRequest editor-request
-    // serializer (10s wait + redundant editor creation in the sandbox).
-    //
-    // Caller contract: JUCE's AudioProcessor::createEditor may return
-    // nullptr at any time per its docs; SignalChain treats that as
-    // "this slot has no UI right now" and disables the slot's editor
-    // control. A nullptr return AFTER hasEditor() returned true is
-    // unusual but legal — callers must not crash on it. If a future
-    // host treats `createEditor() == nullptr` after `hasEditor() ==
-    // true` as a hard error, the right fix is to close the existing
-    // editor first via notifyEditorClosing(); revisit then.
-    if (editorOpen.load(std::memory_order_acquire))
-        return nullptr;
+    if (!isAlive() || !hasEditor() || !control) return false;
+    // No "already-open short-circuit": the child's kOpenEditor handler
+    // brings the existing editor window to front when one already exists,
+    // which is the correct behaviour for a second "Edit" click. A redundant
+    // round-trip is cheap (one IPC, no plugin recreation) and replaces the
+    // previous design's complexity around tracking host-side editor state.
     juce::String err;
     auto result = control->request(op::kOpenEditor, {}, kDefaultReplyTimeoutMs, &err);
     if (!result.isObject())
     {
-        // The request could have failed for a benign reason (timeout, channel
-        // disconnect, sandbox replied ok=false), but the sandbox may have
-        // completed the open on its side after we gave up. Mirror the
-        // null-HWND branch's best-effort cleanup so a sandbox-side editor
-        // isn't orphaned until the next successful open / kShutdown.
-        if (control)
-            control->postNoReply(op::kCloseEditor, {});
-        return nullptr;
+        // The sandbox may have completed the open after we gave up (timeout
+        // or transient channel hiccup); best-effort close so a sandbox-side
+        // window isn't orphaned until the next open / kShutdown.
+        control->postNoReply(op::kCloseEditor, {});
+        return false;
     }
-
-    // The sandbox returns the HWND as a string ("0x...") because juce::var
-    // doesn't carry 64-bit ints portably.
-    auto hwndStr = result.getProperty("hwnd", "").toString();
-    void* hwnd = nullptr;
-   #if JUCE_WINDOWS
-    hwnd = reinterpret_cast<void*>(hwndStr.getHexValue64());
-    // A blank or unparseable HWND means the sandbox claimed openEditor but
-    // didn't actually create a window. Don't hand back an editor that has
-    // nothing to reparent — the host would render a blank placeholder. But
-    // the sandbox HAS already created its editor on its side (openEditor
-    // succeeded), so best-effort close it to avoid leaking a sandbox-side
-    // window.
-    if (hwnd == nullptr)
-    {
-        if (control)
-            control->postNoReply(op::kCloseEditor, {});
-        return nullptr;
-    }
-   #else
-    juce::ignoreUnused(hwndStr);
-   #endif
-    int w = (int)result.getProperty("w", 800);
-    int h = (int)result.getProperty("h", 600);
-    // Publish editorOpen BEFORE constructing the editor so that
-    // ~SandboxedEditor (which calls notifyEditorClosing → editorOpen
-    // .exchange(false) and posts kCloseEditor on the true→false edge)
-    // works correctly even if JUCE destroys the editor before this
-    // function returns. On throw, roll back AND post the best-effort
-    // kCloseEditor (mirroring the null-HWND branch above) so host and
-    // sandbox state stay aligned.
+    // The HWND in the reply payload is left over from the previous embed
+    // design; the child now owns its own top-level window so the host
+    // doesn't need the handle. Tracking just the open/closed bit here is
+    // enough — the kEditorClosed event flips it back when the user clicks
+    // the window's close button on the child side.
     editorOpen.store(true, std::memory_order_release);
-    SandboxedEditor* ed = nullptr;
-    try
-    {
-        ed = new SandboxedEditor(*this, hwnd, w, h);
-    }
-    catch (...)
-    {
-        editorOpen.store(false, std::memory_order_release);
-        if (control)
-            control->postNoReply(op::kCloseEditor, {});
-        throw;
-    }
-    return ed;
+    return true;
 }
 
 void SandboxedProcessor::getStateInformation(juce::MemoryBlock& destData)

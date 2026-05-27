@@ -89,11 +89,37 @@ public:
     bool   producesMidi() const override { return isAlive() && producesMidiCached; }
     bool   isMidiEffect() const override { return false; }
 
-    juce::AudioProcessorEditor* createEditor() override;
+    // No host-side editor object. The sandbox child owns the plugin's
+    // editor as its own top-level window — the previous cross-process
+    // SetParent path produced a blank rendered surface for D3D / OpenGL
+    // plugins (Neural DSP Archetypes etc.) because their render context
+    // lives in the child process and doesn't survive HWND reparenting
+    // across processes. Reaper's undocked-plugin-window model: the
+    // window lives in the same process as its paint surface. Open and
+    // close are driven via requestOpenEditor / requestCloseEditor below,
+    // and the renderer-side flow in NodeAddon::OpenPluginEditor /
+    // ClosePluginEditor branches on dynamic_cast<SandboxedProcessor*>
+    // to skip the host-side PluginEditorWindow creation entirely.
+    juce::AudioProcessorEditor* createEditor() override { return nullptr; }
     bool hasEditor() const override { return isAlive() && hasEditorCached; }
 
-    // Idempotent — callers don't need to track editor state themselves.
-    void notifyEditorClosing();
+    // Show the sandbox plugin's editor in a top-level window owned by the
+    // sandbox child. Idempotent: a second call while the editor is already
+    // open brings the existing window to front rather than re-creating it
+    // (the child's kOpenEditor handler does the toFront).
+    bool requestOpenEditor();
+
+    // Close the editor window if one is open. Idempotent — safe to call
+    // when no editor is open.
+    void requestCloseEditor();
+
+    // Current editor-open state. Set true on a successful requestOpenEditor,
+    // false on requestCloseEditor and on the child's event::kEditorClosed
+    // (sent when the user clicks the editor window's close button).
+    bool isEditorOpen() const noexcept
+    {
+        return editorOpen.load(std::memory_order_acquire);
+    }
 
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }

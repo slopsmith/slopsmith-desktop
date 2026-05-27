@@ -20,6 +20,7 @@
 #include <charconv>
 #include <chrono>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <cstdarg>
 #include <cstdio>
@@ -209,28 +210,43 @@ bool parseArgs(int argc, wchar_t** argv, Args& out, juce::String& whyFailed)
 class EditorWindow : public juce::DocumentWindow
 {
 public:
-    EditorWindow(const juce::String& name, juce::AudioProcessorEditor* ed)
+    // Reaper-style top-level plugin-editor window. The sandbox child owns
+    // both the HWND and the plugin's render context, so paint surfaces
+    // (D3D11, OpenGL) live in the same process as their window — the
+    // earlier cross-process SetParent path produced a blank rendered
+    // surface for GPU-using plugins (Neural DSP Archetypes etc.) because
+    // the render context didn't survive reparenting across processes.
+    //
+    // closeCb is invoked when the user clicks the native close button.
+    // It posts event::kEditorClosed back to the host over the control
+    // channel and asynchronously destroys the editor + window — the host
+    // also sends op::kCloseEditor when ClosePluginEditor is called from
+    // the renderer, so the teardown path is idempotent.
+    EditorWindow(const juce::String& name,
+                 juce::AudioProcessorEditor* ed,
+                 std::function<void()> closeCb)
         : DocumentWindow(name, juce::Colours::darkgrey,
-                         /*buttonsNeeded*/ 0)
+                         /*buttonsNeeded*/ DocumentWindow::closeButton),
+          onClose(std::move(closeCb))
     {
-        // No buttons: the window is reparented into the Electron renderer
-        // and the host controls open/close via op::kOpenEditor /
-        // op::kCloseEditor. JUCE-drawn title bar (NOT native) so
-        // buttonsNeeded=0 in the DocumentWindow ctor above actually takes
-        // effect — Windows' native title bar always renders min/max/close
-        // regardless of the buttonsNeeded flag, and a user click on the
-        // native close would fire closeButtonPressed() (default no-op
-        // here), producing the "looks broken" UX this class is trying to
-        // avoid.
-        setUsingNativeTitleBar(false);
+        // Native title bar gives users the standard Windows close / move /
+        // resize behaviour they expect from any DAW's plugin editor.
+        setUsingNativeTitleBar(true);
         setResizable(true, false);
         setContentNonOwned(ed, true);
-        // Size first, then move offscreen. centreWithSize() would otherwise
-        // reposition the window onto the active display before the host has
-        // a chance to reparent it, producing a visible flash.
-        setSize(ed->getWidth(), ed->getHeight());
-        setTopLeftPosition(-32000, -32000);
+        // Centre on the active display so the window is visible on first
+        // open. Reaper-equivalent default; per-plugin position memory is
+        // a follow-up.
+        centreWithSize(ed->getWidth(), ed->getHeight());
     }
+
+    void closeButtonPressed() override
+    {
+        if (onClose) onClose();
+    }
+
+private:
+    std::function<void()> onClose;
 };
 
 // Single-plugin host state, owned by the main thread; the worker thread reads
@@ -799,13 +815,24 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
           // open fails, but the child (and the plugin's audio) survives.
           try
           {
-            // Tear down any prior editor BEFORE replacing st.editor. The
-            // existing EditorWindow holds st.editor.get() via
-            // setContentNonOwned, so resetting st.editor first would leave
-            // a dangling content pointer in the window. Resetting the
-            // window first detaches its content before we touch the editor.
-            if (st.editorWindow) st.editorWindow.reset();
-            if (st.editor)       st.editor.reset();
+            // Repeat-open fast path: the renderer's "Edit" click for a slot
+            // that already has its editor open just brings the existing
+            // window to front. Avoids recreating the editor (which for some
+            // plugins resets unsaved state) and matches DAW behaviour.
+            if (st.editorWindow)
+            {
+                st.editorWindow->setVisible(true);
+                st.editorWindow->toFront(true);
+                HWND existing = (HWND)st.editorWindow->getWindowHandle();
+                juce::DynamicObject::Ptr res(new juce::DynamicObject());
+                res->setProperty("hwnd", "0x" + juce::String::toHexString(
+                                              (juce::int64)(uintptr_t)existing));
+                res->setProperty("w", st.editor ? st.editor->getWidth()  : 0);
+                res->setProperty("h", st.editor ? st.editor->getHeight() : 0);
+                st.editorRequestInFlight.store(false, std::memory_order_release);
+                reply(true, juce::var(res.get()));
+                return;
+            }
 
             st.editor.reset(st.plugin->createEditorAndMakeActive());
             if (!st.editor)
@@ -818,7 +845,25 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
                 st.editor->setSize(slopsmith::sandbox::kDefaultEditorWidth,
                                    slopsmith::sandbox::kDefaultEditorHeight);
             st.editorWindow = std::make_unique<EditorWindow>(
-                st.plugin->getName(), st.editor.get());
+                st.plugin->getName(), st.editor.get(),
+                [&st]
+                {
+                    // User clicked the editor window's close button. Tell
+                    // the host so its SandboxedProcessor flips editorOpen
+                    // back to false (next "Edit" click in the renderer
+                    // sends a fresh kOpenEditor). Then defer the actual
+                    // destroy — closeButtonPressed is called *during* the
+                    // window's own message dispatch, so tearing it down
+                    // here would unwind through its own stack. The host's
+                    // op::kCloseEditor path lands at the same teardown
+                    // code, so this is idempotent if both fire.
+                    st.control.sendEvent(event::kEditorClosed, {});
+                    juce::MessageManager::callAsync([&st]
+                    {
+                        if (st.editorWindow) st.editorWindow.reset();
+                        if (st.editor)       st.editor.reset();
+                    });
+                });
             st.editorWindow->setVisible(true);
             HWND hwnd = (HWND)st.editorWindow->getWindowHandle();
             wchar_t winsta[128] = L"?";

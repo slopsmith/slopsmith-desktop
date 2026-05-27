@@ -1986,7 +1986,23 @@ static Napi::Value OpenPluginEditor(const Napi::CallbackInfo& info)
 
     int slotId = info[0].As<Napi::Number>().Int32Value();
 
-    // If already open, bring to front
+    auto slot = liveEngine->getSignalChain().getSlot(slotId);
+    if (!slot || !slot->processor || !slot->processor->hasEditor())
+        return Napi::Boolean::New(env, false);
+
+    // Sandboxed plugins: the editor is a top-level window owned by the
+    // sandbox child process. No host-side PluginEditorWindow and no
+    // cross-process SetParent reparent — that path produced a blank
+    // rendered surface for D3D / OpenGL plugins (Neural DSP Archetypes,
+    // etc.) because their render context lives in the child. The child's
+    // kOpenEditor handler brings the existing window to front on a repeat
+    // click, so re-entry is cheap and we don't track host-side state.
+    if (auto* sb = dynamic_cast<slopsmith::sandbox::SandboxedProcessor*>(slot->processor.get()))
+        return Napi::Boolean::New(env, sb->requestOpenEditor());
+
+    // In-process plugin — host-side PluginEditorWindow flow. If a window
+    // already exists for this slot, bring it to front rather than creating
+    // a duplicate.
     auto it = editorWindows.find(slotId);
     if (it != editorWindows.end() && it->second)
     {
@@ -1998,10 +2014,6 @@ static Napi::Value OpenPluginEditor(const Napi::CallbackInfo& info)
         // Window was hidden/closed, remove stale entry
         editorWindows.erase(it);
     }
-
-    auto slot = liveEngine->getSignalChain().getSlot(slotId);
-    if (!slot || !slot->processor || !slot->processor->hasEditor())
-        return Napi::Boolean::New(env, false);
 
     // Create editor on the message thread
     auto* processor = slot->processor.get();
@@ -2034,6 +2046,25 @@ static Napi::Value ClosePluginEditor(const Napi::CallbackInfo& info)
     if (info.Length() < 1) return Napi::Boolean::New(env, false);
 
     int slotId = info[0].As<Napi::Number>().Int32Value();
+
+    // Sandboxed plugins: route the close to the sandbox child via IPC.
+    // No host-side PluginEditorWindow exists for these.
+    if (auto liveEngine = snapshotEngine())
+    {
+        if (auto* slot = liveEngine->getSignalChain().getSlot(slotId))
+        {
+            if (slot->processor)
+            {
+                if (auto* sb = dynamic_cast<slopsmith::sandbox::SandboxedProcessor*>(slot->processor.get()))
+                {
+                    sb->requestCloseEditor();
+                    return Napi::Boolean::New(env, true);
+                }
+            }
+        }
+    }
+
+    // In-process plugin — tear down the host-side editor window.
     auto it = editorWindows.find(slotId);
     if (it != editorWindows.end())
     {
