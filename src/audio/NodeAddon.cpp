@@ -2054,7 +2054,7 @@ static Napi::Value OpenPluginEditor(const Napi::CallbackInfo& info)
     // SignalChain::removeProcessor() between this call returning and the
     // async firing can't leave us calling createEditorAndMakeActive() on a
     // dangling juce::AudioProcessor*. Mirrors the sandbox branch's pattern.
-    juce::MessageManager::callAsync([slotId]()
+    const bool queued = juce::MessageManager::callAsync([slotId]()
     {
         auto liveEngine = snapshotEngine();
         if (!liveEngine) return;
@@ -2078,7 +2078,7 @@ static Napi::Value OpenPluginEditor(const Napi::CallbackInfo& info)
         }
     });
 
-    return Napi::Boolean::New(env, true);
+    return Napi::Boolean::New(env, queued);
 }
 
 static Napi::Value ClosePluginEditor(const Napi::CallbackInfo& info)
