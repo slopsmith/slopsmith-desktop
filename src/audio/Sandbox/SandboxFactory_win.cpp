@@ -50,6 +50,22 @@ const juce::StringArray kDefaultNeedsSandboxFilenames = {
     // TONEX is an audio effect (no MIDI), so the sandbox MIDI caveat above
     // does not apply.
     "TONEX",
+    // IK Multimedia AmpliTube — does not work in-process for several reasons.
+    // (1) Its init posts WM_USER / WM_TIMER to itself and assumes the host's
+    // message thread is the OS main thread; on Slopsmith's background JUCE
+    // message thread those self-messages starve, leaving a half-wired editor
+    // that crashes on its first WindowProc dispatch (a 0xC read at offset
+    // 0xC — null-this — was the original field minidump). (2) Even after the
+    // PR #173 async-load fix, pressing Edit hangs or crashes for testers
+    // because createEditorAndMakeActive still runs synchronously on that
+    // wrong thread. (3) AmpliTube's VST3 and standalone share one global
+    // config file and the VST3 init writes audio-device / ASIO settings into
+    // it, clobbering the standalone whenever it's loaded in-process. All
+    // three symptoms vanish in a real-main-thread + STA-COM environment
+    // (works fine in Cubase). The sandbox child provides exactly that.
+    // AmpliTube is an audio effect (no MIDI), so the MIDI caveat above does
+    // not apply.
+    "AmpliTube",
 };
 
 // Runtime crash blocklist: full plugin paths that crashed the app on a
