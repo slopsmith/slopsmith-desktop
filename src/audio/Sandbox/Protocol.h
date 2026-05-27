@@ -91,10 +91,14 @@ inline constexpr int kReadyTimeoutMs = 30000;
 // the heartbeat is a fixed timer — not a real plugin-progress signal — so a
 // plugin whose load hangs while the sandbox's message loop stays responsive
 // would otherwise heartbeat forever and never trip the watchdog. This cap
-// fails the spawn regardless of heartbeats. Generous (4x kReadyTimeoutMs) so
-// a genuinely slow first-run load — cold license validation, network round
-// trips — still completes; a load that exceeds it is presumed stuck.
-inline constexpr int kReadyAbsoluteTimeoutMs = 120000;
+// fails the spawn regardless of heartbeats. Bumped to 10x kReadyTimeoutMs
+// after a tester reproduced Archetype Gojira X (Neural DSP) sending 22+
+// kLoading heartbeats and getting killed at the previous 4x (120 s) cap —
+// large neural-net plugin models routinely cross 2 minutes on a cold cache.
+// 5 min is well past the worst-known well-behaved load (Guitar Rig 6
+// first-run Qt5/QML spin-up clocks ~30 s); a load that exceeds 5 min is
+// genuinely stuck.
+inline constexpr int kReadyAbsoluteTimeoutMs = 300000;
 
 // Control channel — operation names.
 //
