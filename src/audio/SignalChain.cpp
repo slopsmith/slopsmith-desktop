@@ -23,7 +23,13 @@ inline void invokePlugin(ProcessorSlot& slot, Fn&& fn) noexcept
     }
     catch (...)
     {
-        slopsmith::sandbox::addCrashedPlugin(slot.path);
+        // Best-effort blocklist update — addCrashedPlugin allocates (juce path
+        // canonicalisation, StringArray.add) and locks a mutex, both of which
+        // can throw under OOM or corruption. Swallow any exception here so the
+        // outer noexcept boundary stays honest; release() is itself noexcept
+        // and never escapes the catch.
+        try { slopsmith::sandbox::addCrashedPlugin(slot.path); }
+        catch (...) { /* nothing useful to do on the noexcept boundary */ }
         (void) slot.processor.release();
     }
 }
