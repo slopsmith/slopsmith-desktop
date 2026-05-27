@@ -2001,14 +2001,21 @@ static Napi::Value OpenPluginEditor(const Napi::CallbackInfo& info)
     // Dispatch off the N-API call thread: requestOpenEditor() uses a
     // blocking control->request (kDefaultReplyTimeoutMs = 10s), which on
     // a slow or hung sandbox would otherwise stall V8's JS thread for
-    // the full timeout. Run it on the JUCE message thread (a background
-    // thread under Electron) the same way the in-process path below
-    // dispatches createEditorAndMakeActive. Return optimistically — the
-    // existing in-process path also returns true before its callAsync
-    // resolves.
-    if (auto* sb = dynamic_cast<slopsmith::sandbox::SandboxedProcessor*>(slot->processor.get()))
+    // the full timeout. Capture slotId rather than a raw processor
+    // pointer and re-resolve inside the message-thread lambda — that
+    // closes a UAF window where the slot could be removed (or the engine
+    // torn down) between this call returning and the async firing.
+    // Return optimistically; matches the in-process path below.
+    if (dynamic_cast<slopsmith::sandbox::SandboxedProcessor*>(slot->processor.get()))
     {
-        juce::MessageManager::callAsync([sb]() { sb->requestOpenEditor(); });
+        juce::MessageManager::callAsync([slotId]()
+        {
+            auto liveEngine = snapshotEngine();
+            if (!liveEngine) return;
+            if (auto* slot = liveEngine->getSignalChain().getSlot(slotId))
+                if (auto* sb = dynamic_cast<slopsmith::sandbox::SandboxedProcessor*>(slot->processor.get()))
+                    sb->requestOpenEditor();
+        });
         return Napi::Boolean::New(env, true);
     }
 
@@ -2061,17 +2068,30 @@ static Napi::Value ClosePluginEditor(const Napi::CallbackInfo& info)
 
     // Sandboxed plugins: route the close to the sandbox child via IPC.
     // No host-side PluginEditorWindow exists for these.
+    //
+    // Same shape as the open path: dispatch off the N-API thread and
+    // re-resolve the slot inside the lambda. requestCloseEditor()
+    // ultimately writes to the control pipe (writeFrame can block up
+    // to ~5s on a stalled reader), so running it synchronously here
+    // would freeze JS / the renderer UI on a slow sandbox; the
+    // re-resolve guards against slot-removal UAF between the napi call
+    // and the async firing.
     if (auto liveEngine = snapshotEngine())
     {
         if (auto* slot = liveEngine->getSignalChain().getSlot(slotId))
         {
-            if (slot->processor)
+            if (slot->processor
+                && dynamic_cast<slopsmith::sandbox::SandboxedProcessor*>(slot->processor.get()))
             {
-                if (auto* sb = dynamic_cast<slopsmith::sandbox::SandboxedProcessor*>(slot->processor.get()))
+                juce::MessageManager::callAsync([slotId]()
                 {
-                    sb->requestCloseEditor();
-                    return Napi::Boolean::New(env, true);
-                }
+                    auto liveEngine = snapshotEngine();
+                    if (!liveEngine) return;
+                    if (auto* slot = liveEngine->getSignalChain().getSlot(slotId))
+                        if (auto* sb = dynamic_cast<slopsmith::sandbox::SandboxedProcessor*>(slot->processor.get()))
+                            sb->requestCloseEditor();
+                });
+                return Napi::Boolean::New(env, true);
             }
         }
     }

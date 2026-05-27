@@ -872,7 +872,18 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
                     if (! st.editorRequestInFlight.compare_exchange_strong(
                             closeExpected, true, std::memory_order_acq_rel))
                         return;
-                    st.control.sendEvent(event::kEditorClosed, {});
+                    // Send off the message thread: sendEvent is a
+                    // synchronous, timeout-bounded pipe write (up to ~5s
+                    // if the host reader is stalled). Blocking the
+                    // message thread here would freeze the editor
+                    // window's close-button UX for that full window.
+                    // ControlChannel::writeFrame is mutex-guarded so
+                    // cross-thread sends are safe. The detached thread
+                    // exits as soon as the write returns.
+                    std::thread([&st]
+                    {
+                        st.control.sendEvent(event::kEditorClosed, {});
+                    }).detach();
                     juce::MessageManager::callAsync([&st]
                     {
                         if (st.editorWindow) st.editorWindow.reset();

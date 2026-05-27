@@ -298,6 +298,10 @@ bool SandboxedProcessor::initialise(juce::String& errorOut)
 void SandboxedProcessor::teardown(const juce::String& reason)
 {
     alive.exchange(false, std::memory_order_acq_rel);
+    // Clear the editor-open bit too: if the sandbox dies while the editor
+    // was open, isEditorOpen() would otherwise stay stuck true forever and
+    // renderer UI showing "editor open" would never reset.
+    editorOpen.store(false, std::memory_order_release);
     // Copy under the mutex so a concurrent setOnCrash() can't race with
     // std::function's internals. Invoking happens later (outside the lock)
     // so a callback that re-enters setOnCrash doesn't deadlock.
@@ -331,16 +335,18 @@ void SandboxedProcessor::teardown(const juce::String& reason)
 
 void SandboxedProcessor::requestCloseEditor()
 {
-    if (!control || !isAlive()) return;
-    // Send unconditionally rather than short-circuiting on a cached
-    // editorOpen==false. With the top-level-window model the host's
-    // editorOpen bit is best-effort tracking — if a kOpenEditor reply was
-    // lost on the wire, the child may have a visible editor window while
-    // the host believes the editor is closed. Short-circuiting would then
-    // leave an orphan editor window that the user couldn't close from the
-    // renderer. The child's kCloseEditor handler is idempotent (resets a
-    // null editor / window is a no-op), so a redundant send is harmless.
+    // Always clear the cached editorOpen bit — even if the sandbox is no
+    // longer reachable. If the sandbox crashed or was torn down while the
+    // editor was open, isEditorOpen() would otherwise remain stuck true
+    // forever and renderer UI showing "editor open" would never reset.
     editorOpen.store(false, std::memory_order_release);
+    // Send the IPC unconditionally when the channel is up — the host's
+    // editorOpen bit is best-effort tracking under the top-level-window
+    // model (a kOpenEditor whose reply was lost on the wire leaves the
+    // child holding a visible editor window the host doesn't know about),
+    // and the child's kCloseEditor handler is idempotent so a redundant
+    // send is harmless.
+    if (!control || !isAlive()) return;
     control->postNoReply(op::kCloseEditor, {});
 }
 
