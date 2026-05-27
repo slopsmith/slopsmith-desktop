@@ -229,6 +229,66 @@ function getPluginsDir(): string {
     return pluginsDir;
 }
 
+/** Packaged app: plugins live under resources/slopsmith/plugins via findSlopsmithDir().
+ *  Dev app: server runs from the slopsmith checkout, so PLUGINS_DIR is the sparse
+ *  in-tree plugins/ folder — pass the desktop bundle separately for parity. */
+function getDesktopBundledPluginsDir(): string | null {
+    if (app.isPackaged) {
+        return null;
+    }
+    const dir = path.resolve(path.join(__dirname, '..', '..', 'resources', 'slopsmith', 'plugins'));
+    if (!fs.existsSync(dir)) {
+        return null;
+    }
+    const audioEngine = path.join(dir, 'audio_engine', 'plugin.json');
+    if (!fs.existsSync(audioEngine)) {
+        console.warn(
+            '[python] Desktop plugin bundle missing audio_engine — run: npm run bundle:slopsmith'
+        );
+    }
+    return dir;
+}
+
+interface PluginRootScan {
+    root: string;
+    valid: number;
+    skipped: string[];
+}
+
+function scanPluginRoot(root: string): PluginRootScan {
+    const skipped: string[] = [];
+    let valid = 0;
+    if (!fs.existsSync(root)) {
+        return { root, valid: 0, skipped: ['(missing)'] };
+    }
+    let entries: fs.Dirent[];
+    try {
+        entries = fs.readdirSync(root, { withFileTypes: true });
+    } catch (e) {
+        return { root, valid: 0, skipped: [`(unreadable: ${e})`] };
+    }
+    for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const name = entry.name;
+        if (name === '__pycache__' || name.startsWith('.')) continue;
+        const manifest = path.join(root, name, 'plugin.json');
+        if (fs.existsSync(manifest)) {
+            valid += 1;
+        } else {
+            skipped.push(name);
+        }
+    }
+    return { root, valid, skipped };
+}
+
+function logPluginRootScans(label: string, scans: PluginRootScan[]): void {
+    console.log(`[python] ${label} plugin roots:`);
+    for (const s of scans) {
+        const skipPart = s.skipped.length ? `, skipped dirs: ${s.skipped.join(', ')}` : '';
+        console.log(`[python]   ${s.root} → ${s.valid} with plugin.json${skipPart}`);
+    }
+}
+
 function getDLCDir(): string {
     if (process.env.DLC_DIR && fs.existsSync(process.env.DLC_DIR)) return process.env.DLC_DIR;
 
@@ -284,12 +344,20 @@ export async function startPython(): Promise<void> {
     const dlcDir = getDLCDir();
     const pluginsDir = getPluginsDir();
     const slopsmithPlugins = path.join(slopsmithDir, 'plugins');
+    const desktopBundledPlugins = getDesktopBundledPluginsDir();
+
+    const pluginRootScans: PluginRootScan[] = [
+        scanPluginRoot(pluginsDir),
+        scanPluginRoot(slopsmithPlugins),
+    ];
+    if (desktopBundledPlugins) {
+        pluginRootScans.splice(1, 0, scanPluginRoot(desktopBundledPlugins));
+    }
 
     console.log(`[python] Starting ${pythonPath} ${serverScript} on port ${serverPort}`);
     console.log(`[python] Config dir: ${configDir}`);
     console.log(`[python] DLC dir: ${dlcDir}`);
-    console.log(`[python] Slopsmith plugins: ${slopsmithPlugins}`);
-    console.log(`[python] User plugins: ${pluginsDir}`);
+    logPluginRootScans('Pre-start', pluginRootScans);
 
     // Build PYTHONPATH to include slopsmith's lib directory
     const pythonPathParts = [
@@ -334,6 +402,9 @@ export async function startPython(): Promise<void> {
         CONFIG_DIR: configDir,
         DLC_DIR: dlcDir,
         SLOPSMITH_PLUGINS_DIR: pluginsDir,
+        ...(desktopBundledPlugins
+            ? { SLOPSMITH_DESKTOP_PLUGIN_ROOT: desktopBundledPlugins }
+            : {}),
         HOME: homeDir,
         XDG_CACHE_HOME: cacheBase,
         TORCH_HOME: process.env.TORCH_HOME || path.join(cacheBase, 'torch'),
