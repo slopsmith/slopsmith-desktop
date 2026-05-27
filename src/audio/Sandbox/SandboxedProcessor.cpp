@@ -331,9 +331,16 @@ void SandboxedProcessor::teardown(const juce::String& reason)
 
 void SandboxedProcessor::requestCloseEditor()
 {
-    if (!control) return;
-    if (!editorOpen.exchange(false, std::memory_order_acq_rel)) return;
-    if (!isAlive()) return;
+    if (!control || !isAlive()) return;
+    // Send unconditionally rather than short-circuiting on a cached
+    // editorOpen==false. With the top-level-window model the host's
+    // editorOpen bit is best-effort tracking — if a kOpenEditor reply was
+    // lost on the wire, the child may have a visible editor window while
+    // the host believes the editor is closed. Short-circuiting would then
+    // leave an orphan editor window that the user couldn't close from the
+    // renderer. The child's kCloseEditor handler is idempotent (resets a
+    // null editor / window is a no-op), so a redundant send is harmless.
+    editorOpen.store(false, std::memory_order_release);
     control->postNoReply(op::kCloseEditor, {});
 }
 
