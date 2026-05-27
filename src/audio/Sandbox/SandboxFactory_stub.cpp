@@ -27,4 +27,9 @@ void setCrashedPlugins(const juce::StringArray& /*pluginPaths*/)
     // route the crash blocklist to.
 }
 
+void addCrashedPlugin(const juce::String& /*pluginPath*/)
+{
+    // No-op for the same reason as setCrashedPlugins.
+}
+
 } // namespace slopsmith::sandbox

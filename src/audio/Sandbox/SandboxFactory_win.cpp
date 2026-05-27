@@ -222,6 +222,22 @@ std::unique_ptr<juce::AudioProcessor> tryLoadSandboxed(
     return SandboxedProcessor::spawn(cfg, errorOut);
 }
 
+void addCrashedPlugin(const juce::String& pluginPath)
+{
+    if (pluginPath.isEmpty()) return;
+    // Canonicalise to match the lookup form used in shouldSandbox() — without
+    // this, a path passed in with mixed slashes or as a relative form would
+    // sit alongside the canonical version and one of the two would never hit.
+    const auto canonical = juce::File(pluginPath).getFullPathName();
+    const std::lock_guard<std::mutex> lock(g_crashedPluginsMutex);
+    if (! g_crashedPlugins.contains(canonical, /*ignoreCase*/ true))
+    {
+        g_crashedPlugins.add(canonical);
+        VST_TRACE("addCrashedPlugin: %s appended to runtime crash blocklist",
+                  canonical.toRawUTF8());
+    }
+}
+
 void setCrashedPlugins(const juce::StringArray& pluginPaths)
 {
     const std::lock_guard<std::mutex> lock(g_crashedPluginsMutex);
