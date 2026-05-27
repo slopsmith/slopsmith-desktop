@@ -874,8 +874,6 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
             // plugins resets unsaved state) and matches DAW behaviour.
             if (st.editorWindow)
             {
-                st.editorWindow->setVisible(true);
-                st.editorWindow->toFront(true);
                 // If the user X'd the window while this lambda was queued
                 // (CAS-fail path in closeButtonPressed set the flag), do
                 // NOT report success — releaseEditorFlag will destroy the
@@ -884,12 +882,19 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
                 // (event arrives first sets editorOpen=false, then the
                 // true reply restores editorOpen=true on a destroyed
                 // window — stuck-open state).
+                //
+                // Check BEFORE setVisible/toFront so we don't briefly
+                // re-show a window the user just dismissed — otherwise
+                // there's a visible flicker as the X-hidden window
+                // momentarily reappears before the drain destroys it.
                 if (st.userCloseRequestedFromButton.load(std::memory_order_acquire))
                 {
                     releaseEditorFlag(st);  // drains: destroys + sends event
                     reply(false, {}, "user closed editor during open");
                     return;
                 }
+                st.editorWindow->setVisible(true);
+                st.editorWindow->toFront(true);
                 HWND existing = (HWND)st.editorWindow->getWindowHandle();
                 juce::DynamicObject::Ptr res(new juce::DynamicObject());
                 res->setProperty("hwnd", "0x" + juce::String::toHexString(

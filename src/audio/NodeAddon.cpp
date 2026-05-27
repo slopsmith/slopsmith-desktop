@@ -2016,7 +2016,7 @@ static Napi::Value OpenPluginEditor(const Napi::CallbackInfo& info)
         // crash between then and now is possible — re-check here.
         if (!sb->isAlive())
             return Napi::Boolean::New(env, false);
-        juce::MessageManager::callAsync([slotId]()
+        const bool queued = juce::MessageManager::callAsync([slotId]()
         {
             auto liveEngine = snapshotEngine();
             if (!liveEngine) return;
@@ -2024,6 +2024,13 @@ static Napi::Value OpenPluginEditor(const Napi::CallbackInfo& info)
                 if (auto* sb = dynamic_cast<slopsmith::sandbox::SandboxedProcessor*>(slot->processor.get()))
                     sb->requestOpenEditor();
         });
+        if (!queued)
+        {
+            // Message queue refused the post — typically only during
+            // shutdown. Surface the failure so the renderer doesn't
+            // toggle its UI into a fake-open state.
+            return Napi::Boolean::New(env, false);
+        }
         return Napi::Boolean::New(env, true);
     }
 
@@ -2098,7 +2105,7 @@ static Napi::Value ClosePluginEditor(const Napi::CallbackInfo& info)
             if (slot->processor
                 && dynamic_cast<slopsmith::sandbox::SandboxedProcessor*>(slot->processor.get()))
             {
-                juce::MessageManager::callAsync([slotId]()
+                const bool queued = juce::MessageManager::callAsync([slotId]()
                 {
                     auto liveEngine = snapshotEngine();
                     if (!liveEngine) return;
@@ -2106,7 +2113,7 @@ static Napi::Value ClosePluginEditor(const Napi::CallbackInfo& info)
                         if (auto* sb = dynamic_cast<slopsmith::sandbox::SandboxedProcessor*>(slot->processor.get()))
                             sb->requestCloseEditor();
                 });
-                return Napi::Boolean::New(env, true);
+                return Napi::Boolean::New(env, queued);
             }
         }
     }
