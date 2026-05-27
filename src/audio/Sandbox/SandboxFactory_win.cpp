@@ -23,8 +23,8 @@ namespace {
 // on its own. It survives as (a) documentation of *why* each plugin
 // originally needed the sandbox, (b) diagnostic tagging in shouldSandbox's
 // VST_TRACE output, and (c) forward-looking infrastructure for a future
-// per-plugin opt-in (these are the plugins that should never opt back into
-// in-process even if the user toggles the opt-in).
+// per-plugin opt-out — i.e., a way to allow specific plugins back into the
+// in-process path. These are the plugins that should never be opted out.
 //
 // MIDI is supported in the sandbox since the v2 audio-shm inline-MIDI
 // protocol — instruments are no longer muted by the sandbox path.
@@ -155,7 +155,8 @@ juce::File resolveSandboxExe()
 // The pre-seed list and runtime crash blocklist remain. They no longer gate
 // routing on their own — every VST3 takes the sandbox path regardless — but
 // the VST_TRACE output preserves *why* a given plugin matched, which is
-// useful for diagnostics and for a future per-plugin opt-in mechanism.
+// useful for diagnostics and for a future per-plugin opt-out (a way to let
+// specific plugins back into the in-process path).
 bool shouldSandbox(const juce::PluginDescription& desc)
 {
     const auto path = juce::File(desc.fileOrIdentifier);

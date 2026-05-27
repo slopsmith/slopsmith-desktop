@@ -178,7 +178,8 @@ std::unique_ptr<juce::AudioProcessor> tryLoadSandboxed(
 // non-VST3 processors (NAM, IR) stay in-process. The pre-seed filename list
 // and the runtime crash blocklist still drive the VST_TRACE diagnostic
 // tagging and remain as forward-looking infrastructure for a future
-// per-plugin opt-in, but they no longer determine routing on their own.
+// per-plugin opt-out (letting specific plugins back into in-process), but
+// they no longer determine routing on their own.
 //
 // Exposed for tests and for the UI to surface "this plugin is sandboxed"
 // status.
