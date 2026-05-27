@@ -1,4 +1,40 @@
 #include "SignalChain.h"
+#include "Sandbox/SandboxedProcessor.h"
+
+namespace {
+
+// Catch a plugin fault — access violation, heap corruption, C++ exception —
+// rather than let it kill the host process. /EHa on this TU makes catch(...)
+// catch SEH on Windows too; on other platforms it covers C++ exceptions only.
+//
+// On fault: route future loads of the offending plugin through the
+// out-of-process sandbox (via the runtime crash blocklist), and *leak* the
+// AudioPluginInstance — calling its destructor on a now-corrupted heap is
+// its own crash hazard. A one-time leak per kill in exchange for a live app.
+// The next iteration of any slot loop sees slot->processor == nullptr and
+// skips the slot.
+template <typename Fn>
+inline void invokePlugin(ProcessorSlot& slot, Fn&& fn) noexcept
+{
+    if (! slot.processor) return;
+    try
+    {
+        fn(*slot.processor);
+    }
+    catch (...)
+    {
+        // Best-effort blocklist update — addCrashedPlugin allocates (juce path
+        // canonicalisation, StringArray.add) and locks a mutex, both of which
+        // can throw under OOM or corruption. Swallow any exception here so the
+        // outer noexcept boundary stays honest; release() is itself noexcept
+        // and never escapes the catch.
+        try { slopsmith::sandbox::addCrashedPlugin(slot.path); }
+        catch (...) { /* nothing useful to do on the noexcept boundary */ }
+        (void) slot.processor.release();
+    }
+}
+
+} // namespace
 
 // ── ProcessorSlot ─────────────────────────────────────────────────────────────
 
@@ -34,12 +70,12 @@ void SignalChain::prepare(double sampleRate, int blockSize)
     const juce::ScopedLock sl(lock);
     for (auto* slot : slots)
     {
-        if (slot->processor)
+        invokePlugin(*slot, [&](juce::AudioProcessor& p)
         {
-            slot->processor->releaseResources();
-            slot->processor->setPlayConfigDetails(2, 2, sampleRate, blockSize);
-            slot->processor->prepareToPlay(sampleRate, blockSize);
-        }
+            p.releaseResources();
+            p.setPlayConfigDetails(2, 2, sampleRate, blockSize);
+            p.prepareToPlay(sampleRate, blockSize);
+        });
     }
 }
 
@@ -48,8 +84,10 @@ void SignalChain::releaseResources()
     const juce::ScopedLock sl(lock);
     for (auto* slot : slots)
     {
-        if (slot->processor)
-            slot->processor->releaseResources();
+        invokePlugin(*slot, [](juce::AudioProcessor& p)
+        {
+            p.releaseResources();
+        });
     }
 }
 
@@ -82,7 +120,10 @@ void SignalChain::process(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& mi
                 if (drained[i].slotId == slot->id || drained[i].slotId == -1)
                     slotMidi.addEvent(drained[i].msg, 0);
             }
-            slot->processor->processBlock(buffer, slotMidi);
+            invokePlugin(*slot, [&](juce::AudioProcessor& p)
+            {
+                p.processBlock(buffer, slotMidi);
+            });
         }
     }
 }
@@ -104,9 +145,6 @@ int SignalChain::addProcessor(std::unique_ptr<juce::AudioProcessor> processor,
 {
     if (!processor) return -1;
 
-    processor->setPlayConfigDetails(2, 2, currentSampleRate, currentBlockSize);
-    processor->prepareToPlay(currentSampleRate, currentBlockSize);
-
     auto slot = std::make_unique<ProcessorSlot>();
     slot->type = type;
     slot->processor = std::move(processor);
@@ -114,8 +152,17 @@ int SignalChain::addProcessor(std::unique_ptr<juce::AudioProcessor> processor,
     slot->path = path;
     slot->id = nextSlotId++;
 
-    int id = slot->id;
+    // Prepare under the SEH-catching helper so a plugin that faults during
+    // prepareToPlay is blocklisted (next load routes to the sandbox) and the
+    // slot is dropped, rather than taking the app down.
+    invokePlugin(*slot, [&](juce::AudioProcessor& p)
+    {
+        p.setPlayConfigDetails(2, 2, currentSampleRate, currentBlockSize);
+        p.prepareToPlay(currentSampleRate, currentBlockSize);
+    });
+    if (! slot->processor) return -1;
 
+    int id = slot->id;
     const juce::ScopedLock sl(lock);
     slots.add(slot.release());
     return id;
