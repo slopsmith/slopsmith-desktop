@@ -872,22 +872,28 @@ void dispatchRequest(HostState& st, int requestId, const juce::String& op,
                     if (! st.editorRequestInFlight.compare_exchange_strong(
                             closeExpected, true, std::memory_order_acq_rel))
                         return;
-                    // Send off the message thread: sendEvent is a
-                    // synchronous, timeout-bounded pipe write (up to ~5s
-                    // if the host reader is stalled). Blocking the
-                    // message thread here would freeze the editor
-                    // window's close-button UX for that full window.
-                    // ControlChannel::writeFrame is mutex-guarded so
-                    // cross-thread sends are safe. The detached thread
-                    // exits as soon as the write returns.
-                    std::thread([&st]
-                    {
-                        st.control.sendEvent(event::kEditorClosed, {});
-                    }).detach();
+                    // Defer destruction + the kEditorClosed send to the
+                    // next message-loop tick. Doing the send inside
+                    // closeButtonPressed (this callback) would block the
+                    // close-button UX until sendEvent's pipe write
+                    // returned (up to ~5s on a stalled host reader). A
+                    // detached background thread would dodge that but
+                    // captures HostState by reference and can outlive
+                    // WinMain's unwind → use-after-free against
+                    // st.control's mutex.
+                    //
+                    // The callAsync runs on the same message thread, but
+                    // only after closeButtonPressed has unwound and JUCE
+                    // has resolved the click visually. Order matters
+                    // inside the lambda: destroy the window first so the
+                    // user sees it vanish immediately, then send the
+                    // event — even if sendEvent burns the full timeout
+                    // there's no visible editor frame still waiting.
                     juce::MessageManager::callAsync([&st]
                     {
                         if (st.editorWindow) st.editorWindow.reset();
                         if (st.editor)       st.editor.reset();
+                        st.control.sendEvent(event::kEditorClosed, {});
                         st.editorRequestInFlight.store(false, std::memory_order_release);
                     });
                 });
