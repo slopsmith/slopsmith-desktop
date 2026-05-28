@@ -16,6 +16,15 @@ bash "$SCRIPT_DIR/bundle-slopsmith.sh"
 if [[ "$(uname -s)" == "Linux" ]]; then
   bash "$SCRIPT_DIR/bundle-python.sh"
 fi
+# Pre-install bundled plugins' Python deps + emit manifest. Linux-only here
+# for the same reason as bundle-python.sh — macOS/Windows runs this inside
+# their platform scripts via build-common.sh main(). Needs SLOPSMITH_DIR
+# and an embedded Python; skips silently if either is missing so the local
+# `npm run bundle` path still works without a full build.
+if [[ "$(uname -s)" == "Linux" ]] && [[ -n "${SLOPSMITH_DIR:-}" ]] \
+        && [[ -x "$PROJECT_DIR/resources/python/runtime/bin/python3" ]]; then
+  bash "$SCRIPT_DIR/bundle-plugin-deps.sh"
+fi
 # Skip binary bundling on non-Linux platforms (handled inline in platform scripts)
 if [[ "$(uname -s)" == "Linux" ]]; then
   bash "$SCRIPT_DIR/bundle-binaries.sh"

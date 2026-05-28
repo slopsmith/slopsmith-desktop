@@ -76,6 +76,10 @@
       {
         "from": "resources/models",
         "to": "models"
+      },
+      {
+        "from": "resources/bundled_plugin_reqs.json",
+        "to": "bundled_plugin_reqs.json"
       }
     ],
     "asarUnpack": [

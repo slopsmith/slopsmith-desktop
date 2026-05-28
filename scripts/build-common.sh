@@ -291,6 +291,19 @@ bundle_python() {
     echo ""
 }
 
+bundle_plugin_deps() {
+    # Pre-install bundled plugins' Python deps into the embedded runtime and
+    # emit resources/bundled_plugin_reqs.json so the slopsmith server skips
+    # its 20–30 min first-launch pip install (sloppak_converter pulls in
+    # torch + demucs + whisperx; see slopsmith#421). Must run after
+    # clone_slopsmith (plugin sources at $SLOPSMITH_DIR) and after
+    # bundle_python (pip available in the embedded runtime).
+    echo_step "Pre-installing bundled plugin dependencies"
+    bash "$SCRIPT_DIR/bundle-plugin-deps.sh"
+    echo_summary "Plugin dependencies pre-installed"
+    echo ""
+}
+
 bundle_binaries() {
     mkdir -p "$PROJECT_DIR/resources/bin"
     bundle_binaries_impl
@@ -580,6 +593,7 @@ clone_slopsmith
 build_native_addons
 bundle_slopsmith
 bundle_python
+bundle_plugin_deps
 bundle_binaries
 verify_bundled_binaries
 bundle_soundfont

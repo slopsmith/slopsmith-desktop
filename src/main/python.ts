@@ -229,6 +229,54 @@ function getPluginsDir(): string {
     return pluginsDir;
 }
 
+// Bump when a desktop release ships a NEW set of bundled plugin deps and the
+// previously-installed runtime pip_packages may now be a stale older version
+// of the same wheels (torch, demucs, …). On the first launch of any version
+// with PIP_PACKAGES_COMPAT_VERSION higher than the on-disk sentinel, the
+// contents of CONFIG_DIR/pip_packages are wiped so a stale alpha.5 install
+// can't shadow embedded site-packages via the sys.path.insert(0, …) that
+// non-bundled plugins still trigger. See the upgrade edge case in
+// scripts/bundle-plugin-deps.sh's PR.
+const PIP_PACKAGES_COMPAT_VERSION = 1;
+
+function migrateStalePipPackages(configDir: string): void {
+    const sentinelPath = path.join(configDir, '.pip_packages_compat_version');
+    let onDisk = 0;
+    if (fs.existsSync(sentinelPath)) {
+        try {
+            const raw = fs.readFileSync(sentinelPath, 'utf-8').trim();
+            const parsed = Number.parseInt(raw, 10);
+            if (Number.isFinite(parsed) && parsed >= 0) onDisk = parsed;
+        } catch { /* unreadable sentinel — treat as missing */ }
+    }
+    if (onDisk >= PIP_PACKAGES_COMPAT_VERSION) return;
+
+    const pipPackages = path.join(configDir, 'pip_packages');
+    if (fs.existsSync(pipPackages)) {
+        try {
+            // rmSync with force ignores ENOENT mid-walk (handles a concurrent
+            // cleanup or a partially-deleted dir from a prior aborted run).
+            fs.rmSync(pipPackages, { recursive: true, force: true });
+            console.log(`[python] Cleared stale plugin cache at ${pipPackages} `
+                + `(migrating to pip_packages_compat_version ${PIP_PACKAGES_COMPAT_VERSION}). `
+                + 'Non-bundled plugin deps will reinstall on next use.');
+        } catch (e: unknown) {
+            // Don't block startup if the cleanup fails — sys.path shadowing is
+            // a latent correctness risk, not a hard failure. Log and continue
+            // so a Velopack-locked file or AV scanner can't brick boot.
+            console.warn(`[python] failed to clear ${pipPackages}: ${(e as Error)?.message}`);
+            return;
+        }
+    }
+
+    try {
+        fs.writeFileSync(sentinelPath, String(PIP_PACKAGES_COMPAT_VERSION), 'utf-8');
+    } catch (e: unknown) {
+        console.warn(`[python] failed to write ${sentinelPath}: ${(e as Error)?.message} `
+            + '— migration will re-run on next launch');
+    }
+}
+
 function getDLCDir(): string {
     if (process.env.DLC_DIR && fs.existsSync(process.env.DLC_DIR)) return process.env.DLC_DIR;
 
@@ -281,6 +329,9 @@ export async function startPython(): Promise<void> {
     reapOrphanedPythonBackends(pythonPath);
     serverPort = await findPort(18000);
     const configDir = getConfigDir();
+    // Must run BEFORE Python boots: slopsmith reads CONFIG_DIR/pip_packages on
+    // first plugin load and would re-prepend stale wheels onto sys.path.
+    migrateStalePipPackages(configDir);
     const dlcDir = getDLCDir();
     const pluginsDir = getPluginsDir();
     const slopsmithPlugins = path.join(slopsmithDir, 'plugins');
@@ -366,6 +417,24 @@ export async function startPython(): Promise<void> {
     const activeSoundfont = getActiveSoundfontPath();
     if (activeSoundfont) {
         pythonEnv.SLOPSMITH_SOUNDFONT = activeSoundfont;
+    }
+
+    // Point slopsmith at the bundled-plugin manifest emitted by
+    // scripts/bundle-plugin-deps.sh. When set, slopsmith's
+    // plugins/__init__.py::_install_requirements short-circuits for every
+    // listed plugin whose requirements.txt hash matches — no pip, no
+    // sys.path mutation — so first launch doesn't spend 20–30 min
+    // downloading torch/demucs/whisperx for sloppak_converter (issue
+    // slopsmith#421). Only set when the file actually exists: dev runs
+    // without a fresh `bundle_plugin_deps` produce no manifest, and the
+    // env var must be absent in that case so slopsmith falls back to
+    // runtime pip install rather than silently skipping installs the
+    // dev hasn't actually performed.
+    const manifestPath = app.isPackaged
+        ? path.join(process.resourcesPath, 'bundled_plugin_reqs.json')
+        : path.join(__dirname, '..', '..', 'resources', 'bundled_plugin_reqs.json');
+    if (fs.existsSync(manifestPath)) {
+        pythonEnv.SLOPSMITH_BUNDLED_PLUGIN_MANIFEST = manifestPath;
     }
 
     // Set PYTHONHOME for bundled Python on all platforms
