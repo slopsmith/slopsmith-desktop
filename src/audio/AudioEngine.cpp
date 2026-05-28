@@ -1703,12 +1703,24 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
 
             if (sr > 0.0 && sourceFramesPulled > 0)
             {
-                const double heard = backingHeardPositionSec.load(std::memory_order_relaxed)
-                                     + static_cast<double>(sourceFramesPulled) / sr;
+                // Accumulate the heard (source) position, but clamp to the
+                // transport's actual position. sourceFramesPulled is the
+                // requested block size; a short read (e.g. at EOF, where the
+                // transport returns fewer real frames and zero-pads) would
+                // otherwise advance the playhead past the true source point
+                // and report progress beyond the track duration before
+                // backingPlaying flips false. getCurrentPosition() stays
+                // clamped to the real source position.
+                double heard = backingHeardPositionSec.load(std::memory_order_relaxed)
+                               + static_cast<double>(sourceFramesPulled) / sr;
+                heard = juce::jmin(heard, backingTransport->getCurrentPosition());
                 backingHeardPositionSec.store(heard, std::memory_order_relaxed);
 
+                // Bypass reads straight from the transport — no phase-vocoder
+                // output latency to compensate for, so the heard position is
+                // the transport position. Only the stretch path adds latency.
                 const double latencyInputSec = bypassStretch
-                    ? static_cast<double>(backingStretchLatencySamples.load(std::memory_order_relaxed)) / sr
+                    ? 0.0
                     : (backingStretchLatencySamples.load(std::memory_order_relaxed) * rate) / sr;
                 cachedBackingPosition.store(juce::jmax(0.0, heard - latencyInputSec));
             }
@@ -1851,29 +1863,55 @@ void AudioEngine::audioOutputCallback(const float* const* /*inputData*/,
         const juce::ScopedTryLock sl(backingLock);
         if (sl.isLocked() && backingTransport && backingPlaying.load())
         {
-            // Mirror the duplex callback's stretch path. Buffers are sized in
-            // audioOutputAboutToStart() against the output device's nominal bs;
-            // clamp here in case a reconfig race delivers a larger numSamples.
+            // Mirror the duplex callback's backing path (1× bypass + stretch +
+            // heard-position accumulation) so split I/O behaves identically and
+            // backingHeardPositionSec stays current across a split↔duplex switch.
+            // Buffers are sized in audioOutputAboutToStart() against the output
+            // device's nominal bs; clamp here in case a reconfig race delivers a
+            // larger numSamples.
             const double rate = juce::jlimit(0.01, kMaxBackingSpeed, backingSpeed.load(std::memory_order_relaxed));
             const int outCap = backingBuffer.getNumSamples();
             const int inCap  = backingInputBuffer.getNumSamples();
             const int backingOut = juce::jmin(numSamples, outCap);
-            const int inputFrames = juce::jmin((int) std::ceil(backingOut * rate), inCap);
-
-            backingInputBuffer.clear(0, inputFrames);
-            juce::AudioSourceChannelInfo info(&backingInputBuffer, 0, inputFrames);
-            backingTransport->getNextAudioBlock(info);
-
-            backingBuffer.clear(0, backingOut);
-            const float* const* inPtrs  = backingInputBuffer.getArrayOfReadPointers();
-            float* const*       outPtrs = backingBuffer.getArrayOfWritePointers();
-            backingStretch.process(inPtrs, inputFrames, outPtrs, backingOut);
-
             const double srNow = currentSampleRate.load(std::memory_order_relaxed);
-            const double latencyInputSec = (srNow > 0.0)
-                ? (backingStretchLatencySamples.load(std::memory_order_relaxed) * rate) / srNow
-                : 0.0;
-            cachedBackingPosition.store(juce::jmax(0.0, backingTransport->getCurrentPosition() - latencyInputSec));
+            const bool bypassStretch = std::abs(rate - 1.0) < kBackingSpeedBypassEpsilon;
+
+            int sourceFramesPulled = 0;
+
+            if (bypassStretch)
+            {
+                // 1× — bit-transparent transport read, no phase-vocoder path.
+                backingBuffer.clear(0, backingOut);
+                juce::AudioSourceChannelInfo info(&backingBuffer, 0, backingOut);
+                backingTransport->getNextAudioBlock(info);
+                sourceFramesPulled = backingOut;
+            }
+            else
+            {
+                const int inputFrames = juce::jmin((int) std::ceil(backingOut * rate), inCap);
+                backingInputBuffer.clear(0, inputFrames);
+                juce::AudioSourceChannelInfo info(&backingInputBuffer, 0, inputFrames);
+                backingTransport->getNextAudioBlock(info);
+                sourceFramesPulled = inputFrames;
+
+                backingBuffer.clear(0, backingOut);
+                const float* const* inPtrs  = backingInputBuffer.getArrayOfReadPointers();
+                float* const*       outPtrs = backingBuffer.getArrayOfWritePointers();
+                backingStretch.process(inPtrs, inputFrames, outPtrs, backingOut);
+            }
+
+            if (srNow > 0.0 && sourceFramesPulled > 0)
+            {
+                double heard = backingHeardPositionSec.load(std::memory_order_relaxed)
+                               + static_cast<double>(sourceFramesPulled) / srNow;
+                heard = juce::jmin(heard, backingTransport->getCurrentPosition());
+                backingHeardPositionSec.store(heard, std::memory_order_relaxed);
+
+                const double latencyInputSec = bypassStretch
+                    ? 0.0
+                    : (backingStretchLatencySamples.load(std::memory_order_relaxed) * rate) / srNow;
+                cachedBackingPosition.store(juce::jmax(0.0, heard - latencyInputSec));
+            }
 
             if (!backingTransport->isPlaying())
                 backingPlaying.store(false);
