@@ -1618,6 +1618,55 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
         return Array.isArray(items) ? items : [];
     }
 
+    /** Load every item in a preset and re-apply each VST's saved state blob.
+     *  Returns the slot IDs in load order.
+     *
+     *  Per-slot VST state (parameters + loaded model/preset) lives ONLY in the
+     *  native preset blob (savePreset's chain[].state), parallel to `items`.
+     *  NAM/IR are fully defined by their path, but a VST loaded via loadVST()
+     *  alone comes up on its DEFAULT preset — its getStateInformation() blob
+     *  must be re-applied via setSlotState(). This helper is the single place
+     *  that does both, so the tone-switching preload restores the user's saved
+     *  tone instead of the plugin default. IIFE 2's toneAutoImpl path has the
+     *  same logic inline (the two IIFEs deliberately don't share scope); keep
+     *  them in sync if you touch the alignment rules. */
+    async function loadPresetItemsWithState(preset) {
+        const slotIds = [];
+        const chainItems = getPresetItems(preset);
+        let nativeChain = [];
+        try {
+            const parsed = JSON.parse(preset?.nativePreset || '{}').chain;
+            if (Array.isArray(parsed)) nativeChain = parsed;
+        } catch (_) { nativeChain = []; }
+        for (let ci = 0; ci < chainItems.length; ci++) {
+            const item = chainItems[ci];
+            let slotId = -1;
+            if (item.type === 'NAM' && item.path) slotId = await api.loadNAMModel(item.path);
+            else if (item.type === 'IR' && item.path) slotId = await api.loadIR(item.path);
+            else if (item.type === 'VST' && item.path) slotId = await api.loadVST(item.path);
+            if (slotId < 0) continue;
+            slotIds.push(slotId);
+            // Apply the parallel native-chain state only when it exists, is a
+            // VST entry (type 0), and refers to the same plugin (path match) —
+            // guards against items/nativePreset drift writing a wrong blob to a
+            // mismatched slot even when both positions happen to be VSTs.
+            const nativeEntry = nativeChain[ci];
+            const entryAligned = nativeEntry
+                && Number(nativeEntry.type) === 0
+                && (!nativeEntry.path || !item.path || nativeEntry.path === item.path);
+            const st = entryAligned && nativeEntry.state;
+            if (item.type === 'VST' && st) {
+                try {
+                    const supported = await api.setSlotState(slotId, st);
+                    if (supported === false) {
+                        console.warn('[tone-switcher] setSlotState unsupported by native addon');
+                    }
+                } catch (e) { console.warn('[tone-switcher] setSlotState failed:', e); }
+            }
+        }
+        return slotIds;
+    }
+
     function markSongTransition(durationMs = 7000) {
         const until = Date.now() + Math.max(1000, Number(durationMs) || 7000);
         window._aeSongTransitionUntil = until;
@@ -1976,19 +2025,12 @@ window.__slopsmithDesktopAudioHooks = window.__slopsmithDesktopAudioHooks || {};
                 if (!presetName || !presets[presetName]) continue;
 
                 const preset = presets[presetName];
-                // Load each item individually and track slot IDs
-                const slotIds = [];
-                for (const item of getPresetItems(preset)) {
-                    let slotId = -1;
-                    if (item.type === 'NAM' && item.path) {
-                        slotId = await api.loadNAMModel(item.path);
-                    } else if (item.type === 'IR' && item.path) {
-                        slotId = await api.loadIR(item.path);
-                    } else if (item.type === 'VST' && item.path) {
-                        slotId = await api.loadVST(item.path);
-                    }
-                    if (slotId >= 0) slotIds.push(slotId);
-                }
+                // Load each item AND re-apply its saved VST state. Previously
+                // this loop called loadVST(path) only, so every VST came up on
+                // its default preset when a tone change fired mid-song. The
+                // saved tone (params + loaded model) lives in the native preset
+                // blob and is restored per-slot by loadPresetItemsWithState.
+                const slotIds = await loadPresetItemsWithState(preset);
                 this.toneSlotMap[toneName] = slotIds;
                 this.tonePresetMap[toneName] = preset;
                 this.tonePresetNameMap[toneName] = presetName;
