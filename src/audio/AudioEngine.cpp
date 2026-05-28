@@ -1287,12 +1287,14 @@ void AudioEngine::setBackingSpeed(double speed)
         backingStretch.reset();
         const double pos = backingTransport->getCurrentPosition();
         backingHeardPositionSec.store(pos, std::memory_order_relaxed);
+        // Only log when a reset actually happened (transport present); the
+        // dead-zone above already drops sub-threshold slider ticks so this
+        // doesn't fire on every drag frame.
+        std::cerr << "[AudioEngine] setBackingSpeed(" << clamped << ") stretch reset"
+                  << std::endl;
     }
 
     backingSpeed.store(clamped, std::memory_order_relaxed);
-
-    std::cerr << "[AudioEngine] setBackingSpeed(" << clamped << ") stretch reset"
-              << std::endl;
 }
 
 void AudioEngine::resetPeaks()
