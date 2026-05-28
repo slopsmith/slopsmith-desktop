@@ -1283,7 +1283,7 @@ void AudioEngine::setBackingSpeed(double speed)
     //   * a control-thread caller (e.g. a speed slider at 30-60 Hz) never takes
     //     backingLock and so never starves the RT tryLock into dropping a block;
     //   * the new rate is never processed with stale stretch state — the reset
-    //     and the rate adoption happen in the same RT block (CodeRabbit PR #237).
+    //     and the rate adoption happen in the same RT block (see PR #237).
     // Multiple updates before the RT consumes them coalesce (latest wins), which
     // naturally throttles stretcher resets during a drag.
     backingPendingSpeed.store(clamped, std::memory_order_relaxed);
@@ -1299,12 +1299,17 @@ void AudioEngine::resetPeaks()
 int AudioEngine::renderBackingBlockLocked(int numSamples)
 {
     // Adopt any speed change requested since the last block (set lock-free by
-    // setBackingSpeed). Acquire pairs with that release-store so the new rate is
-    // visible here. Reset the stretcher and re-anchor the heard position in the
-    // SAME block we adopt the rate, so a block is never processed at the new
-    // rate with stale stretch state. reset() only clears state (no allocation),
-    // so it is safe on the audio thread.
-    if (backingSpeedChangePending.exchange(false, std::memory_order_acquire))
+    // setBackingSpeed). compare_exchange (true->false) only writes the flag on
+    // the rare block that actually consumes a change; the common no-change path
+    // is a non-writing failed CAS, so the cache line isn't dirtied/bounced to
+    // this core on every callback. Acquire pairs with the release-store in
+    // setBackingSpeed so the new rate is visible here. Reset the stretcher and
+    // re-anchor the heard position in the SAME block we adopt the rate, so a
+    // block is never processed at the new rate with stale stretch state.
+    // reset() only clears state (no allocation), so it is safe on the audio thread.
+    bool changePending = true;
+    if (backingSpeedChangePending.compare_exchange_strong(
+            changePending, false, std::memory_order_acquire, std::memory_order_relaxed))
     {
         backingSpeed.store(juce::jlimit(0.01, kMaxBackingSpeed,
                                         backingPendingSpeed.load(std::memory_order_relaxed)),
@@ -1331,7 +1336,9 @@ int AudioEngine::renderBackingBlockLocked(int numSamples)
 
     if (bypassStretch)
     {
-        // 1× — bit-transparent transport read, no phase-vocoder path.
+        // 1× — direct transport read, no phase-vocoder path. (The transport
+        // still sample-rate-converts the file to the device rate, so this is
+        // "no time-stretch", not necessarily bit-perfect.)
         backingBuffer.clear(0, outSamples);
         juce::AudioSourceChannelInfo info(&backingBuffer, 0, outSamples);
         backingTransport->getNextAudioBlock(info);
