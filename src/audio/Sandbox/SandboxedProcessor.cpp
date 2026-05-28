@@ -277,8 +277,10 @@ bool SandboxedProcessor::initialise(juce::String& errorOut)
             // Explicit teardown so all the resource-release wiring lives in
             // one place. The destructor would otherwise pick this up when the
             // outer unique_ptr drops, but it's clearer to tear down on the
-            // failure edge and not rely on destruction order.
-            teardown("ready timeout");
+            // failure edge and not rely on destruction order. Distinct reason
+            // per bound so crash/teardown reporting can tell a silent sandbox
+            // apart from a plugin that kept heart-beating but never loaded.
+            teardown(absoluteExceeded ? "ready absolute timeout" : "ready timeout");
             return false;
         }
     }

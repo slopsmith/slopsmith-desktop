@@ -1473,7 +1473,13 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
     // reports, or the host's per-heartbeat deadline could fast-fail a plugin
     // that is still loading. A genuinely stuck load is bounded instead by the
     // host-side absolute cap (kReadyAbsoluteTimeoutMs).
-    std::thread heartbeatThread([&st, &loadDone]
+    //
+    // A std::jthread (not std::thread) so it auto-joins at scope exit with no
+    // explicit join() on the hot path: the thread exits as soon as loadDone is
+    // set — right after the load — so by the time WinMain unwinds, that join
+    // is always instant and never stalls the message thread waiting out an
+    // in-flight pipe write.
+    std::jthread heartbeatThread([&st, &loadDone]
     {
         constexpr int kHeartbeatSlices = 50;   // 50 * 100ms ≈ 5s between beats
         while (!loadDone.load(std::memory_order_acquire))
@@ -1512,7 +1518,6 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
             }
         }
     }
-    heartbeatThread.join();
     st.plugin = std::move(loadedPlugin);
 
     if (!st.plugin)
