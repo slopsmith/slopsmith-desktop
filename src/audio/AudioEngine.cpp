@@ -1264,7 +1264,13 @@ void AudioEngine::setBackingSpeed(double speed)
 
     const double clamped = juce::jlimit(0.01, kMaxBackingSpeed, speed);
     const double prev = backingSpeed.load(std::memory_order_relaxed);
-    if (std::abs(clamped - prev) < 0.001)
+    // Dead-zone tiny changes to avoid needless stretcher resets — but never
+    // skip a change that crosses the 1× bypass boundary, or a request just
+    // shy of 1× (e.g. 0.9995 -> 1.0, diff < 0.001) would leave the stretcher
+    // path engaged when the caller actually asked for transparent full speed.
+    const bool prevBypass = std::abs(prev    - 1.0) < kBackingSpeedBypassEpsilon;
+    const bool newBypass  = std::abs(clamped - 1.0) < kBackingSpeedBypassEpsilon;
+    if (std::abs(clamped - prev) < 0.001 && prevBypass == newBypass)
     {
         return;
     }
@@ -1701,6 +1707,7 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
                 backingStretch.process(inPtrs, inputFrames, outPtrs, outSamples);
             }
 
+            const double transportPos = backingTransport->getCurrentPosition();
             if (sr > 0.0 && sourceFramesPulled > 0)
             {
                 // Accumulate the heard (source) position, but clamp to the
@@ -1713,7 +1720,7 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
                 // clamped to the real source position.
                 double heard = backingHeardPositionSec.load(std::memory_order_relaxed)
                                + static_cast<double>(sourceFramesPulled) / sr;
-                heard = juce::jmin(heard, backingTransport->getCurrentPosition());
+                heard = juce::jmin(heard, transportPos);
                 backingHeardPositionSec.store(heard, std::memory_order_relaxed);
 
                 // Bypass reads straight from the transport — no phase-vocoder
@@ -1723,6 +1730,16 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
                     ? 0.0
                     : (backingStretchLatencySamples.load(std::memory_order_relaxed) * rate) / sr;
                 cachedBackingPosition.store(juce::jmax(0.0, heard - latencyInputSec));
+            }
+            else
+            {
+                // currentSampleRate is transiently 0 during device
+                // teardown/reconfig. We can't accumulate (no Hz to divide by),
+                // so anchor both the heard accumulator and the published
+                // playhead to the real transport position rather than leaving
+                // a stale value visible to the UI.
+                backingHeardPositionSec.store(transportPos, std::memory_order_relaxed);
+                cachedBackingPosition.store(juce::jmax(0.0, transportPos));
             }
 
             // Sync the flag if transport stopped at EOF
@@ -1900,17 +1917,26 @@ void AudioEngine::audioOutputCallback(const float* const* /*inputData*/,
                 backingStretch.process(inPtrs, inputFrames, outPtrs, backingOut);
             }
 
+            const double transportPos = backingTransport->getCurrentPosition();
             if (srNow > 0.0 && sourceFramesPulled > 0)
             {
                 double heard = backingHeardPositionSec.load(std::memory_order_relaxed)
                                + static_cast<double>(sourceFramesPulled) / srNow;
-                heard = juce::jmin(heard, backingTransport->getCurrentPosition());
+                heard = juce::jmin(heard, transportPos);
                 backingHeardPositionSec.store(heard, std::memory_order_relaxed);
 
                 const double latencyInputSec = bypassStretch
                     ? 0.0
                     : (backingStretchLatencySamples.load(std::memory_order_relaxed) * rate) / srNow;
                 cachedBackingPosition.store(juce::jmax(0.0, heard - latencyInputSec));
+            }
+            else
+            {
+                // srNow transiently 0 during device teardown/reconfig — anchor
+                // to the real transport position instead of leaving the UI
+                // playhead stale (mirrors the duplex path).
+                backingHeardPositionSec.store(transportPos, std::memory_order_relaxed);
+                cachedBackingPosition.store(juce::jmax(0.0, transportPos));
             }
 
             if (!backingTransport->isPlaying())
