@@ -348,7 +348,17 @@ private:
     // can't push it past the real source point. cachedBackingPosition is this
     // value minus the stretcher output latency (zero on the 1x bypass path).
     std::atomic<double> backingHeardPositionSec{0.0};
+    // Active playback rate. Mutated ONLY by the audio thread (in
+    // renderBackingBlockLocked), coupled with the stretcher reset, so a block
+    // is never processed at a new rate with stale stretch state.
     std::atomic<double> backingSpeed{1.0};
+    // Lock-free speed hand-off: setBackingSpeed (control thread) publishes the
+    // requested rate here and raises backingSpeedChangePending; the audio
+    // thread adopts it on the next block. Avoids the control thread blocking on
+    // backingLock and starving the RT tryLock (which would drop a backing block
+    // mid-slider-drag).
+    std::atomic<double> backingPendingSpeed{1.0};
+    std::atomic<bool> backingSpeedChangePending{false};
     juce::CriticalSection backingLock;
 
     // Toggled from startAudio()/stopAudio() (main / device-management

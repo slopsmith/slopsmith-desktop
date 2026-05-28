@@ -1263,11 +1263,12 @@ void AudioEngine::setBackingSpeed(double speed)
     }
 
     const double clamped = juce::jlimit(0.01, kMaxBackingSpeed, speed);
-    const double prev = backingSpeed.load(std::memory_order_relaxed);
-    // Dead-zone tiny changes to avoid needless stretcher resets — but never
-    // skip a change that crosses the 1× bypass boundary, or a request just
-    // shy of 1× (e.g. 0.9995 -> 1.0, diff < 0.001) would leave the stretcher
-    // path engaged when the caller actually asked for transparent full speed.
+    // Dead-zone against the last *requested* rate to coalesce rapid slider
+    // ticks — but never skip a change that crosses the 1× bypass boundary, or a
+    // request just shy of 1× (e.g. 0.9995 -> 1.0, diff < 0.001) would leave the
+    // stretcher path engaged when the caller actually asked for transparent
+    // full speed.
+    const double prev = backingPendingSpeed.load(std::memory_order_relaxed);
     const bool prevBypass = std::abs(prev    - 1.0) < kBackingSpeedBypassEpsilon;
     const bool newBypass  = std::abs(clamped - 1.0) < kBackingSpeedBypassEpsilon;
     if (std::abs(clamped - prev) < 0.001 && prevBypass == newBypass)
@@ -1275,26 +1276,18 @@ void AudioEngine::setBackingSpeed(double speed)
         return;
     }
 
-    // Reset stretch and re-anchor heard position before publishing the new rate.
-    // backingLock serializes this whole reset+publish against the RT callback
-    // (which reads backingSpeed only while holding the same lock via tryLock),
-    // so the RT thread can never observe the new rate with stale stretch state
-    // (CodeRabbit PR #237). The lock's acquire/release provides that ordering,
-    // so the store itself can be relaxed.
-    const juce::ScopedLock sl(backingLock);
-    if (backingTransport)
-    {
-        backingStretch.reset();
-        const double pos = backingTransport->getCurrentPosition();
-        backingHeardPositionSec.store(pos, std::memory_order_relaxed);
-        // Only log when a reset actually happened (transport present); the
-        // dead-zone above already drops sub-threshold slider ticks so this
-        // doesn't fire on every drag frame.
-        std::cerr << "[AudioEngine] setBackingSpeed(" << clamped << ") stretch reset"
-                  << std::endl;
-    }
-
-    backingSpeed.store(clamped, std::memory_order_relaxed);
+    // Lock-free hand-off to the audio thread. Publish the requested rate, then
+    // raise the pending flag with release so the RT thread is guaranteed to see
+    // the new rate once it observes the flag. renderBackingBlockLocked() adopts
+    // the rate and resets the stretcher together, on the audio thread, so:
+    //   * a control-thread caller (e.g. a speed slider at 30-60 Hz) never takes
+    //     backingLock and so never starves the RT tryLock into dropping a block;
+    //   * the new rate is never processed with stale stretch state — the reset
+    //     and the rate adoption happen in the same RT block (CodeRabbit PR #237).
+    // Multiple updates before the RT consumes them coalesce (latest wins), which
+    // naturally throttles stretcher resets during a drag.
+    backingPendingSpeed.store(clamped, std::memory_order_relaxed);
+    backingSpeedChangePending.store(true, std::memory_order_release);
 }
 
 void AudioEngine::resetPeaks()
@@ -1305,6 +1298,22 @@ void AudioEngine::resetPeaks()
 
 int AudioEngine::renderBackingBlockLocked(int numSamples)
 {
+    // Adopt any speed change requested since the last block (set lock-free by
+    // setBackingSpeed). Acquire pairs with that release-store so the new rate is
+    // visible here. Reset the stretcher and re-anchor the heard position in the
+    // SAME block we adopt the rate, so a block is never processed at the new
+    // rate with stale stretch state. reset() only clears state (no allocation),
+    // so it is safe on the audio thread.
+    if (backingSpeedChangePending.exchange(false, std::memory_order_acquire))
+    {
+        backingSpeed.store(juce::jlimit(0.01, kMaxBackingSpeed,
+                                        backingPendingSpeed.load(std::memory_order_relaxed)),
+                           std::memory_order_relaxed);
+        backingStretch.reset();
+        backingHeardPositionSec.store(backingTransport->getCurrentPosition(),
+                                      std::memory_order_relaxed);
+    }
+
     const double rate = juce::jlimit(0.01, kMaxBackingSpeed, backingSpeed.load(std::memory_order_relaxed));
 
     // Defensive clamp: the buffers are sized in audioDeviceAboutToStart() /
