@@ -253,6 +253,15 @@ private:
     void audioDeviceStopped() override;
     void stopBackingNoLock(); // caller holds backingLock
 
+    // Renders one block of the backing track into backingBuffer (1x bypass or
+    // phase-vocoder stretch), advances backingHeardPositionSec /
+    // cachedBackingPosition, and clears backingPlaying at EOF. Returns the
+    // number of output frames written (== jmin(numSamples, backingBuffer cap)).
+    // Shared by the duplex and split output callbacks so the two paths can't
+    // drift. Precondition: caller holds backingLock and has verified
+    // backingTransport && backingPlaying.
+    int renderBackingBlockLocked(int numSamples);
+
     // Split-mode only: drains outputPendingRing, mixes backing, writes to device.
     void audioOutputCallback(const float* const* inputData,
                              int numInputChannels,
