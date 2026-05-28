@@ -253,6 +253,15 @@ private:
     void audioDeviceStopped() override;
     void stopBackingNoLock(); // caller holds backingLock
 
+    // Renders one block of the backing track into backingBuffer (1x bypass or
+    // phase-vocoder stretch), advances backingHeardPositionSec /
+    // cachedBackingPosition, and clears backingPlaying at EOF. Returns the
+    // number of output frames written (== jmin(numSamples, backingBuffer cap)).
+    // Shared by the duplex and split output callbacks so the two paths can't
+    // drift. Precondition: caller holds backingLock and has verified
+    // backingTransport && backingPlaying.
+    int renderBackingBlockLocked(int numSamples);
+
     // Split-mode only: drains outputPendingRing, mixes backing, writes to device.
     void audioOutputCallback(const float* const* inputData,
                              int numInputChannels,
@@ -334,7 +343,22 @@ private:
     std::atomic<bool> backingPlaying{false};
     std::atomic<double> cachedBackingPosition{0.0};
     std::atomic<double> cachedBackingDuration{0.0};
+    // Heard playhead: accumulates the source frames consumed each block, then
+    // clamped to backingTransport->getCurrentPosition() so a short read at EOF
+    // can't push it past the real source point. cachedBackingPosition is this
+    // value minus the stretcher output latency (zero on the 1x bypass path).
+    std::atomic<double> backingHeardPositionSec{0.0};
+    // Active playback rate. Mutated ONLY by the audio thread (in
+    // renderBackingBlockLocked), coupled with the stretcher reset, so a block
+    // is never processed at a new rate with stale stretch state.
     std::atomic<double> backingSpeed{1.0};
+    // Lock-free speed hand-off: setBackingSpeed (control thread) publishes the
+    // requested rate here and raises backingSpeedChangePending; the audio
+    // thread adopts it on the next block. Avoids the control thread blocking on
+    // backingLock and starving the RT tryLock (which would drop a backing block
+    // mid-slider-drag).
+    std::atomic<double> backingPendingSpeed{1.0};
+    std::atomic<bool> backingSpeedChangePending{false};
     juce::CriticalSection backingLock;
 
     // Toggled from startAudio()/stopAudio() (main / device-management
