@@ -1,0 +1,184 @@
+# Instructions
+# to leverage this file, do the following locally:
+# 1. Set up a python virtual environment
+#     `python3 -m venv venv`
+# 2. Source the  virtual environment:
+#     `source venv/bin/activate`
+# 3. install pre-commit:
+#     `pip3 install pre-commit`
+# 4. configure your local repo to use pre-commit:
+#     `pre-commit install --install-hooks`
+# 5. run auto-update:
+#     `pre-commit autoupdate`
+# 6. manually test it:
+#     `pre-commit run --all-files`
+# 7. Review the inline comments below and uncomment hooks one at a time to see how they behave and 
+#    if they make any changes (like removing whitespace at the end of lines.
+
+---
+# See https://pre-commit.com for more information
+# See https://pre-commit.com/hooks.html for more hooks
+default_install_hook_types: ["pre-commit", "commit-msg"]
+
+# Save yourself time by enabling this, disable it to save your sanity.
+# fail_fast: false
+
+repos:
+#==========================================
+# This is the basic set of checks that most repos will use.
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+# NOTE: There's a looot of whitespace that can be removed. Do this one as a separate commit to make your life easier.
+#      - id: trailing-whitespace
+#     Same with this one- do it in a separate commit.
+#      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: detect-private-key
+
+#==========================================
+# Ensures your yaml is valid
+  - repo: https://github.com/adrienverge/yamllint.git
+    rev: v1.38.0
+    hooks:
+      - id: yamllint
+        args: ['-d {rules: {line-length: disable}}', '-s']
+
+#==========================================
+# Ensures your yaml is formatted consistently- for example, removing excessive newlines and proper dash indentation.
+# Commented out so you can test it for yourself.
+#  - repo: https://github.com/google/yamlfmt
+#    rev: v0.19.0
+#    hooks:
+#      - id: yamlfmt
+
+#==========================================
+# JavaScript style guide, linter, and formatter
+# Commented out so you can test it for yourself.
+#  - repo: https://github.com/standard/standard
+#    rev: v17.1.2
+#    hooks:
+#      - id: standard
+
+#==========================================
+# This one ensures your PNG files are optimally compressed.
+# Commented out so you can test it for yourself.
+#  - repo: https://github.com/oxipng/oxipng
+#    rev: v10.0.0
+#    hooks:
+#      - id: oxipng
+#        args: ["-o", "4", "--strip", "safe", "--alpha"]
+
+
+#==========================================
+# Ensure good formatting and calls out common shell mistakes and style consistency.
+#  Commented out due to a number of things it isn't happy about.
+#  - repo: https://github.com/shellcheck-py/shellcheck-py
+#    rev: v0.10.0.1  # Use the latest version
+#    hooks:
+#    - id: shellcheck
+
+#==========================================
+# Common json schema validation. Everything looks good currently, but this will help prevent you from committing broken things.
+  - repo: https://github.com/python-jsonschema/check-jsonschema
+    rev: 0.37.2
+    hooks:
+      - id: check-jsonschema
+        name: Validate package.json
+        files: ^package\.json$
+        args: ["--schemafile", "https://json.schemastore.org/package"]
+      - id: check-jsonschema
+        name: Validate tsconfig.json
+        files: ^tsconfig\.json$
+        args: ["--schemafile", "https://json.schemastore.org/tsconfig"]
+      # Example built-in schema for GitHub workflows
+      - id: check-github-workflows
+        args: ["--verbose"]
+
+#==========================================
+# Ensure you don't accidentally check in anything sensitive.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.0
+    hooks:
+      - id: gitleaks
+
+#==========================================
+# Specifically linting your GitHub actions 
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.12
+    hooks:
+      - id: actionlint
+        name: Lint GitHub Actions workflow files
+        description: Runs actionlint to lint GitHub Actions workflow files
+        language: golang
+        types: ["yaml"]
+        files: ^\.github/workflows/
+        entry: actionlint
+        minimum_pre_commit_version: 3.0.0
+ 
+#==========================================
+# If you want to force yourself to have better commit messages, enable this one. 
+  - repo: https://github.com/crate-ci/committed
+    rev: v1.1.11
+    hooks:
+    - id: committed
+      name: committed
+      description: Nitpicking commit history since beabf39
+      language: python
+      entry: committed
+      args: [--fixup, --wip, --commit-file]
+      stages: [commit-msg]
+
+#==========================================
+# Helps spot typos in your code; requires the _typos.toml file to keep the results sane.
+# Found a few actual typos as well- that's the only reason it's currently commented out.
+#  - repo: https://github.com/crate-ci/typos
+#    rev: v1.46.2
+#    hooks:
+#      - id: typos
+
+
+#==========================================
+# This hook will generate and update a table of contents for each md file, including your spec and SKILL files. This might be ok, it might not.
+# If you remove the --update-only flag it'll update ~30 files, so be forewarned.
+  - repo: https://github.com/thlorenz/doctoc
+    rev: v2.4.1
+    hooks:
+      - id: doctoc
+        args: ['--github', '--update-only']
+
+#==========================================
+# This one may or may not be of use to ensure you have proper english grammar and typography.
+# It will automatically install proselint in an isolated venv, so if you want to test, I suggest running `pip install proselint`
+# in the same venv where you installed pre-commit (even though pre-commit won't use it).
+#  - repo: https://github.com/amperser/proselint
+#    rev: v0.16.0
+#    hooks:
+#      - id: proselint
+#        name: A linter for prose
+#        description: This hook checks language usage and style in text files.
+#        entry: proselint
+#        language: python
+#        types_or: [markdown] # Start small.
+#        #types_or: [html, markdown, plain-text, tex]
+#        args: [check]
+
+#==========================================
+# This bundle is for C/C++; they will hurt your feelings if you have opinionated code. 
+# Most of them are configurable, so you can start minimally and slowly ramp up linting.
+# uncomment the ones you want to use.
+#  - repo: https://github.com/pocc/pre-commit-hooks
+#    rev: v1.3.5
+#    hooks:
+#      - id: clang-format
+#        args: [--style=GNU]
+#      #- id: clang-tidy
+#      #- id: oclint
+#      #- id: uncrustify
+#      #- id: cppcheck
+#      #- id: cpplint
+#      #- id: include-what-you-use

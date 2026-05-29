@@ -1,0 +1,15 @@
+[default]
+#extend-ignore-re = [
+extend-ignore-identifiers-re = [
+    "_ND[A-Z_]*",
+    "_nd[a-z_]*",
+]
+
+[default.extend-identifiers]
+strat = "strat"
+[default.extend-words]
+# yes, it's certifi intentionally.
+certifi = "certifi"
+NAM = "NAM"
+nam = "nam"
+seh = "SEH"
