@@ -44,6 +44,32 @@ realpath_portable() {
 echo "=== Bundling Slopsmith server and plugins ==="
 echo "  Source: $SLOPSMITH_DIR"
 
+# Guard: refuse to bundle a Slopsmith checkout that predates the libvorbis
+# fallback in lib/audio.py. Without this helper, sloppak conversion crashes
+# on hosts whose ffmpeg has no libvorbis encoder — notably Homebrew ffmpeg
+# 8.1+, which dropped libvorbis. See byrongamatos/slopsmith commit 08ffaff
+# ("fix(ffmpeg): prefer bundled binary + libvorbis fallback for sloppak
+# conversion", #273).
+AUDIO_PY="$SLOPSMITH_DIR/lib/audio.py"
+if [ ! -f "$AUDIO_PY" ]; then
+    echo "ERROR: $AUDIO_PY does not exist." >&2
+    echo "Your Slopsmith checkout looks incomplete or is from a very old revision." >&2
+    exit 1
+fi
+if ! grep -q '_ffmpeg_wav_to_ogg' "$AUDIO_PY"; then
+    echo "ERROR: $AUDIO_PY does not contain '_ffmpeg_wav_to_ogg'." >&2
+    echo "" >&2
+    echo "Refusing to bundle: this Slopsmith server is older than the libvorbis" >&2
+    echo "fallback fix and will crash sloppak conversion on machines whose ffmpeg" >&2
+    echo "lacks the libvorbis encoder (e.g. Homebrew ffmpeg 8.1+)." >&2
+    echo "" >&2
+    echo "Update your checkout:" >&2
+    echo "  cd \"$SLOPSMITH_DIR\" && git pull" >&2
+    echo "" >&2
+    echo "Required upstream fix: byrongamatos/slopsmith#273 (commit 08ffaff)." >&2
+    exit 1
+fi
+
 rm -rf "$BUNDLE_DIR"
 mkdir -p "$BUNDLE_DIR/static" "$BUNDLE_DIR/plugins"
 

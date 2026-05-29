@@ -106,6 +106,13 @@ brew install cmake pkg-config ffmpeg vgmstream
 > lower-quality built-in vorbis encoder — but packaged macOS builds bundle a
 > static ffmpeg with `--enable-libvorbis` for full-quality `.ogg` output.
 > `setup-dev.sh` prints a `[WARN]` when the encoder is absent.
+>
+> The fallback lives in the server (`lib/audio.py::_ffmpeg_wav_to_ogg`,
+> introduced in [byrongamatos/slopsmith#273](https://github.com/byrongamatos/slopsmith/pull/273)).
+> `scripts/bundle-slopsmith.sh` refuses to build a release against a
+> Slopsmith checkout older than that fix, so 0.2.8+ installers cannot ship
+> a server that crashes with `Unknown encoder 'libvorbis'` on Homebrew
+> ffmpeg 8.1+.
 
 ### Build
 
