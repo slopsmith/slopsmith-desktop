@@ -156,6 +156,12 @@ public:
     void setMonitorMuteSuppressed(bool suppressed) { monitorMuteSuppressed.store(suppressed); }
     bool isMonitorMuteSuppressed() const { return monitorMuteSuppressed.load(); }
 
+    // Number of audio blocks whose signal-chain output had to be scrubbed for
+    // non-finite/runaway samples (issue #403). A nonzero value means the chain
+    // (NAM/IR/VST) emitted garbage that was contained before it reached the
+    // output. Exposed for diagnostics.
+    uint32_t getNonFiniteChainBlocks() const { return nonFiniteChainBlocks.load(std::memory_order_relaxed); }
+
     // Noise gate (post-input-gain, pre FX chain; pitch detector sees ungated signal)
     void setNoiseGate(bool enabled, float thresholdDb, float releaseMs, float depthDb);
 
@@ -332,6 +338,10 @@ private:
     std::atomic<int> selectedInputChannel{-1}; // -1 = mono mix
     std::atomic<bool> monitorMuted{true}; // mute pass-through by default
     std::atomic<bool> monitorMuteSuppressed{false}; // overrides monitorMuted during chain rebuilds
+    // Count of audio blocks where the signal chain emitted non-finite/runaway
+    // samples that had to be scrubbed (issue #403). Incremented on the RT
+    // thread (relaxed); read elsewhere for diagnostics/metrics.
+    std::atomic<uint32_t> nonFiniteChainBlocks{0};
 
     // Backing track
     std::unique_ptr<juce::AudioFormatReaderSource> backingSource;

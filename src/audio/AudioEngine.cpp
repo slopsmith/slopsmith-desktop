@@ -1,4 +1,5 @@
 #include "AudioEngine.h"
+#include "AudioSanitize.h"
 
 #include <algorithm>
 #include <cmath>
@@ -1741,6 +1742,22 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
     bool hasProcessors = signalChain.getNumSlots() > 0;
     juce::MidiBuffer midi;
     signalChain.process(buffer, midi);
+
+    // Contain a divergent chain block before it reaches the IIR/gain/mix and
+    // the output: a NAM/IR/VST can emit NaN/Inf or a runaway level (esp. on a
+    // live chain rebuild during song load), which otherwise blasts the output
+    // and poisons persistent downstream state until an app restart (#403).
+    // Scrub here so feed-forward processors self-heal and the failure is a
+    // glitch, not a dead engine. Count flagged blocks (relaxed; RT-safe — no
+    // logging on the audio thread) for later observability.
+    if (hasProcessors)
+    {
+        int fixed = 0;
+        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+            fixed += slopsmith::sanitizeAudioBlock(buffer.getWritePointer(ch), numSamples);
+        if (fixed > 0)
+            nonFiniteChainBlocks.fetch_add(1, std::memory_order_relaxed);
+    }
 
     // Monitor mute: silence the guitar pass-through when no processors are loaded.
     // This prevents hearing raw/amp-processed input when the user hasn't set up a chain yet.
