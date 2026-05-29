@@ -8,12 +8,19 @@
 # always skip the actual targets.
 option(SLOPSMITH_BUILD_TESTS "Build sandbox unit tests" ON)
 
+# Pure-helper tests (no JUCE / no Win32 deps) build on every platform.
+if(SLOPSMITH_BUILD_TESTS)
+    add_subdirectory(audio_sanitize)
+endif()
+
 if(NOT WIN32)
-    # Surface the no-op so a user setting -DSLOPSMITH_BUILD_TESTS=ON on
-    # macOS/Linux doesn't silently get no tests.
+    # The remaining sandbox tests are Win32-only (AudioChannel.cpp). Surface
+    # the no-op so a user setting -DSLOPSMITH_BUILD_TESTS=ON on macOS/Linux
+    # doesn't expect the sandbox targets (the cross-platform audio_sanitize
+    # test above still built).
     if(SLOPSMITH_BUILD_TESTS)
-        message(STATUS "Sandbox tests are Win32-only; SLOPSMITH_BUILD_TESTS=ON "
-                       "has no effect on this platform.")
+        message(STATUS "Sandbox tests are Win32-only; only audio_sanitize "
+                       "builds on this platform.")
     endif()
     return()
 endif()
