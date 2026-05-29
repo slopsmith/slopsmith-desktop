@@ -1,0 +1,48 @@
+name: "🐛 Bug Report"
+description: Create a new ticket for a bug.
+title: "🐛 [BUG] - <title>"
+labels: [
+  "bug"
+]
+body:
+  - type: dropdown
+    id: platform
+    attributes:
+      label: "Platform"
+      description: What platform are you seeing the problem on ?
+      multiple: true
+      options:
+        - Container
+        - Windows Desktop
+        - Mac Desktop
+        - Linux Desktop
+        - Web
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: "Description"
+      description: Please enter an explicit description of your issue
+      placeholder: Short and explicit description of your issue...
+    validations:
+      required: true
+  - type: textarea
+    id: reprod
+    attributes:
+      label: "Reproduction steps"
+      description: Please enter an explicit description of your issue. paste screenshots if relevant.
+      value: |
+        1. Go to '...'
+        2. Click on '....'
+        3. Scroll down to '....'
+        4. See error
+    validations:
+      required: true
+  - type: upload
+    id: logs
+    attributes:
+      label: "Logs"
+      description: Please attach logs if relevant.
+    validations:
+      required: false
