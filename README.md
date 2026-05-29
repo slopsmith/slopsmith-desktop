@@ -1,6 +1,6 @@
 # Slopsmith Desktop
 
-Standalone cross-platform desktop app that wraps [Slopsmith](https://github.com/byrongamatos/slopsmith) with integrated VST hosting, amp modeling, audio I/O, and full plugin support.
+Standalone cross-platform desktop app that wraps [Slopsmith](https://github.com/slopsmith/slopsmith) with integrated VST hosting, amp modeling, audio I/O, and full plugin support.
 
 ## Features
 
@@ -17,7 +17,7 @@ Standalone cross-platform desktop app that wraps [Slopsmith](https://github.com/
 ## Install
 
 Prebuilt installers for the latest tagged release are published on the
-[GitHub Releases page](https://github.com/byrongamatos/slopsmith-desktop/releases/latest).
+[GitHub Releases page](https://github.com/slopsmith/slopsmith-desktop/releases/latest).
 
 | Platform | Download | Notes |
 |----------|----------|-------|
@@ -70,7 +70,7 @@ yet ship an auto-updater; check Releases periodically for new versions.
 - Python 3.12+
 - CMake 3.22+
 - Git
-- [Slopsmith](https://github.com/byrongamatos/slopsmith) — resolved in this order:
+- [Slopsmith](https://github.com/slopsmith/slopsmith) — resolved in this order:
   1. `$SLOPSMITH_DIR` env var
   2. `../slopsmith/` (sibling clone, recommended)
   3. `~/Repositories/slopsmith/` (legacy)
@@ -111,7 +111,7 @@ brew install cmake pkg-config ffmpeg vgmstream
 
 ```bash
 # Clone with submodules
-git clone --recursive https://github.com/byrongamatos/slopsmith-desktop
+git clone --recursive https://github.com/slopsmith/slopsmith-desktop
 cd slopsmith-desktop
 
 # Setup
@@ -143,7 +143,7 @@ inside the DevContainer:
 
 **Prerequisites**
 - [Docker](https://docs.docker.com/get-docker/)
-- The [Slopsmith](https://github.com/byrongamatos/slopsmith) server repository
+- The [Slopsmith](https://github.com/slopsmith/slopsmith) server repository
   cloned as a sibling at `../slopsmith`. The DevContainer bind-mounts that exact
   path (`.devcontainer/devcontainer.json`) and its `postCreateCommand` fails
   fast if it is missing — unlike the host build, it does **not** honour
@@ -231,7 +231,7 @@ Restart the app after adding plugins.
 ## Reporting issues
 
 File bugs and feature requests on the
-[issue tracker](https://github.com/byrongamatos/slopsmith-desktop/issues).
+[issue tracker](https://github.com/slopsmith/slopsmith-desktop/issues).
 Please include your OS / version, the Slopsmith Desktop version (visible
 in the title bar or in *About*), and steps to reproduce.
 
@@ -243,7 +243,7 @@ build CI, and test/audio compute — costs money.
 
 If Slopsmith is useful to you, you can help cover those costs:
 
-- ❤️ **[Patreon](https://patreon.com/Slopsmith)** — recurring support; patrons get a spot on the [supporter wall](https://github.com/byrongamatos/slopsmith/blob/main/SUPPORTERS.md) and a role in the community Discord.
+- ❤️ **[Patreon](https://patreon.com/Slopsmith)** — recurring support; patrons get a spot on the [supporter wall](https://github.com/slopsmith/slopsmith/blob/main/SUPPORTERS.md) and a role in the community Discord.
 - ☕ **[Ko-fi](https://ko-fi.com/slopsmith)** — one-time tip, any amount.
 - 💬 **[Discord](https://discord.gg/TzPVK8fNBm)** — join the community (free for everyone).
 
@@ -265,5 +265,5 @@ respective licences are listed in
 [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md).
 
 The Slopsmith server bundled inside this app
-([byrongamatos/slopsmith](https://github.com/byrongamatos/slopsmith))
+([slopsmith/slopsmith](https://github.com/slopsmith/slopsmith))
 is also distributed under AGPL-3.0-only.

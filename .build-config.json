@@ -17,7 +17,7 @@
       "url": "https://github.com/FluidSynth/fluidsynth/releases/download/v2.5.4/fluidsynth-v2.5.4-win10-x64-cpp11.zip"
     },
     "soundfont_general_user": {
-      "url": "https://github.com/byrongamatos/slopsmith-desktop/releases/download/soundfonts-v1/GeneralUser-GS.sf2",
+      "url": "https://github.com/slopsmith/slopsmith-desktop/releases/download/soundfonts-v1/GeneralUser-GS.sf2",
       "sha256": "9575028c7a1f589f5770fccc8cff2734566af40cd26ed836944e9a5152688cfe"
     },
     "python_standalone_macos_arm64": {

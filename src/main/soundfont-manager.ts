@@ -20,7 +20,7 @@ import { restartPython } from './python';
 // the download fast with a clear error rather than serving silently-wrong
 // bytes. Source + licence info live on the release page itself.
 const SOUNDFONT_URL =
-    'https://github.com/byrongamatos/slopsmith-desktop/releases/download/soundfonts-v1/FluidR3_GM.sf2';
+    'https://github.com/slopsmith/slopsmith-desktop/releases/download/soundfonts-v1/FluidR3_GM.sf2';
 const SOUNDFONT_SHA256 = '74594e8f4250680adf590507a306655a299935343583256f3b722c48a1bc1cb0';
 const SOUNDFONT_EXPECTED_SIZE_MB = 142;
 

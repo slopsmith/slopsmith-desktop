@@ -52,10 +52,10 @@ export type UpdateStatus =
     | { status: 'error'; channel: UpdateChannel; currentVersion: string | null; lastChecked: number | null; message: string };
 
 // Repo the Velopack feed lives in. Matches the existing electron-builder
-// release pipeline (byrongamatos/slopsmith-desktop) — Velopack's GitHub
+// release pipeline (slopsmith/slopsmith-desktop) — Velopack's GitHub
 // loader looks for `releases.<channel>.json` + `*-full.nupkg` / `*-delta.nupkg`
 // assets attached to releases here.
-const FEED_URL = 'https://github.com/byrongamatos/slopsmith-desktop';
+const FEED_URL = 'https://github.com/slopsmith/slopsmith-desktop';
 
 // Background poll cadence. Velopack downloads are cheap when there's nothing
 // new (HEAD on the channel manifest), so 4h is a reasonable trade-off

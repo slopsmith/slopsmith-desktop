@@ -73,7 +73,7 @@ if [ -z "${SLOPSMITH_DIR:-}" ] || [ ! -f "$SLOPSMITH_DIR/requirements.txt" ]; th
     echo "  \$SLOPSMITH_DIR=${SLOPSMITH_DIR:-<unset>}" >&2
     echo "  $PROJECT_DIR/../slopsmith" >&2
     echo "  $HOME/Repositories/slopsmith" >&2
-    echo "Clone slopsmith next to this repo: git clone https://github.com/byrongamatos/slopsmith.git $PROJECT_DIR/../slopsmith" >&2
+    echo "Clone slopsmith next to this repo: git clone https://github.com/slopsmith/slopsmith.git $PROJECT_DIR/../slopsmith" >&2
     exit 1
 fi
 

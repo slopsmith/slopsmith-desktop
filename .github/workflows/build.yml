@@ -485,7 +485,7 @@ jobs:
             echo "::error::SLOPSMITH_SYNC_TOKEN secret is missing; cannot dispatch."
             exit 1
           fi
-          gh api -X POST repos/byrongamatos/slopsmith/dispatches \
+          gh api -X POST repos/slopsmith/slopsmith/dispatches \
             -f event_type=desktop-released \
             -f "client_payload[version]=$version"
           echo "Dispatched desktop-released event (version=$version) to slopsmith."

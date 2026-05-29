@@ -103,7 +103,7 @@ clone_slopsmith() {
 	fi
 
 	echo "Cloning Slopsmith repository..."
-	git clone --depth 1 https://github.com/byrongamatos/slopsmith.git "$clone_dir"
+	git clone --depth 1 https://github.com/slopsmith/slopsmith.git "$clone_dir"
 
 	# Remove broken symlinks from plugins dir
 	find "$clone_dir/plugins" -maxdepth 1 -type l -delete 2>/dev/null || true
@@ -120,30 +120,30 @@ clone_slopsmith() {
 	cd "$clone_dir/plugins"
 	local plugins=(
 		# byrongamatos plugins
-		byrongamatos/slopsmith-plugin-drum-highway-3d
-		byrongamatos/slopsmith-plugin-drums
-		byrongamatos/slopsmith-plugin-editor
-		byrongamatos/slopsmith-plugin-flappy-bend
-		byrongamatos/slopsmith-plugin-fretboard
-		byrongamatos/slopsmith-plugin-jumpingtab
-		byrongamatos/slopsmith-plugin-lyrics-karaoke
-		byrongamatos/slopsmith-plugin-metronome
-		byrongamatos/slopsmith-plugin-midi
-		byrongamatos/slopsmith-plugin-multiplayer
-		byrongamatos/slopsmith-plugin-nam-tone
-		byrongamatos/slopsmith-plugin-notedetect
-		byrongamatos/slopsmith-plugin-piano
-		byrongamatos/slopsmith-plugin-practice
-		byrongamatos/slopsmith-plugin-profileimport
-		byrongamatos/slopsmith-plugin-sectionmap
-		byrongamatos/slopsmith-plugin-setlist
-		byrongamatos/slopsmith-plugin-song-preview
-		byrongamatos/slopsmith-plugin-stepmode
-		byrongamatos/slopsmith-plugin-studio
-		byrongamatos/slopsmith-plugin-tabimport
-		byrongamatos/slopsmith-plugin-tabview
-		byrongamatos/slopsmith-plugin-tones
-		byrongamatos/slopsmith-plugin-tutorials
+		slopsmith/slopsmith-plugin-drum-highway-3d
+		slopsmith/slopsmith-plugin-drums
+		slopsmith/slopsmith-plugin-editor
+		slopsmith/slopsmith-plugin-flappy-bend
+		slopsmith/slopsmith-plugin-fretboard
+		slopsmith/slopsmith-plugin-jumpingtab
+		slopsmith/slopsmith-plugin-lyrics-karaoke
+		slopsmith/slopsmith-plugin-metronome
+		slopsmith/slopsmith-plugin-midi
+		slopsmith/slopsmith-plugin-multiplayer
+		slopsmith/slopsmith-plugin-nam-tone
+		slopsmith/slopsmith-plugin-notedetect
+		slopsmith/slopsmith-plugin-piano
+		slopsmith/slopsmith-plugin-practice
+		slopsmith/slopsmith-plugin-profileimport
+		slopsmith/slopsmith-plugin-sectionmap
+		slopsmith/slopsmith-plugin-setlist
+		slopsmith/slopsmith-plugin-song-preview
+		slopsmith/slopsmith-plugin-stepmode
+		slopsmith/slopsmith-plugin-studio
+		slopsmith/slopsmith-plugin-tabimport
+		slopsmith/slopsmith-plugin-tabview
+		slopsmith/slopsmith-plugin-tones
+		slopsmith/slopsmith-plugin-tutorials
 		# Community plugins
 		alleexx/slopsmith-plugin-transpose-chords
 		ChrisBeWithYou/slopsmith-plugin-slopscale

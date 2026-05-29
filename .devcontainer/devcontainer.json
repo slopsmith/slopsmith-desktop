@@ -15,7 +15,7 @@
     }
   ],
   "remoteUser": "vscode",
-  "postCreateCommand": "test -d /workspaces/slopsmith || (echo 'ERROR: Slopsmith repository not found at ../slopsmith — clone it adjacent to this repo: git clone https://github.com/byrongamatos/slopsmith.git ../slopsmith' && exit 1) && python3 scripts/parse-build-config.py .build-config.json >/dev/null && git submodule update --init --recursive && npm install",
+  "postCreateCommand": "test -d /workspaces/slopsmith || (echo 'ERROR: Slopsmith repository not found at ../slopsmith — clone it adjacent to this repo: git clone https://github.com/slopsmith/slopsmith.git ../slopsmith' && exit 1) && python3 scripts/parse-build-config.py .build-config.json >/dev/null && git submodule update --init --recursive && npm install",
   "customizations": {
     "vscode": {
       "settings": {

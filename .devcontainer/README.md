@@ -30,7 +30,7 @@ this container both read from it, so no version drift.
 ## Prerequisites
 
 - [Docker](https://docs.docker.com/get-docker/) installed and running
-- The [Slopsmith](https://github.com/byrongamatos/slopsmith) server
+- The [Slopsmith](https://github.com/slopsmith/slopsmith) server
   repository cloned **adjacent** to this one:
   ```
   your-projects/
@@ -115,7 +115,7 @@ Clone the server repo adjacent:
 
 ```bash
 cd ..
-git clone https://github.com/byrongamatos/slopsmith.git
+git clone https://github.com/slopsmith/slopsmith.git
 cd slopsmith-desktop
 ```
 

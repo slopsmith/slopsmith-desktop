@@ -79,7 +79,7 @@ if [[ -z "${SLOPSMITH_DIR:-}" ]] || [[ ! -f "$RSCLI_SRC/Program.fs" ]] || [[ ! -
     echo "  $PROJECT_DIR/../slopsmith" >&2
     echo "  $HOME/Repositories/slopsmith" >&2
     echo "Expected \$SLOPSMITH_DIR to be exported by clone_slopsmith() in build-common.sh," >&2
-    echo "or clone slopsmith next to this repo: git clone https://github.com/byrongamatos/slopsmith.git $PROJECT_DIR/../slopsmith" >&2
+    echo "or clone slopsmith next to this repo: git clone https://github.com/slopsmith/slopsmith.git $PROJECT_DIR/../slopsmith" >&2
     exit 1
 fi
 echo "  RsCli source: $RSCLI_SRC"
