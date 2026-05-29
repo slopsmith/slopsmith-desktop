@@ -2006,6 +2006,13 @@ static Napi::Value OpenPluginEditor(const Napi::CallbackInfo& info)
     // closes a UAF window where the slot could be removed (or the engine
     // torn down) between this call returning and the async firing.
     // Return optimistically; matches the in-process path below.
+    //
+    // SandboxedProcessor (and its typeinfo, isAlive/requestOpenEditor symbols)
+    // is only compiled on Windows — see src/audio/CMakeLists.txt. Off Windows
+    // the stub factory never creates one, so this branch is dead; guarding it
+    // out also keeps the addon's .node free of references to Windows-only
+    // symbols, which would otherwise fail dlopen on macOS/Linux.
+#if JUCE_WINDOWS && defined(SLOPSMITH_AUDIO_ADDON)
     if (auto* sb = dynamic_cast<slopsmith::sandbox::SandboxedProcessor*>(slot->processor.get()))
     {
         // Synchronous gate: if the sandbox child is already gone (crashed
@@ -2033,6 +2040,7 @@ static Napi::Value OpenPluginEditor(const Napi::CallbackInfo& info)
         }
         return Napi::Boolean::New(env, true);
     }
+#endif
 
     // In-process plugin — host-side PluginEditorWindow flow. If a window
     // already exists for this slot, bring it to front rather than creating
@@ -2098,6 +2106,12 @@ static Napi::Value ClosePluginEditor(const Napi::CallbackInfo& info)
     // would freeze JS / the renderer UI on a slow sandbox; the
     // re-resolve guards against slot-removal UAF between the napi call
     // and the async firing.
+    //
+    // Windows-only branch: SandboxedProcessor and requestCloseEditor() are
+    // compiled only on Windows. Off Windows there are no sandboxed plugins, so
+    // fall through to the in-process editor-window teardown below. Guarding
+    // this out keeps the .node free of Windows-only symbols (see OpenPluginEditor).
+#if JUCE_WINDOWS && defined(SLOPSMITH_AUDIO_ADDON)
     if (auto liveEngine = snapshotEngine())
     {
         if (auto* slot = liveEngine->getSignalChain().getSlot(slotId))
@@ -2117,6 +2131,7 @@ static Napi::Value ClosePluginEditor(const Napi::CallbackInfo& info)
             }
         }
     }
+#endif
 
     // In-process plugin — tear down the host-side editor window.
     auto it = editorWindows.find(slotId);
