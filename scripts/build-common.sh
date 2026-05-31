@@ -137,7 +137,6 @@ clone_slopsmith() {
 		slopsmith/slopsmith-plugin-profileimport
 		slopsmith/slopsmith-plugin-sectionmap
 		slopsmith/slopsmith-plugin-setlist
-		slopsmith/slopsmith-plugin-song-preview
 		slopsmith/slopsmith-plugin-stepmode
 		slopsmith/slopsmith-plugin-studio
 		slopsmith/slopsmith-plugin-tabimport
@@ -147,6 +146,7 @@ clone_slopsmith() {
 		# Community plugins
 		alleexx/slopsmith-plugin-transpose-chords
 		ChrisBeWithYou/slopsmith-plugin-slopscale
+		DeathlySin/slopsmith-plugin-song-preview
 		Jafz2001/slopsmith-plugin-nam-rig-builder
 		masc0t/slopsmith-plugin-find-more
 		masc0t/slopsmith-plugin-invert-highway
